@@ -2972,6 +2972,7 @@ class TupleType(TypeEngine):
             )
 
     def result_processor(self, dialect, coltype):
+        return
         raise NotImplementedError(
             "The tuple type does not support being fetched "
             "as a column in a result row."
