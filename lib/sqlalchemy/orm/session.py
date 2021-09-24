@@ -1724,6 +1724,35 @@ class Session(_SessionClassMethods):
             **kw
         ).scalar()
 
+    def scalars(
+        self,
+        statement,
+        params=None,
+        execution_options=util.EMPTY_DICT,
+        bind_arguments=None,
+        **kw
+    ):
+        """Execute a statement and return the results as scalars.
+
+        Usage and parameters are the same as that of
+        :meth:`_orm.Session.execute`; the return result is a
+        :class:`_result.ScalarResult` filtering object which
+        will return single elements rather than :class:`_row.Row` objects.
+
+        :return:  a :class:`_result.ScalarResult` object
+
+        .. versionadded:: 1.4.24
+
+        """
+
+        return self.execute(
+            statement,
+            params=params,
+            execution_options=execution_options,
+            bind_arguments=bind_arguments,
+            **kw
+        ).scalars()
+
     def close(self):
         """Close out the transactional resources and ORM objects used by this
         :class:`_orm.Session`.
@@ -3467,11 +3496,14 @@ class Session(_SessionClassMethods):
         SQL expressions.
 
         The objects as given are not added to the session and no additional
-        state is established on them, unless the ``return_defaults`` flag
-        is also set, in which case primary key attributes and server-side
-        default values will be populated.
-
-        .. versionadded:: 1.0.0
+        state is established on them. If the
+        :paramref:`_orm.Session.bulk_save_objects.return_defaults` flag is set,
+        then server-generated primary key values will be assigned to the
+        returned objects, but **not server side defaults**; this is a
+        limitation in the implementation. If stateful objects are desired,
+        please use the standard :meth:`_orm.Session.add_all` approach or
+        as an alternative newer mass-insert features such as
+        :ref:`orm_dml_returning_objects`.
 
         .. warning::
 
@@ -3480,6 +3512,14 @@ class Session(_SessionClassMethods):
             Features such as object management, relationship handling,
             and SQL clause support are **silently omitted** in favor of raw
             INSERT/UPDATES of records.
+
+            Please note that newer versions of SQLAlchemy are **greatly
+            improving the efficiency** of the standard flush process. It is
+            **strongly recommended** to not use the bulk methods as they
+            represent a forking of SQLAlchemy's functionality and are slowly
+            being moved into legacy status.  New features such as
+            :ref:`orm_dml_returning_objects` are both more efficient than
+            the "bulk" methods and provide more predictable functionality.
 
             **Please read the list of caveats at**
             :ref:`bulk_operations_caveats` **before using this method, and
@@ -3512,7 +3552,9 @@ class Session(_SessionClassMethods):
          and other multi-table mappings to insert correctly without the need
          to provide primary key values ahead of time; however,
          :paramref:`.Session.bulk_save_objects.return_defaults` **greatly
-         reduces the performance gains** of the method overall.
+         reduces the performance gains** of the method overall.  It is strongly
+         advised to please use the standard :meth:`_orm.Session.add_all`
+         approach.
 
         :param update_changed_only: when True, UPDATE statements are rendered
          based on those attributes in each state that have logged changes.
@@ -3581,6 +3623,14 @@ class Session(_SessionClassMethods):
             Features such as object management, relationship handling,
             and SQL clause support are **silently omitted** in favor of raw
             INSERT of records.
+
+            Please note that newer versions of SQLAlchemy are **greatly
+            improving the efficiency** of the standard flush process. It is
+            **strongly recommended** to not use the bulk methods as they
+            represent a forking of SQLAlchemy's functionality and are slowly
+            being moved into legacy status.  New features such as
+            :ref:`orm_dml_returning_objects` are both more efficient than
+            the "bulk" methods and provide more predictable functionality.
 
             **Please read the list of caveats at**
             :ref:`bulk_operations_caveats` **before using this method, and
@@ -3674,6 +3724,14 @@ class Session(_SessionClassMethods):
             Features such as object management, relationship handling,
             and SQL clause support are **silently omitted** in favor of raw
             UPDATES of records.
+
+            Please note that newer versions of SQLAlchemy are **greatly
+            improving the efficiency** of the standard flush process. It is
+            **strongly recommended** to not use the bulk methods as they
+            represent a forking of SQLAlchemy's functionality and are slowly
+            being moved into legacy status.  New features such as
+            :ref:`orm_dml_returning_objects` are both more efficient than
+            the "bulk" methods and provide more predictable functionality.
 
             **Please read the list of caveats at**
             :ref:`bulk_operations_caveats` **before using this method, and
