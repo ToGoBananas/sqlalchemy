@@ -67,9 +67,9 @@ class DeclarativeTestBase(
         global Base
 
         if self.base_style == "dynamic":
-            Base = declarative_base(testing.db)
+            Base = declarative_base()
         elif self.base_style == "explicit":
-            mapper_registry = registry(_bind=testing.db)
+            mapper_registry = registry()
 
             class Base(with_metaclass(DeclarativeMeta)):
                 __abstract__ = True
@@ -86,6 +86,32 @@ class DeclarativeTestBase(
     ("dynamic",), ("explicit",), argnames="base_style", id_="s"
 )
 class DeclarativeTest(DeclarativeTestBase):
+    def test_unbound_declarative_base(self):
+        Base = declarative_base()
+
+        class User(Base):
+            __tablename__ = "user"
+            id = Column(Integer, primary_key=True)
+
+        s = Session()
+
+        with testing.expect_raises(exc.UnboundExecutionError):
+            s.get_bind(User)
+
+    def test_unbound_cls_registry(self):
+        reg = registry()
+
+        Base = reg.generate_base()
+
+        class User(Base):
+            __tablename__ = "user"
+            id = Column(Integer, primary_key=True)
+
+        s = Session()
+
+        with testing.expect_raises(exc.UnboundExecutionError):
+            s.get_bind(User)
+
     def test_basic(self):
         class User(Base, fixtures.ComparableEntity):
             __tablename__ = "users"
@@ -1056,8 +1082,8 @@ class DeclarativeTest(DeclarativeTestBase):
 
     def test_shared_class_registry(self):
         reg = {}
-        Base1 = declarative_base(testing.db, class_registry=reg)
-        Base2 = declarative_base(testing.db, class_registry=reg)
+        Base1 = declarative_base(class_registry=reg)
+        Base2 = declarative_base(class_registry=reg)
 
         class A(Base1):
             __tablename__ = "a"
@@ -2326,117 +2352,3 @@ class DeclarativeTest(DeclarativeTestBase):
 
         # Check to see if __init_subclass__ works in supported versions
         eq_(UserType._set_random_keyword_used_here, True)
-
-
-# TODO: this should be using @combinations
-def _produce_test(inline, stringbased):
-    class ExplicitJoinTest(fixtures.MappedTest):
-        @classmethod
-        def define_tables(cls, metadata):
-            global User, Address
-            Base = declarative_base(metadata=metadata)
-
-            class User(Base, fixtures.ComparableEntity):
-
-                __tablename__ = "users"
-                id = Column(
-                    Integer, primary_key=True, test_needs_autoincrement=True
-                )
-                name = Column(String(50))
-
-            class Address(Base, fixtures.ComparableEntity):
-
-                __tablename__ = "addresses"
-                id = Column(
-                    Integer, primary_key=True, test_needs_autoincrement=True
-                )
-                email = Column(String(50))
-                user_id = Column(Integer, ForeignKey("users.id"))
-                if inline:
-                    if stringbased:
-                        user = relationship(
-                            "User",
-                            primaryjoin="User.id==Address.user_id",
-                            backref="addresses",
-                        )
-                    else:
-                        user = relationship(
-                            User,
-                            primaryjoin=User.id == user_id,
-                            backref="addresses",
-                        )
-
-            if not inline:
-                configure_mappers()
-                if stringbased:
-                    Address.user = relationship(
-                        "User",
-                        primaryjoin="User.id==Address.user_id",
-                        backref="addresses",
-                    )
-                else:
-                    Address.user = relationship(
-                        User,
-                        primaryjoin=User.id == Address.user_id,
-                        backref="addresses",
-                    )
-
-        @classmethod
-        def insert_data(cls, connection):
-            params = [
-                dict(list(zip(("id", "name"), column_values)))
-                for column_values in [
-                    (7, "jack"),
-                    (8, "ed"),
-                    (9, "fred"),
-                    (10, "chuck"),
-                ]
-            ]
-
-            connection.execute(User.__table__.insert(), params)
-            connection.execute(
-                Address.__table__.insert(),
-                [
-                    dict(list(zip(("id", "user_id", "email"), column_values)))
-                    for column_values in [
-                        (1, 7, "jack@bean.com"),
-                        (2, 8, "ed@wood.com"),
-                        (3, 8, "ed@bettyboop.com"),
-                        (4, 8, "ed@lala.com"),
-                        (5, 9, "fred@fred.com"),
-                    ]
-                ],
-            )
-
-        def test_aliased_join(self):
-
-            # this query will screw up if the aliasing enabled in
-            # query.join() gets applied to the right half of the join
-            # condition inside the any(). the join condition inside of
-            # any() comes from the "primaryjoin" of the relationship,
-            # and should not be annotated with _orm_adapt.
-            # PropertyLoader.Comparator will annotate the left side with
-            # _orm_adapt, though.
-
-            sess = fixture_session()
-            eq_(
-                sess.query(User)
-                .join(User.addresses, aliased=True)
-                .filter(Address.email == "ed@wood.com")
-                .filter(User.addresses.any(Address.email == "jack@bean.com"))
-                .all(),
-                [],
-            )
-
-    ExplicitJoinTest.__name__ = "ExplicitJoinTest%s%s" % (
-        inline and "Inline" or "Separate",
-        stringbased and "String" or "Literal",
-    )
-    return ExplicitJoinTest
-
-
-for inline in True, False:
-    for stringbased in True, False:
-        testclass = _produce_test(inline, stringbased)
-        exec("%s = testclass" % testclass.__name__)
-        del testclass

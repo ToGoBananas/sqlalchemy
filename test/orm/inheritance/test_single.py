@@ -10,10 +10,10 @@ from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import true
+from sqlalchemy import util
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import Bundle
 from sqlalchemy.orm import joinedload
-from sqlalchemy.orm import mapper
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import subqueryload
@@ -26,6 +26,13 @@ from sqlalchemy.testing.assertsql import CompiledSQL
 from sqlalchemy.testing.fixtures import fixture_session
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
+
+
+def _aliased_join_warning(arg):
+    return testing.expect_warnings(
+        "An alias is being generated automatically against joined entity "
+        "mapped class %s due to overlapping tables" % (arg,)
+    )
 
 
 class SingleInheritanceTest(testing.AssertsCompiledSQL, fixtures.MappedTest):
@@ -100,10 +107,10 @@ class SingleInheritanceTest(testing.AssertsCompiledSQL, fixtures.MappedTest):
             cls.classes.Engineer,
         )
 
-        mapper(
+        cls.mapper_registry.map_imperatively(
             Report, reports, properties={"employee": relationship(Employee)}
         )
-        mapper(
+        cls.mapper_registry.map_imperatively(
             Employee,
             employees,
             polymorphic_on=employees.c.type,
@@ -111,9 +118,13 @@ class SingleInheritanceTest(testing.AssertsCompiledSQL, fixtures.MappedTest):
                 "reports": relationship(Report, back_populates="employee")
             },
         )
-        mapper(Manager, inherits=Employee, polymorphic_identity="manager")
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
-        mapper(
+        cls.mapper_registry.map_imperatively(
+            Manager, inherits=Employee, polymorphic_identity="manager"
+        )
+        cls.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
+        cls.mapper_registry.map_imperatively(
             JuniorEngineer,
             inherits=Engineer,
             polymorphic_identity="juniorengineer",
@@ -705,19 +716,19 @@ class RelationshipFromSingleTest(
             cls.classes.Manager,
         )
 
-        mapper(
+        cls.mapper_registry.map_imperatively(
             Employee,
             employee,
             polymorphic_on=employee.c.type,
             polymorphic_identity="employee",
         )
-        mapper(
+        cls.mapper_registry.map_imperatively(
             Manager,
             inherits=Employee,
             polymorphic_identity="manager",
             properties={"stuff": relationship(Stuff)},
         )
-        mapper(Stuff, employee_stuff)
+        cls.mapper_registry.map_imperatively(Stuff, employee_stuff)
 
     @classmethod
     def setup_classes(cls):
@@ -849,17 +860,23 @@ class RelationshipToSingleTest(
             self.classes.Engineer,
         )
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={
                 "employees": relationship(Employee, backref="company")
             },
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Manager, inherits=Employee, polymorphic_identity="manager")
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
-        mapper(
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Manager, inherits=Employee, polymorphic_identity="manager"
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
+        self.mapper_registry.map_imperatively(
             JuniorEngineer,
             inherits=Engineer,
             polymorphic_identity="juniorengineer",
@@ -900,11 +917,15 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company, companies, properties={"employee": relationship(Employee)}
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         sess = fixture_session()
         self.assert_compile(
@@ -929,13 +950,13 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={"employees": relationship(Employee)},
         )
-        mapper(Employee, employees)
-        mapper(Engineer, inherits=Employee)
+        self.mapper_registry.map_imperatively(Employee, employees)
+        self.mapper_registry.map_imperatively(Engineer, inherits=Employee)
 
         sess = fixture_session()
         self.assert_compile(
@@ -957,13 +978,17 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={"engineers": relationship(Engineer)},
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         sess = fixture_session()
         self.assert_compile(
@@ -984,13 +1009,17 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={"engineers": relationship(Engineer)},
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         eng_alias = aliased(Engineer)
         sess = fixture_session()
@@ -1014,13 +1043,17 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={"engineers": relationship(Engineer)},
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         sess = fixture_session()
         self.assert_compile(
@@ -1048,13 +1081,17 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={"engineers": relationship(Engineer)},
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         eng_alias = aliased(Engineer)
         sess = fixture_session()
@@ -1083,13 +1120,17 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={"engineers": relationship(Engineer)},
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         sess = fixture_session()
         self.assert_compile(
@@ -1115,13 +1156,17 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={"engineers": relationship(Engineer)},
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         eng_alias = aliased(Engineer)
         sess = fixture_session()
@@ -1148,14 +1193,16 @@ class RelationshipToSingleTest(
         )
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(Company, companies)
-        mapper(
+        self.mapper_registry.map_imperatively(Company, companies)
+        self.mapper_registry.map_imperatively(
             Employee,
             employees,
             polymorphic_on=employees.c.type,
             properties={"company": relationship(Company)},
         )
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
 
         sess = fixture_session()
         engineer_count = (
@@ -1188,16 +1235,22 @@ class RelationshipToSingleTest(
 
         companies, employees = self.tables.companies, self.tables.employees
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={
                 "employees": relationship(Employee, backref="company")
             },
         )
-        mapper(Employee, employees, polymorphic_on=employees.c.type)
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
-        mapper(Manager, inherits=Employee, polymorphic_identity="manager")
+        self.mapper_registry.map_imperatively(
+            Employee, employees, polymorphic_on=employees.c.type
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
+        self.mapper_registry.map_imperatively(
+            Manager, inherits=Employee, polymorphic_identity="manager"
+        )
 
         s = fixture_session()
 
@@ -1271,22 +1324,26 @@ class RelationshipToSingleTest(
             self.classes.Engineer,
         )
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Company,
             companies,
             properties={
                 "engineers": relationship(Engineer, back_populates="company")
             },
         )
-        mapper(
+        self.mapper_registry.map_imperatively(
             Employee,
             employees,
             polymorphic_on=employees.c.type,
             properties={"company": relationship(Company)},
         )
-        mapper(Manager, inherits=Employee, polymorphic_identity="manager")
-        mapper(Engineer, inherits=Employee, polymorphic_identity="engineer")
-        mapper(
+        self.mapper_registry.map_imperatively(
+            Manager, inherits=Employee, polymorphic_identity="manager"
+        )
+        self.mapper_registry.map_imperatively(
+            Engineer, inherits=Employee, polymorphic_identity="engineer"
+        )
+        self.mapper_registry.map_imperatively(
             JuniorEngineer,
             inherits=Engineer,
             polymorphic_identity="juniorengineer",
@@ -1438,7 +1495,7 @@ class ManyToManyToSingleTest(fixtures.MappedTest, AssertsCompiledSQL):
 
     @classmethod
     def setup_mappers(cls):
-        mapper(
+        cls.mapper_registry.map_imperatively(
             cls.classes.Parent,
             cls.tables.parent,
             properties={
@@ -1452,17 +1509,17 @@ class ManyToManyToSingleTest(fixtures.MappedTest, AssertsCompiledSQL):
                 ),
             },
         )
-        mapper(
+        cls.mapper_registry.map_imperatively(
             cls.classes.Child,
             cls.tables.child,
             polymorphic_on=cls.tables.child.c.discriminator,
         )
-        mapper(
+        cls.mapper_registry.map_imperatively(
             cls.classes.SubChild1,
             inherits=cls.classes.Child,
             polymorphic_identity="sub1",
         )
-        mapper(
+        cls.mapper_registry.map_imperatively(
             cls.classes.SubChild2,
             inherits=cls.classes.Child,
             polymorphic_identity="sub2",
@@ -1579,19 +1636,21 @@ class SingleOnJoinedTest(fixtures.MappedTest):
         class Manager(Employee):
             pass
 
-        mapper(
+        self.mapper_registry.map_imperatively(
             Person,
             persons_table,
             polymorphic_on=persons_table.c.type,
             polymorphic_identity="person",
         )
-        mapper(
+        self.mapper_registry.map_imperatively(
             Employee,
             employees_table,
             inherits=Person,
             polymorphic_identity="engineer",
         )
-        mapper(Manager, inherits=Employee, polymorphic_identity="manager")
+        self.mapper_registry.map_imperatively(
+            Manager, inherits=Employee, polymorphic_identity="manager"
+        )
 
         sess = fixture_session()
         sess.add(Person(name="p1"))
@@ -1772,24 +1831,32 @@ class SingleFromPolySelectableTest(
             "AS anon_1 WHERE anon_1.employee_type IN ([POSTCOMPILE_type_1])",
         )
 
-    def test_single_inh_subclass_join_joined_inh_subclass(self):
+    @testing.combinations((True,), (False,), argnames="autoalias")
+    def test_single_inh_subclass_join_joined_inh_subclass(self, autoalias):
         Boss, Engineer = self.classes("Boss", "Engineer")
         s = fixture_session()
 
-        q = s.query(Boss).join(Engineer, Engineer.manager_id == Boss.id)
+        if autoalias:
+            q = s.query(Boss).join(Engineer, Engineer.manager_id == Boss.id)
+        else:
+            e1 = aliased(Engineer, flat=True)
+            q = s.query(Boss).join(e1, e1.manager_id == Boss.id)
 
-        self.assert_compile(
-            q,
-            "SELECT manager.id AS manager_id, employee.id AS employee_id, "
-            "employee.name AS employee_name, "
-            "employee.type AS employee_type, "
-            "manager.manager_data AS manager_manager_data "
-            "FROM employee JOIN manager ON employee.id = manager.id "
-            "JOIN (employee AS employee_1 JOIN engineer AS engineer_1 "
-            "ON employee_1.id = engineer_1.id) "
-            "ON engineer_1.manager_id = manager.id "
-            "WHERE employee.type IN ([POSTCOMPILE_type_1])",
-        )
+        with _aliased_join_warning(
+            "Engineer->engineer"
+        ) if autoalias else util.nullcontext():
+            self.assert_compile(
+                q,
+                "SELECT manager.id AS manager_id, employee.id AS employee_id, "
+                "employee.name AS employee_name, "
+                "employee.type AS employee_type, "
+                "manager.manager_data AS manager_manager_data "
+                "FROM employee JOIN manager ON employee.id = manager.id "
+                "JOIN (employee AS employee_1 JOIN engineer AS engineer_1 "
+                "ON employee_1.id = engineer_1.id) "
+                "ON engineer_1.manager_id = manager.id "
+                "WHERE employee.type IN ([POSTCOMPILE_type_1])",
+            )
 
     def test_single_inh_subclass_join_wpoly_joined_inh_subclass(self):
         Boss = self.classes.Boss
@@ -1828,25 +1895,35 @@ class SingleFromPolySelectableTest(
             "WHERE employee.type IN ([POSTCOMPILE_type_1])",
         )
 
-    def test_joined_inh_subclass_join_single_inh_subclass(self):
+    @testing.combinations((True,), (False,), argnames="autoalias")
+    def test_joined_inh_subclass_join_single_inh_subclass(self, autoalias):
         Engineer = self.classes.Engineer
         Boss = self.classes.Boss
         s = fixture_session()
 
-        q = s.query(Engineer).join(Boss, Engineer.manager_id == Boss.id)
+        if autoalias:
+            q = s.query(Engineer).join(Boss, Engineer.manager_id == Boss.id)
+        else:
+            b1 = aliased(Boss, flat=True)
+            q = s.query(Engineer).join(b1, Engineer.manager_id == b1.id)
 
-        self.assert_compile(
-            q,
-            "SELECT engineer.id AS engineer_id, employee.id AS employee_id, "
-            "employee.name AS employee_name, employee.type AS employee_type, "
-            "engineer.engineer_info AS engineer_engineer_info, "
-            "engineer.manager_id AS engineer_manager_id "
-            "FROM employee JOIN engineer ON employee.id = engineer.id "
-            "JOIN (employee AS employee_1 JOIN manager AS manager_1 "
-            "ON employee_1.id = manager_1.id) "
-            "ON engineer.manager_id = manager_1.id "
-            "AND employee_1.type IN ([POSTCOMPILE_type_1])",
-        )
+        with _aliased_join_warning(
+            "Boss->manager"
+        ) if autoalias else util.nullcontext():
+            self.assert_compile(
+                q,
+                "SELECT engineer.id AS engineer_id, "
+                "employee.id AS employee_id, "
+                "employee.name AS employee_name, "
+                "employee.type AS employee_type, "
+                "engineer.engineer_info AS engineer_engineer_info, "
+                "engineer.manager_id AS engineer_manager_id "
+                "FROM employee JOIN engineer ON employee.id = engineer.id "
+                "JOIN (employee AS employee_1 JOIN manager AS manager_1 "
+                "ON employee_1.id = manager_1.id) "
+                "ON engineer.manager_id = manager_1.id "
+                "AND employee_1.type IN ([POSTCOMPILE_type_1])",
+            )
 
 
 class EagerDefaultEvalTest(fixtures.DeclarativeMappedTest):

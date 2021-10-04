@@ -24,7 +24,6 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.orm import backref
 from sqlalchemy.orm import join
 from sqlalchemy.orm import joinedload
-from sqlalchemy.orm import mapper
 from sqlalchemy.orm import outerjoin
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
@@ -58,29 +57,6 @@ class InheritedJoinTest(InheritedTest, AssertsCompiledSQL):
             "companies.name AS companies_name "
             "FROM companies JOIN people "
             "ON companies.company_id = people.company_id",
-            use_default_dialect=True,
-        )
-
-    def test_join_to_selectable(self):
-        people, Company, engineers, Engineer = (
-            self.tables.people,
-            self.classes.Company,
-            self.tables.engineers,
-            self.classes.Engineer,
-        )
-
-        sess = fixture_session()
-
-        self.assert_compile(
-            sess.query(Company)
-            .join(people.join(engineers), Company.employees)
-            .filter(Engineer.name == "dilbert"),
-            "SELECT companies.company_id AS companies_company_id, "
-            "companies.name AS companies_name "
-            "FROM companies JOIN (people "
-            "JOIN engineers ON people.person_id = "
-            "engineers.person_id) ON companies.company_id = "
-            "people.company_id WHERE people.name = :name_1",
             use_default_dialect=True,
         )
 
@@ -188,22 +164,30 @@ class InheritedJoinTest(InheritedTest, AssertsCompiledSQL):
             .join(Company.employees.of_type(Boss))
         )
 
-        self.assert_compile(
-            q,
-            "SELECT companies.company_id AS companies_company_id, "
-            "companies.name AS companies_name FROM companies "
-            "JOIN (people JOIN engineers "
-            "ON people.person_id = engineers.person_id) "
-            "ON companies.company_id = people.company_id "
-            "JOIN (people AS people_1 JOIN managers AS managers_1 "
-            "ON people_1.person_id = managers_1.person_id) "
-            "ON companies.company_id = people_1.company_id "
-            "JOIN (people AS people_2 JOIN managers AS managers_2 "
-            "ON people_2.person_id = managers_2.person_id JOIN boss AS boss_1 "
-            "ON managers_2.person_id = boss_1.boss_id) "
-            "ON companies.company_id = people_2.company_id",
-            use_default_dialect=True,
-        )
+        with testing.expect_warnings(
+            "An alias is being generated automatically against joined entity "
+            "mapped class Manager->managers due to overlapping",
+            "An alias is being generated automatically against joined entity "
+            "mapped class Boss->boss due to overlapping",
+            raise_on_any_unexpected=True,
+        ):
+            self.assert_compile(
+                q,
+                "SELECT companies.company_id AS companies_company_id, "
+                "companies.name AS companies_name FROM companies "
+                "JOIN (people JOIN engineers "
+                "ON people.person_id = engineers.person_id) "
+                "ON companies.company_id = people.company_id "
+                "JOIN (people AS people_1 JOIN managers AS managers_1 "
+                "ON people_1.person_id = managers_1.person_id) "
+                "ON companies.company_id = people_1.company_id "
+                "JOIN (people AS people_2 JOIN managers AS managers_2 "
+                "ON people_2.person_id = managers_2.person_id "
+                "JOIN boss AS boss_1 "
+                "ON managers_2.person_id = boss_1.boss_id) "
+                "ON companies.company_id = people_2.company_id",
+                use_default_dialect=True,
+            )
 
 
 class JoinOnSynonymTest(_fixtures.FixtureTest, AssertsCompiledSQL):
@@ -214,7 +198,7 @@ class JoinOnSynonymTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         User = cls.classes.User
         Address = cls.classes.Address
         users, addresses = (cls.tables.users, cls.tables.addresses)
-        mapper(
+        cls.mapper_registry.map_imperatively(
             User,
             users,
             properties={
@@ -222,7 +206,7 @@ class JoinOnSynonymTest(_fixtures.FixtureTest, AssertsCompiledSQL):
                 "ad_syn": synonym("addresses"),
             },
         )
-        mapper(Address, addresses)
+        cls.mapper_registry.map_imperatively(Address, addresses)
 
     def test_join_on_synonym(self):
         User = self.classes.User
@@ -1790,16 +1774,18 @@ class JoinFromSelectableTest(fixtures.MappedTest, AssertsCompiledSQL):
 
     @classmethod
     def setup_classes(cls):
-        table1, table2 = cls.tables.table1, cls.tables.table2
-
         class T1(cls.Comparable):
             pass
 
         class T2(cls.Comparable):
             pass
 
-        mapper(T1, table1)
-        mapper(T2, table2)
+    @classmethod
+    def setup_mappers(cls):
+        table1, table2 = cls.tables.table1, cls.tables.table2
+        T1, T2 = cls.classes("T1", "T2")
+        cls.mapper_registry.map_imperatively(T1, table1)
+        cls.mapper_registry.map_imperatively(T2, table2)
 
     def test_select_mapped_to_mapped_explicit_left(self):
         T1, T2 = self.classes.T1, self.classes.T2
@@ -2017,19 +2003,23 @@ class SelfRefMixedTest(fixtures.MappedTest, AssertsCompiledSQL):
 
     @classmethod
     def setup_classes(cls):
-        nodes, assoc_table, sub_table = (
-            cls.tables.nodes,
-            cls.tables.assoc_table,
-            cls.tables.sub_table,
-        )
-
         class Node(cls.Comparable):
             pass
 
         class Sub(cls.Comparable):
             pass
 
-        mapper(
+    @classmethod
+    def setup_mappers(cls):
+        nodes, assoc_table, sub_table = (
+            cls.tables.nodes,
+            cls.tables.assoc_table,
+            cls.tables.sub_table,
+        )
+
+        Node, Sub = cls.classes("Node", "Sub")
+
+        cls.mapper_registry.map_imperatively(
             Node,
             nodes,
             properties={
@@ -2048,7 +2038,7 @@ class SelfRefMixedTest(fixtures.MappedTest, AssertsCompiledSQL):
                 ),
             },
         )
-        mapper(Sub, sub_table)
+        cls.mapper_registry.map_imperatively(Sub, sub_table)
 
     def test_o2m_aliased_plus_o2m(self):
         Node, Sub = self.classes.Node, self.classes.Sub
@@ -2095,7 +2085,7 @@ class SelfRefMixedTest(fixtures.MappedTest, AssertsCompiledSQL):
         )
 
 
-class CreateJoinsTest(fixtures.ORMTest, AssertsCompiledSQL):
+class CreateJoinsTest(fixtures.MappedTest, AssertsCompiledSQL):
     __dialect__ = "default"
 
     def _inherits_fixture(self):
@@ -2131,20 +2121,20 @@ class CreateJoinsTest(fixtures.ORMTest, AssertsCompiledSQL):
         class C(Base):
             pass
 
-        mapper(Base, base)
-        mapper(
+        self.mapper_registry.map_imperatively(Base, base)
+        self.mapper_registry.map_imperatively(
             A,
             a,
             inherits=Base,
             properties={"b": relationship(B, primaryjoin=a.c.b_id == b.c.id)},
         )
-        mapper(
+        self.mapper_registry.map_imperatively(
             B,
             b,
             inherits=Base,
             properties={"c": relationship(C, primaryjoin=b.c.c_id == c.c.id)},
         )
-        mapper(C, c, inherits=Base)
+        self.mapper_registry.map_imperatively(C, c, inherits=Base)
         return A, B, C, Base
 
     def test_double_level_aliased_exists(self):
@@ -2204,8 +2194,8 @@ class JoinToNonPolyAliasesTest(fixtures.MappedTest, AssertsCompiledSQL):
         class Child(cls.Comparable):
             pass
 
-        mp = mapper(Parent, parent)
-        mapper(Child, child)
+        mp = cls.mapper_registry.map_imperatively(Parent, parent)
+        cls.mapper_registry.map_imperatively(Child, child)
 
         derived = select(child).alias()
         npc = aliased(Child, derived)
@@ -2290,7 +2280,7 @@ class SelfReferentialTest(fixtures.MappedTest, AssertsCompiledSQL):
     def setup_mappers(cls):
         Node, nodes = cls.classes.Node, cls.tables.nodes
 
-        mapper(
+        cls.mapper_registry.map_imperatively(
             Node,
             nodes,
             properties={
@@ -2897,7 +2887,7 @@ class SelfReferentialM2MTest(fixtures.MappedTest):
             cls.tables.node_to_nodes,
         )
 
-        mapper(
+        cls.mapper_registry.map_imperatively(
             Node,
             nodes,
             properties={
@@ -3025,8 +3015,6 @@ class JoinLateralTest(fixtures.MappedTest, AssertsCompiledSQL):
 
     @classmethod
     def setup_classes(cls):
-        people, bookcases, books = cls.tables("people", "bookcases", "books")
-
         class Person(cls.Comparable):
             pass
 
@@ -3036,8 +3024,12 @@ class JoinLateralTest(fixtures.MappedTest, AssertsCompiledSQL):
         class Book(cls.Comparable):
             pass
 
-        mapper(Person, people)
-        mapper(
+    @classmethod
+    def setup_mappers(cls):
+        Person, Bookcase, Book = cls.classes("Person", "Bookcase", "Book")
+        people, bookcases, books = cls.tables("people", "bookcases", "books")
+        cls.mapper_registry.map_imperatively(Person, people)
+        cls.mapper_registry.map_imperatively(
             Bookcase,
             bookcases,
             properties={
@@ -3045,7 +3037,7 @@ class JoinLateralTest(fixtures.MappedTest, AssertsCompiledSQL):
                 "books": relationship(Book),
             },
         )
-        mapper(Book, books)
+        cls.mapper_registry.map_imperatively(Book, books)
 
     def test_select_subquery(self):
         Person, Book = self.classes("Person", "Book")
