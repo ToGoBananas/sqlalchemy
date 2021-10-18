@@ -132,7 +132,9 @@ class DefaultRequirements(SuiteRequirements):
 
     @property
     def foreign_key_constraint_option_reflection_ondelete(self):
-        return only_on(["postgresql", "mysql", "mariadb", "sqlite", "oracle"])
+        return only_on(
+            ["postgresql", "mysql", "mariadb", "sqlite", "oracle", "mssql"]
+        )
 
     @property
     def fk_constraint_option_reflection_ondelete_restrict(self):
@@ -140,11 +142,11 @@ class DefaultRequirements(SuiteRequirements):
 
     @property
     def fk_constraint_option_reflection_ondelete_noaction(self):
-        return only_on(["postgresql", "mysql", "mariadb", "sqlite"])
+        return only_on(["postgresql", "mysql", "mariadb", "sqlite", "mssql"])
 
     @property
     def foreign_key_constraint_option_reflection_onupdate(self):
-        return only_on(["postgresql", "mysql", "mariadb", "sqlite"])
+        return only_on(["postgresql", "mysql", "mariadb", "sqlite", "mssql"])
 
     @property
     def fk_constraint_option_reflection_onupdate_restrict(self):
@@ -349,6 +351,18 @@ class DefaultRequirements(SuiteRequirements):
         on a single connection."""
 
         return skip_if(["mssql", "mysql", "mariadb"], "no driver support")
+
+    @property
+    def cursor_works_post_rollback(self):
+        """Driver quirk where the cursor.fetchall() will work even if
+        the connection has been rolled back.
+
+        This generally refers to buffered cursors but also seems to work
+        with cx_oracle, for example.
+
+        """
+
+        return skip_if(["+pyodbc"], "no driver support")
 
     @property
     def independent_connections(self):
@@ -1805,3 +1819,8 @@ class DefaultRequirements(SuiteRequirements):
     @property
     def autoincrement_without_sequence(self):
         return skip_if("oracle")
+
+    @property
+    def reflect_tables_no_columns(self):
+        # so far sqlite, mariadb, mysql don't support this
+        return only_on(["postgresql"])
