@@ -25,54 +25,47 @@ Glossary
 
             :ref:`migration_20_toplevel`
 
-        **Enabling 2.0 style usage**
+    mixin class
+    mixin classes
 
-        When using code from a documentation example that indicates
-        :term:`2.0-style`, the :class:`_engine.Engine` as well as the
-        :class:`_orm.Session` in use should make use of "future" mode,
-        via the :paramref:`_sa.create_engine.future` and
-        :paramref:`_orm.Session.future` flags::
+      A common object-oriented pattern where a class that contains methods or
+      attributes for use by other classes without having to be the parent class
+      of those other classes.
 
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
+      .. seealso::
 
-
-            engine = create_engine("mysql://user:pass@host/dbname", future=True)
-            Session = sessionmaker(bind=engine, future=True)
-
-        **ORM Queries in 2.0 style**
-
-        Besides the above changes to :class:`_engine.Engine` and
-        :class:`_orm.Session`, probably the most major API change implied by
-        1.x->2.0 is the migration from using the :class:`_orm.Query` object for
-        ORM SELECT statements and instead using the :func:`_sql.select`
-        construct in conjunction with the :meth:`_orm.Session.execute` method.
-        The general change looks like the following.  Given a
-        :class:`_orm.Session` and a :class:`_orm.Query` against that
-        :class:`_orm.Session`::
-
-            list_of_users = session.query(User).join(User.addresses).all()
-
-        The new style constructs the query separately from the
-        :class:`_orm.Session` using the :func:`_sql.select` construct; when
-        populated with ORM entities like the ``User`` class from the :ref:`ORM
-        Tutorial <ormtutorial_toplevel>`, the resulting :class:`_sql.Select`
-        construct receives additional "plugin" state that allows it to work
-        like the :class:`_orm.Query`::
+          `Mixin (via Wikipedia) <https://en.wikipedia.org/wiki/Mixin>`_
 
 
-            from sqlalchemy import select
+    reflection
+    reflected
+        In SQLAlchemy, this term refers to the feature of querying a database's
+        schema catalogs in order to load information about existing tables,
+        columns, constraints, and other constructs.   SQLAlchemy includes
+        features that can both provide raw data for this information, as well
+        as that it can construct Core/ORM usable :class:`.Table` objects
+        from database schema catalogs automatically.
 
-            # a Core select statement with ORM entities is
-            # now ORM-enabled at the compiler level
-            stmt = select(User).join(User.addresses)
+        .. seealso::
 
-            session = Session(engine)
+            :ref:`metadata_reflection_toplevel` - complete background on
+            database reflection.
 
-            result = session.execute(stmt)
+            :ref:`orm_declarative_reflected` - background on integrating
+            ORM mappings with reflected tables.
 
-            # Session returns a Result that has ORM entities
-            list_of_users = result.scalars().all()
+
+    imperative
+    declarative
+
+        In the SQLAlchemy ORM, these terms refer to two different styles of
+        mapping Python classes to database tables.
+
+        .. seealso::
+
+            :ref:`orm_declarative_mapping`
+
+            :ref:`orm_imperative_mapping`
 
     facade
 
@@ -146,7 +139,7 @@ Glossary
 
             `bind parameters <https://use-the-index-luke.com/sql/where-clause/bind-parameters>`_ - at Use The Index, Luke!
 
-
+            :ref:`tutorial_sending_parameters` - in the :ref:`unified_tutorial`
 
     selectable
         A term used in SQLAlchemy to describe a SQL construct that represents
@@ -179,8 +172,9 @@ Glossary
         within the join expression.
 
     plugin
+    plugin-enabled
     plugin-specific
-        "plugin-specific" generally indicates a function or method in
+        "plugin-enabled" or "plugin-specific" generally indicates a function or method in
         SQLAlchemy Core which will behave differently when used in an ORM
         context.
 
@@ -203,6 +197,47 @@ Glossary
         set of operations that create, modify and delete data from the database,
         also known as :term:`DML`, and typically refers to the ``INSERT``,
         ``UPDATE``, and ``DELETE`` statements.
+
+    executemany
+        This term refers to a part of the :pep:`249` DBAPI specification
+        indicating a single SQL statement that may be invoked against a
+        database connection with multiple parameter sets.   The specific
+        method is known as ``cursor.executemany()``, and it has many
+        behavioral differences in comparison to the ``cursor.execute()``
+        method which is used for single-statement invocation.   The "executemany"
+        method executes the given SQL statement multiple times, once for
+        each set of parameters passed.  As such, DBAPIs generally cannot
+        return result sets when ``cursor.executemany()`` is used.  An additional
+        limitation of ``cursor.executemany()`` is that database drivers which
+        support the ``cursor.lastrowid`` attribute, returning the most recently
+        inserted integer primary key value, also don't support this attribute
+        when using ``cursor.executemany()``.
+
+        SQLAlchemy makes use of ``cursor.executemany()`` when the
+        :meth:`_engine.Connection.execute` method is used, passing a list of
+        parameter dictionaries, instead of just a single parameter dictionary.
+        When using this form, the returned :class:`_result.Result` object will
+        not return any rows, even if the given SQL statement uses a form such
+        as RETURNING.
+
+        Since "executemany" makes it generally impossible to receive results
+        back that indicate the newly generated values of server-generated
+        identifiers, the SQLAlchemy ORM can use "executemany" style
+        statement invocations only in certain circumstances when INSERTing
+        rows; while "executemany" is generally
+        associated with faster performance for running many INSERT statements
+        at once, the SQLAlchemy ORM can only make use of it in those
+        circumstances where it does not need to fetch newly generated primary
+        key values or server side default values.   Newer versions of SQLAlchemy
+        make use of an alternate form of INSERT which is to pass a single
+        VALUES clause with many parameter sets at once, which does support
+        RETURNING.  This form is available
+        in SQLAlchemy Core using the :meth:`.Insert.values` method.
+
+        .. seealso::
+
+            :ref:`tutorial_multiple_parameters` - tutorial introduction to
+            "executemany"
 
     marshalling
     data marshalling
@@ -407,6 +442,11 @@ Glossary
         class each of which represents a particular database column
         or relationship to a related class.
 
+    identity key
+        A key associated with ORM-mapped objects that identifies their
+        primary key identity within the database, as well as their unique
+        identity within a :class:`_orm.Session` :term:`identity map`.
+
     identity map
         A mapping between Python objects and their database identities.
         The identity map is a collection that's associated with an
@@ -476,11 +516,11 @@ Glossary
     mapping
     mapped
     mapped class
-        We say a class is "mapped" when it has been passed through the
-        :func:`_orm.mapper` function.   This process associates the
-        class with a database table or other :term:`selectable`
-        construct, so that instances of it can be persisted
-        and loaded using a :class:`.Session`.
+        We say a class is "mapped" when it has been associated with an
+        instance of the :class:`_orm.Mapper` class. This process associates
+        the class with a database table or other :term:`selectable` construct,
+        so that instances of it can be persisted and loaded using a
+        :class:`.Session`.
 
         .. seealso::
 
@@ -522,16 +562,14 @@ Glossary
         of classes; "joined", "single", and "concrete".   The section
         :ref:`inheritance_toplevel` describes inheritance mapping fully.
 
-    generative
-        A term that SQLAlchemy uses to refer what's normally known
-        as :term:`method chaining`; see that term for details.
-
     method chaining
-        An object-oriented technique whereby the state of an object
-        is constructed by calling methods on the object.   The
-        object features any number of methods, each of which return
-        a new object (or in some cases the same object) with
-        additional state added to the object.
+    generative
+        "Method chaining", referred to within SQLAlchemy documentation as
+        "generative", is an object-oriented technique whereby the state of an
+        object is constructed by calling methods on the object. The object
+        features any number of methods, each of which return a new object (or
+        in some cases the same object) with additional state added to the
+        object.
 
         The two SQLAlchemy objects that make the most use of
         method chaining are the :class:`_expression.Select`
@@ -549,10 +587,6 @@ Glossary
         Each method call above returns a copy of the original
         :class:`_expression.Select` object with additional qualifiers
         added.
-
-        .. seealso::
-
-            :term:`generative`
 
     release
     releases
@@ -1497,6 +1531,14 @@ Glossary
         The detached state is generally used when objects are being
         moved between sessions or when being moved to/from an external
         object cache.
+
+        .. seealso::
+
+            :ref:`session_object_states`
+
+    attached
+        Indicates an ORM object that is presently associated with a specific
+        :term:`Session`.
 
         .. seealso::
 

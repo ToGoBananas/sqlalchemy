@@ -13,7 +13,7 @@ This behavior can be configured at mapper construction time using the
 function, as well as by using options with the :class:`_query.Query` object.
 
 The loading of relationships falls into three categories; **lazy** loading,
-**eager** loading, and **no** loading. Lazy loading refers to objects are returned
+**eager** loading, and **no** loading. Lazy loading refers to objects that are returned
 from a query without the related
 objects loaded at first.  When the given collection or reference is
 first accessed on a particular object, an additional SELECT statement
@@ -90,7 +90,7 @@ the parent object is queried::
     class Parent(Base):
         __tablename__ = 'parent'
 
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
         children = relationship("Child", lazy='joined')
 
 Above, whenever a collection of ``Parent`` objects are loaded, each
@@ -409,7 +409,7 @@ at the mapping level via the :paramref:`_orm.relationship.innerjoin` flag::
     class Address(Base):
         # ...
 
-        user_id = Column(ForeignKey('users.id'), nullable=False)
+        user_id = mapped_column(ForeignKey('users.id'), nullable=False)
         user = relationship(User, lazy="joined", innerjoin=True)
 
 At the query option level, via the :paramref:`_orm.joinedload.innerjoin` flag::
@@ -443,6 +443,16 @@ an OUTER JOIN:
 On older versions of SQLite, the above nested right JOIN may be re-rendered
 as a nested subquery.  Older versions of SQLAlchemy would convert right-nested
 joins into subqueries in all cases.
+
+    .. warning::
+
+        Using ``with_for_update`` in the context of eager loading
+        relationships is not officially supported or recommended by
+        SQLAlchemy and may not work with certain queries on various
+        database backends.  When ``with_for_update`` is successfully used
+        with a query that involves :func:`_orm.joinedload`, SQLAlchemy will
+        attempt to emit SQL that locks all involved tables.
+
 
 Joined eager loading and result set batching
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1064,7 +1074,7 @@ and additionally establish this as the basis for eager loading of ``User.address
 
     class User(Base):
         __tablename__ = 'user'
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
         addresses = relationship("Address")
 
     class Address(Base):
@@ -1188,15 +1198,16 @@ Given the following mapping::
 
     from sqlalchemy import Integer, ForeignKey, Column
     from sqlalchemy.orm import relationship, backref
-    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import DeclarativeBase
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
 
     class A(Base):
         __tablename__ = 'a'
-        id = Column(Integer, primary_key=True)
-        b_id = Column(ForeignKey('b.id'))
+        id = mapped_column(Integer, primary_key=True)
+        b_id = mapped_column(ForeignKey('b.id'))
         b = relationship(
             "B",
             backref=backref("a", uselist=False),
@@ -1205,7 +1216,7 @@ Given the following mapping::
 
     class B(Base):
         __tablename__ = 'b'
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
 
 
 If we query for an ``A`` row, and then ask it for ``a.b.a``, we will get
@@ -1251,16 +1262,15 @@ Relationship Loader API
 
 .. autofunction:: defaultload
 
-.. autofunction:: eagerload
-
 .. autofunction:: immediateload
 
 .. autofunction:: joinedload
 
 .. autofunction:: lazyload
 
-.. autoclass:: Load
+.. autoclass:: sqlalchemy.orm.Load
     :members:
+    :inherited-members: Generative
 
 .. autofunction:: noload
 

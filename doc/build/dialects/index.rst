@@ -51,24 +51,6 @@ Support Definitions
         Pull requests with associated issues may be accepted to continue supporting
         older versions, which are reviewed on a case-by-case basis.
 
-
-Deprecated, no longer supported dialects
-----------------------------------------
-
-The following dialects have implementations within SQLAlchemy, but they are not
-part of continuous integration testing nor are they actively developed.
-These dialects are deprecated and will be removed in future major releases.
-
-.. toctree::
-    :maxdepth: 1
-    :glob:
-
-    firebird
-    sybase
-
-Note that both of these dialects now have third-party implementations that
-are maintained separately. See the following list.
-
 .. _external_toplevel:
 
 External Dialects
@@ -76,58 +58,63 @@ External Dialects
 
 Currently maintained external dialect projects for SQLAlchemy include:
 
-+-----------------------------------------+---------------------------------------+
-| Database                                | Dialect                               |
-+=========================================+=======================================+
-| Amazon Redshift (via psycopg2)          | sqlalchemy-redshift_                  |
-+-----------------------------------------+---------------------------------------+
-| Apache Drill                            | sqlalchemy-drill_                     |
-+-----------------------------------------+---------------------------------------+
-| Apache Druid                            | pydruid_                              |
-+-----------------------------------------+---------------------------------------+
-| Apache Hive and Presto                  | PyHive_                               |
-+-----------------------------------------+---------------------------------------+
-| Apache Solr                             | sqlalchemy-solr_                      |
-+-----------------------------------------+---------------------------------------+
-| CockroachDB                             | sqlalchemy-cockroachdb_               |
-+-----------------------------------------+---------------------------------------+
-| CrateDB  [1]_                           | crate-python_                         |
-+-----------------------------------------+---------------------------------------+
-| EXASolution                             | sqlalchemy_exasol_                    |
-+-----------------------------------------+---------------------------------------+
-| Elasticsearch (readonly)                | elasticsearch-dbapi_                  |
-+-----------------------------------------+---------------------------------------+
-| Firebird                                | sqlalchemy-firebird_                  |
-+-----------------------------------------+---------------------------------------+
-| Google BigQuery                         | pybigquery_                           |
-+-----------------------------------------+---------------------------------------+
-| Google Sheets                           | gsheets_                              |
-+-----------------------------------------+---------------------------------------+
-| IBM DB2 and Informix                    | ibm-db-sa_                            |
-+-----------------------------------------+---------------------------------------+
-| IBM Netezza Performance Server [1]_     | nzalchemy_                            |
-+-----------------------------------------+---------------------------------------+
-| Microsoft Access (via pyodbc)           | sqlalchemy-access_                    |
-+-----------------------------------------+---------------------------------------+
-| Microsoft SQL Server (via python-tds)   | sqlalchemy-tds_                       |
-+-----------------------------------------+---------------------------------------+
-| Microsoft SQL Server (via turbodbc)     | sqlalchemy-turbodbc_                  |
-+-----------------------------------------+---------------------------------------+
-| MonetDB [1]_                            | sqlalchemy-monetdb_                   |
-+-----------------------------------------+---------------------------------------+
-| SAP ASE (fork of former Sybase dialect) | sqlalchemy-sybase_                    |
-+-----------------------------------------+---------------------------------------+
-| SAP Hana [1]_                           | sqlalchemy-hana_                      |
-+-----------------------------------------+---------------------------------------+
-| SAP Sybase SQL Anywhere                 | sqlalchemy-sqlany_                    |
-+-----------------------------------------+---------------------------------------+
-| Snowflake                               | snowflake-sqlalchemy_                 |
-+-----------------------------------------+---------------------------------------+
-| Teradata Vantage                        | teradatasqlalchemy_                   |
-+-----------------------------------------+---------------------------------------+
++------------------------------------------------+---------------------------------------+
+| Database                                       | Dialect                               |
++================================================+=======================================+
+| Actian Avalanche, Vector, Actian X, and Ingres | sqlalchemy-ingres_                    |
++------------------------------------------------+---------------------------------------+
+| Amazon Redshift (via psycopg2)                 | sqlalchemy-redshift_                  |
++------------------------------------------------+---------------------------------------+
+| Apache Drill                                   | sqlalchemy-drill_                     |
++------------------------------------------------+---------------------------------------+
+| Apache Druid                                   | pydruid_                              |
++------------------------------------------------+---------------------------------------+
+| Apache Hive and Presto                         | PyHive_                               |
++------------------------------------------------+---------------------------------------+
+| Apache Solr                                    | sqlalchemy-solr_                      |
++------------------------------------------------+---------------------------------------+
+| CockroachDB                                    | sqlalchemy-cockroachdb_               |
++------------------------------------------------+---------------------------------------+
+| CrateDB  [1]_                                  | crate-python_                         |
++------------------------------------------------+---------------------------------------+
+| EXASolution                                    | sqlalchemy_exasol_                    |
++------------------------------------------------+---------------------------------------+
+| Elasticsearch (readonly)                       | elasticsearch-dbapi_                  |
++------------------------------------------------+---------------------------------------+
+| Firebird                                       | sqlalchemy-firebird_                  |
++------------------------------------------------+---------------------------------------+
+| Firebolt                                       | firebolt-sqlalchemy_                  |
++------------------------------------------------+---------------------------------------+
+| Google BigQuery                                | pybigquery_                           |
++------------------------------------------------+---------------------------------------+
+| Google Sheets                                  | gsheets_                              |
++------------------------------------------------+---------------------------------------+
+| IBM DB2 and Informix                           | ibm-db-sa_                            |
++------------------------------------------------+---------------------------------------+
+| IBM Netezza Performance Server [1]_            | nzalchemy_                            |
++------------------------------------------------+---------------------------------------+
+| Microsoft Access (via pyodbc)                  | sqlalchemy-access_                    |
++------------------------------------------------+---------------------------------------+
+| Microsoft SQL Server (via python-tds)          | sqlalchemy-tds_                       |
++------------------------------------------------+---------------------------------------+
+| Microsoft SQL Server (via turbodbc)            | sqlalchemy-turbodbc_                  |
++------------------------------------------------+---------------------------------------+
+| MonetDB [1]_                                   | sqlalchemy-monetdb_                   |
++------------------------------------------------+---------------------------------------+
+| SAP ASE (fork of former Sybase dialect)        | sqlalchemy-sybase_                    |
++------------------------------------------------+---------------------------------------+
+| SAP Hana [1]_                                  | sqlalchemy-hana_                      |
++------------------------------------------------+---------------------------------------+
+| SAP Sybase SQL Anywhere                        | sqlalchemy-sqlany_                    |
++------------------------------------------------+---------------------------------------+
+| Snowflake                                      | snowflake-sqlalchemy_                 |
++------------------------------------------------+---------------------------------------+
+| Teradata Vantage                               | teradatasqlalchemy_                   |
++------------------------------------------------+---------------------------------------+
 
 .. [1] Supports version 1.3.x only at the moment.
 
+.. _sqlalchemy-ingres: https://github.com/clach04/ingres_sa_dialect
 .. _nzalchemy: https://pypi.org/project/nzalchemy/
 .. _ibm-db-sa: https://pypi.org/project/ibm-db-sa/
 .. _PyHive: https://github.com/dropbox/PyHive#sqlalchemy
@@ -151,3 +138,4 @@ Currently maintained external dialect projects for SQLAlchemy include:
 .. _sqlalchemy-cockroachdb: https://github.com/cockroachdb/sqlalchemy-cockroachdb
 .. _sqlalchemy-turbodbc: https://pypi.org/project/sqlalchemy-turbodbc/
 .. _sqlalchemy-sybase: https://pypi.org/project/sqlalchemy-sybase/
+.. _firebolt-sqlalchemy: https://pypi.org/project/firebolt-sqlalchemy/

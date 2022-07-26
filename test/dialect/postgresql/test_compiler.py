@@ -3,6 +3,7 @@ from sqlalchemy import and_
 from sqlalchemy import BigInteger
 from sqlalchemy import bindparam
 from sqlalchemy import cast
+from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import Computed
 from sqlalchemy import Date
@@ -10,6 +11,8 @@ from sqlalchemy import delete
 from sqlalchemy import Enum
 from sqlalchemy import exc
 from sqlalchemy import Float
+from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKeyConstraint
 from sqlalchemy import func
 from sqlalchemy import Identity
 from sqlalchemy import Index
@@ -35,6 +38,7 @@ from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.dialects.postgresql import array_agg as pg_array_agg
+from sqlalchemy.dialects.postgresql import DOMAIN
 from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.dialects.postgresql import TSRANGE
@@ -48,8 +52,6 @@ from sqlalchemy.sql import literal_column
 from sqlalchemy.sql import operators
 from sqlalchemy.sql import table
 from sqlalchemy.sql import util as sql_util
-from sqlalchemy.testing import engines
-from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing.assertions import assert_raises
 from sqlalchemy.testing.assertions import assert_raises_message
@@ -57,11 +59,10 @@ from sqlalchemy.testing.assertions import AssertsCompiledSQL
 from sqlalchemy.testing.assertions import expect_warnings
 from sqlalchemy.testing.assertions import is_
 from sqlalchemy.util import OrderedDict
-from sqlalchemy.util import u
 
 
 class SequenceTest(fixtures.TestBase, AssertsCompiledSQL):
-    __prefer__ = "postgresql"
+    __dialect__ = "postgresql"
 
     def test_format(self):
         seq = Sequence("my_seq_no_schema")
@@ -80,27 +81,6 @@ class SequenceTest(fixtures.TestBase, AssertsCompiledSQL):
             dialect.identifier_preparer.format_sequence(seq)
             == '"Some_Schema"."My_Seq"'
         )
-
-    @testing.only_on("postgresql", "foo")
-    @testing.provide_metadata
-    def test_reverse_eng_name(self):
-        metadata = self.metadata
-        engine = engines.testing_engine(options=dict(implicit_returning=False))
-        for tname, cname in [
-            ("tb1" * 30, "abc"),
-            ("tb2", "abc" * 30),
-            ("tb3" * 30, "abc" * 30),
-            ("tb4", "abc"),
-        ]:
-            t = Table(
-                tname[:57],
-                metadata,
-                Column(cname[:57], Integer, primary_key=True),
-            )
-            t.create(engine)
-            with engine.begin() as conn:
-                r = conn.execute(t.insert())
-                eq_(r.inserted_primary_key, (1,))
 
     @testing.combinations(
         (None, ""),
@@ -204,15 +184,10 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
 
     def test_create_drop_enum(self):
         # test escaping and unicode within CREATE TYPE for ENUM
-        typ = postgresql.ENUM(
-            "val1", "val2", "val's 3", u("méil"), name="myname"
-        )
+        typ = postgresql.ENUM("val1", "val2", "val's 3", "méil", name="myname")
         self.assert_compile(
             postgresql.CreateEnumType(typ),
-            u(
-                "CREATE TYPE myname AS "
-                "ENUM ('val1', 'val2', 'val''s 3', 'méil')"
-            ),
+            "CREATE TYPE myname AS ENUM ('val1', 'val2', 'val''s 3', 'méil')",
         )
 
         typ = postgresql.ENUM("val1", "val2", "val's 3", name="PleaseQuoteMe")
@@ -269,6 +244,18 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "CAST(bar AS someschema.somename) AS bar",
         )
 
+    def test_cast_double_pg_double(self):
+        """test #5465:
+
+        test sqlalchemy Double/DOUBLE to PostgreSQL DOUBLE PRECISION
+        """
+        d1 = sqltypes.Double
+
+        stmt = select(cast(column("foo"), d1))
+        self.assert_compile(
+            stmt, "SELECT CAST(foo AS DOUBLE PRECISION) AS foo"
+        )
+
     def test_cast_enum_schema_translate(self):
         """test #6739"""
         e1 = Enum("x", "y", "z", name="somename")
@@ -284,7 +271,7 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             render_schema_translate=True,
         )
 
-    def test_create_type_schema_translate(self):
+    def test_create_enum_schema_translate(self):
         e1 = Enum("x", "y", "z", name="somename")
         e2 = Enum("x", "y", "z", name="somename", schema="someschema")
         schema_translate_map = {None: "foo", "someschema": "bar"}
@@ -299,6 +286,79 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         self.assert_compile(
             postgresql.CreateEnumType(e2),
             "CREATE TYPE bar.somename AS ENUM ('x', 'y', 'z')",
+            schema_translate_map=schema_translate_map,
+            render_schema_translate=True,
+        )
+
+    def test_domain(self):
+        self.assert_compile(
+            postgresql.CreateDomainType(
+                DOMAIN(
+                    "x",
+                    Integer,
+                    default=text("11"),
+                    not_null=True,
+                    check="VALUE < 0",
+                )
+            ),
+            "CREATE DOMAIN x AS INTEGER DEFAULT 11 NOT NULL CHECK (VALUE < 0)",
+        )
+        self.assert_compile(
+            postgresql.CreateDomainType(
+                DOMAIN(
+                    "sOmEnAmE",
+                    Text,
+                    collation="utf8",
+                    constraint_name="a constraint",
+                    not_null=True,
+                )
+            ),
+            'CREATE DOMAIN "sOmEnAmE" AS TEXT COLLATE utf8 CONSTRAINT '
+            '"a constraint" NOT NULL',
+        )
+        self.assert_compile(
+            postgresql.CreateDomainType(
+                DOMAIN(
+                    "foo",
+                    Text,
+                    collation="utf8",
+                    default="foobar",
+                    constraint_name="no_bar",
+                    not_null=True,
+                    check="VALUE != 'bar'",
+                )
+            ),
+            "CREATE DOMAIN foo AS TEXT COLLATE utf8 DEFAULT 'foobar' "
+            "CONSTRAINT no_bar NOT NULL CHECK (VALUE != 'bar')",
+        )
+
+    def test_cast_domain_schema(self):
+        """test #6739"""
+        d1 = DOMAIN("somename", Integer)
+        d2 = DOMAIN("somename", Integer, schema="someschema")
+
+        stmt = select(cast(column("foo"), d1), cast(column("bar"), d2))
+        self.assert_compile(
+            stmt,
+            "SELECT CAST(foo AS somename) AS foo, "
+            "CAST(bar AS someschema.somename) AS bar",
+        )
+
+    def test_create_domain_schema_translate(self):
+        d1 = DOMAIN("somename", Integer)
+        d2 = DOMAIN("somename", Integer, schema="someschema")
+        schema_translate_map = {None: "foo", "someschema": "bar"}
+
+        self.assert_compile(
+            postgresql.CreateDomainType(d1),
+            "CREATE DOMAIN foo.somename AS INTEGER ",
+            schema_translate_map=schema_translate_map,
+            render_schema_translate=True,
+        )
+
+        self.assert_compile(
+            postgresql.CreateDomainType(d2),
+            "CREATE DOMAIN bar.somename AS INTEGER ",
             schema_translate_map=schema_translate_map,
             render_schema_translate=True,
         )
@@ -808,7 +868,7 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         m = MetaData()
         tbl = Table("testtbl", m, Column("x", Integer), Column("y", Integer))
 
-        idx1 = Index("test_idx1", 5 / (tbl.c.x + tbl.c.y))
+        idx1 = Index("test_idx1", 5 // (tbl.c.x + tbl.c.y))
         self.assert_compile(
             schema.CreateIndex(idx1),
             "CREATE INDEX test_idx1 ON testtbl ((5 / (x + y)))",
@@ -855,6 +915,62 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         dialect_9_1._supports_drop_index_concurrently = False
         self.assert_compile(
             schema.DropIndex(idx1), "DROP INDEX test_idx1", dialect=dialect_9_1
+        )
+
+    def test_create_check_constraint_not_valid(self):
+        m = MetaData()
+
+        tbl = Table(
+            "testtbl",
+            m,
+            Column("data", Integer),
+            CheckConstraint("data = 0", postgresql_not_valid=True),
+        )
+
+        self.assert_compile(
+            schema.CreateTable(tbl),
+            "CREATE TABLE testtbl (data INTEGER, CHECK (data = 0) NOT VALID)",
+        )
+
+    def test_create_foreign_key_constraint_not_valid(self):
+        m = MetaData()
+
+        tbl = Table(
+            "testtbl",
+            m,
+            Column("a", Integer),
+            Column("b", Integer),
+            ForeignKeyConstraint(
+                "b", ["testtbl.a"], postgresql_not_valid=True
+            ),
+        )
+
+        self.assert_compile(
+            schema.CreateTable(tbl),
+            "CREATE TABLE testtbl ("
+            "a INTEGER, "
+            "b INTEGER, "
+            "FOREIGN KEY(b) REFERENCES testtbl (a) NOT VALID"
+            ")",
+        )
+
+    def test_create_foreign_key_column_not_valid(self):
+        m = MetaData()
+
+        tbl = Table(
+            "testtbl",
+            m,
+            Column("a", Integer),
+            Column("b", ForeignKey("testtbl.a", postgresql_not_valid=True)),
+        )
+
+        self.assert_compile(
+            schema.CreateTable(tbl),
+            "CREATE TABLE testtbl ("
+            "a INTEGER, "
+            "b INTEGER, "
+            "FOREIGN KEY(b) REFERENCES testtbl (a) NOT VALID"
+            ")",
         )
 
     def test_exclude_constraint_min(self):
@@ -1464,48 +1580,48 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         )
         self.assert_compile(
             postgresql.Any(4, c),
-            "%(param_1)s = ANY (x)",
-            checkparams={"param_1": 4},
+            "%(x_1)s = ANY (x)",
+            checkparams={"x_1": 4},
         )
 
         self.assert_compile(
             c.any(5),
-            "%(param_1)s = ANY (x)",
-            checkparams={"param_1": 5},
+            "%(x_1)s = ANY (x)",
+            checkparams={"x_1": 5},
         )
 
         self.assert_compile(
             ~c.any(5),
-            "NOT (%(param_1)s = ANY (x))",
-            checkparams={"param_1": 5},
+            "NOT (%(x_1)s = ANY (x))",
+            checkparams={"x_1": 5},
         )
 
         self.assert_compile(
             c.all(5),
-            "%(param_1)s = ALL (x)",
-            checkparams={"param_1": 5},
+            "%(x_1)s = ALL (x)",
+            checkparams={"x_1": 5},
         )
 
         self.assert_compile(
             ~c.all(5),
-            "NOT (%(param_1)s = ALL (x))",
-            checkparams={"param_1": 5},
+            "NOT (%(x_1)s = ALL (x))",
+            checkparams={"x_1": 5},
         )
 
         self.assert_compile(
             c.any(5, operator=operators.ne),
-            "%(param_1)s != ANY (x)",
-            checkparams={"param_1": 5},
+            "%(x_1)s != ANY (x)",
+            checkparams={"x_1": 5},
         )
         self.assert_compile(
             postgresql.All(6, c, operator=operators.gt),
-            "%(param_1)s > ALL (x)",
-            checkparams={"param_1": 6},
+            "%(x_1)s > ALL (x)",
+            checkparams={"x_1": 6},
         )
         self.assert_compile(
             c.all(7, operator=operators.lt),
-            "%(param_1)s < ALL (x)",
-            checkparams={"param_1": 7},
+            "%(x_1)s < ALL (x)",
+            checkparams={"x_1": 7},
         )
 
     @testing.combinations(
@@ -2223,40 +2339,102 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         )
 
 
-class InsertOnConflictTest(fixtures.TestBase, AssertsCompiledSQL):
+class InsertOnConflictTest(fixtures.TablesTest, AssertsCompiledSQL):
     __dialect__ = postgresql.dialect()
 
-    def setup_test(self):
-        self.table1 = table1 = table(
+    run_create_tables = None
+
+    @classmethod
+    def define_tables(cls, metadata):
+        cls.table1 = table1 = table(
             "mytable",
             column("myid", Integer),
             column("name", String(128)),
             column("description", String(128)),
         )
-        md = MetaData()
-        self.table_with_metadata = Table(
+        cls.table_with_metadata = Table(
             "mytable",
-            md,
+            metadata,
             Column("myid", Integer, primary_key=True),
             Column("name", String(128)),
             Column("description", String(128)),
         )
-        self.unique_constr = schema.UniqueConstraint(
+        cls.unique_constr = schema.UniqueConstraint(
             table1.c.name, name="uq_name"
         )
-        self.excl_constr = ExcludeConstraint(
+        cls.excl_constr = ExcludeConstraint(
             (table1.c.name, "="),
             (table1.c.description, "&&"),
             name="excl_thing",
         )
-        self.excl_constr_anon = ExcludeConstraint(
-            (self.table_with_metadata.c.name, "="),
-            (self.table_with_metadata.c.description, "&&"),
-            where=self.table_with_metadata.c.description != "foo",
+        cls.excl_constr_anon = ExcludeConstraint(
+            (cls.table_with_metadata.c.name, "="),
+            (cls.table_with_metadata.c.description, "&&"),
+            where=cls.table_with_metadata.c.description != "foo",
         )
-        self.goofy_index = Index(
+        cls.goofy_index = Index(
             "goofy_index", table1.c.name, postgresql_where=table1.c.name > "m"
         )
+
+        Table(
+            "users",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("name", String(50)),
+        )
+
+        Table(
+            "users_w_key",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("name", String(50), key="name_keyed"),
+        )
+
+    @testing.combinations("control", "excluded", "dict")
+    def test_set_excluded(self, scenario):
+        """test #8014, sending all of .excluded to set"""
+
+        if scenario == "control":
+            users = self.tables.users
+
+            stmt = insert(users)
+            self.assert_compile(
+                stmt.on_conflict_do_update(
+                    constraint=users.primary_key, set_=stmt.excluded
+                ),
+                "INSERT INTO users (id, name) VALUES (%(id)s, %(name)s) ON "
+                "CONFLICT (id) DO UPDATE "
+                "SET id = excluded.id, name = excluded.name",
+            )
+        else:
+            users_w_key = self.tables.users_w_key
+
+            stmt = insert(users_w_key)
+
+            if scenario == "excluded":
+                self.assert_compile(
+                    stmt.on_conflict_do_update(
+                        constraint=users_w_key.primary_key, set_=stmt.excluded
+                    ),
+                    "INSERT INTO users_w_key (id, name) "
+                    "VALUES (%(id)s, %(name_keyed)s) ON "
+                    "CONFLICT (id) DO UPDATE "
+                    "SET id = excluded.id, name = excluded.name",
+                )
+            else:
+                self.assert_compile(
+                    stmt.on_conflict_do_update(
+                        constraint=users_w_key.primary_key,
+                        set_={
+                            "id": stmt.excluded.id,
+                            "name_keyed": stmt.excluded.name_keyed,
+                        },
+                    ),
+                    "INSERT INTO users_w_key (id, name) "
+                    "VALUES (%(id)s, %(name_keyed)s) ON "
+                    "CONFLICT (id) DO UPDATE "
+                    "SET id = excluded.id, name = excluded.name",
+                )
 
     def test_on_conflict_do_no_call_twice(self):
         users = self.table1
@@ -2278,6 +2456,28 @@ class InsertOnConflictTest(fixtures.TestBase, AssertsCompiledSQL):
                     "ON CONFLICT clause established",
                 ):
                     meth()
+
+    def test_on_conflict_cte_plus_textual(self):
+        """test #7798"""
+
+        bar = table("bar", column("id"), column("attr"), column("foo_id"))
+        s1 = text("SELECT bar.id, bar.attr FROM bar").columns(
+            bar.c.id, bar.c.attr
+        )
+        s2 = (
+            insert(bar)
+            .from_select(list(s1.selected_columns), s1)
+            .on_conflict_do_update(
+                index_elements=[s1.selected_columns.id],
+                set_={"attr": s1.selected_columns.attr},
+            )
+        )
+
+        self.assert_compile(
+            s2,
+            "INSERT INTO bar (id, attr) SELECT bar.id, bar.attr "
+            "FROM bar ON CONFLICT (id) DO UPDATE SET attr = bar.attr",
+        )
 
     def test_do_nothing_no_target(self):
 
@@ -2822,7 +3022,7 @@ class DistinctOnTest(fixtures.MappedTest, AssertsCompiledSQL):
     def test_query_on_columns_subquery(self):
         sess = Session()
 
-        class Foo(object):
+        class Foo:
             pass
 
         clear_mappers()
@@ -2840,7 +3040,7 @@ class DistinctOnTest(fixtures.MappedTest, AssertsCompiledSQL):
         )
 
     def test_query_distinct_on_aliased(self):
-        class Foo(object):
+        class Foo:
             pass
 
         self.mapper_registry.map_imperatively(Foo, self.table)
@@ -2912,6 +3112,36 @@ class FullTextSearchTest(fixtures.TestBase, AssertsCompiledSQL):
         c = q.compile(dialect=postgresql.dialect())
         raise ValueError(c)
 
+    def test_match_custom(self):
+        s = select(self.table_alt.c.id).where(
+            func.to_tsquery("fat").bool_op("<->")(func.to_tsquery("rat"))
+        )
+        self.assert_compile(
+            s,
+            "SELECT mytable.id FROM mytable WHERE "
+            "to_tsquery(%(to_tsquery_1)s) <-> to_tsquery(%(to_tsquery_2)s)",
+            {"to_tsquery_1": "fat", "to_tsquery_2": "rat"},
+        )
+
+    def test_match_custom_regconfig(self):
+        s = select(self.table_alt.c.id).where(
+            func.to_tsquery("english", "fat").bool_op("<->")(
+                func.to_tsquery("english", "rat")
+            )
+        )
+        self.assert_compile(
+            s,
+            "SELECT mytable.id FROM mytable WHERE "
+            "to_tsquery(%(to_tsquery_1)s, %(to_tsquery_2)s) <-> "
+            "to_tsquery(%(to_tsquery_3)s, %(to_tsquery_4)s)",
+            {
+                "to_tsquery_1": "english",
+                "to_tsquery_2": "fat",
+                "to_tsquery_3": "english",
+                "to_tsquery_4": "rat",
+            },
+        )
+
     def test_match_basic(self):
         s = select(self.table_alt.c.id).where(
             self.table_alt.c.title.match("somestring")
@@ -2920,7 +3150,7 @@ class FullTextSearchTest(fixtures.TestBase, AssertsCompiledSQL):
             s,
             "SELECT mytable.id "
             "FROM mytable "
-            "WHERE mytable.title @@ to_tsquery(%(title_1)s)",
+            "WHERE mytable.title @@ plainto_tsquery(%(title_1)s)",
         )
 
     def test_match_regconfig(self):
@@ -2933,7 +3163,8 @@ class FullTextSearchTest(fixtures.TestBase, AssertsCompiledSQL):
             s,
             "SELECT mytable.id "
             "FROM mytable "
-            """WHERE mytable.title @@ to_tsquery('english', %(title_1)s)""",
+            "WHERE mytable.title @@ "
+            "plainto_tsquery('english', %(title_1)s)",
         )
 
     def test_match_tsvector(self):
@@ -2945,7 +3176,7 @@ class FullTextSearchTest(fixtures.TestBase, AssertsCompiledSQL):
             "SELECT mytable.id "
             "FROM mytable "
             "WHERE to_tsvector(mytable.title) "
-            "@@ to_tsquery(%(to_tsvector_1)s)",
+            "@@ plainto_tsquery(%(to_tsvector_1)s)",
         )
 
     def test_match_tsvectorconfig(self):
@@ -2959,7 +3190,7 @@ class FullTextSearchTest(fixtures.TestBase, AssertsCompiledSQL):
             "SELECT mytable.id "
             "FROM mytable "
             "WHERE to_tsvector(%(to_tsvector_1)s, mytable.title) @@ "
-            "to_tsquery(%(to_tsvector_2)s)",
+            "plainto_tsquery(%(to_tsvector_2)s)",
         )
 
     def test_match_tsvectorconfig_regconfig(self):
@@ -2973,7 +3204,7 @@ class FullTextSearchTest(fixtures.TestBase, AssertsCompiledSQL):
             "SELECT mytable.id "
             "FROM mytable "
             "WHERE to_tsvector(%(to_tsvector_1)s, mytable.title) @@ "
-            """to_tsquery('english', %(to_tsvector_2)s)""",
+            """plainto_tsquery('english', %(to_tsvector_2)s)""",
         )
 
 

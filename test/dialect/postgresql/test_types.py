@@ -1,6 +1,7 @@
 # coding: utf-8
 import datetime
 import decimal
+from enum import Enum as _PY_Enum
 import re
 import uuid
 
@@ -11,12 +12,14 @@ from sqlalchemy import cast
 from sqlalchemy import Column
 from sqlalchemy import column
 from sqlalchemy import DateTime
+from sqlalchemy import Double
 from sqlalchemy import Enum
 from sqlalchemy import exc
 from sqlalchemy import Float
 from sqlalchemy import func
 from sqlalchemy import inspect
 from sqlalchemy import Integer
+from sqlalchemy import literal
 from sqlalchemy import MetaData
 from sqlalchemy import null
 from sqlalchemy import Numeric
@@ -35,21 +38,25 @@ from sqlalchemy import util
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.dialects.postgresql import DATERANGE
+from sqlalchemy.dialects.postgresql import DOMAIN
+from sqlalchemy.dialects.postgresql import ENUM
 from sqlalchemy.dialects.postgresql import HSTORE
 from sqlalchemy.dialects.postgresql import hstore
 from sqlalchemy.dialects.postgresql import INT4RANGE
 from sqlalchemy.dialects.postgresql import INT8RANGE
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import NamedType
 from sqlalchemy.dialects.postgresql import NUMRANGE
 from sqlalchemy.dialects.postgresql import TSRANGE
 from sqlalchemy.dialects.postgresql import TSTZRANGE
 from sqlalchemy.exc import CompileError
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import bindparam
 from sqlalchemy.sql import operators
 from sqlalchemy.sql import sqltypes
-from sqlalchemy.sql.type_api import Variant
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing.assertions import assert_raises
 from sqlalchemy.testing.assertions import assert_raises_message
@@ -62,6 +69,7 @@ from sqlalchemy.testing.assertsql import RegexSQL
 from sqlalchemy.testing.schema import pep435_enum
 from sqlalchemy.testing.suite import test_types as suite
 from sqlalchemy.testing.util import round_decimal
+from sqlalchemy.types import UserDefinedType
 
 
 class FloatCoercionTest(fixtures.TablesTest, AssertsExecutionResults):
@@ -126,14 +134,16 @@ class FloatCoercionTest(fixtures.TablesTest, AssertsExecutionResults):
             Column("x", postgresql.ARRAY(Float)),
             Column("y", postgresql.ARRAY(REAL)),
             Column("z", postgresql.ARRAY(postgresql.DOUBLE_PRECISION)),
+            Column("w", postgresql.ARRAY(Double)),
             Column("q", postgresql.ARRAY(Numeric)),
         )
         metadata.create_all(connection)
         connection.execute(
-            t1.insert(), dict(x=[5], y=[5], z=[6], q=[decimal.Decimal("6.4")])
+            t1.insert(),
+            dict(x=[5], y=[5], z=[6], w=[7], q=[decimal.Decimal("6.4")]),
         )
         row = connection.execute(t1.select()).first()
-        eq_(row, ([5], [5], [6], [decimal.Decimal("6.4")]))
+        eq_(row, ([5], [5], [6], [7], [decimal.Decimal("6.4")]))
 
     def test_arrays_base(self, connection, metadata):
         t1 = Table(
@@ -142,17 +152,21 @@ class FloatCoercionTest(fixtures.TablesTest, AssertsExecutionResults):
             Column("x", sqltypes.ARRAY(Float)),
             Column("y", sqltypes.ARRAY(REAL)),
             Column("z", sqltypes.ARRAY(postgresql.DOUBLE_PRECISION)),
+            Column("w", sqltypes.ARRAY(Double)),
             Column("q", sqltypes.ARRAY(Numeric)),
         )
         metadata.create_all(connection)
         connection.execute(
-            t1.insert(), dict(x=[5], y=[5], z=[6], q=[decimal.Decimal("6.4")])
+            t1.insert(),
+            dict(x=[5], y=[5], z=[6], w=[7], q=[decimal.Decimal("6.4")]),
         )
         row = connection.execute(t1.select()).first()
-        eq_(row, ([5], [5], [6], [decimal.Decimal("6.4")]))
+        eq_(row, ([5], [5], [6], [7], [decimal.Decimal("6.4")]))
 
 
-class EnumTest(fixtures.TestBase, AssertsExecutionResults):
+class NamedTypeTest(
+    AssertsCompiledSQL, fixtures.TestBase, AssertsExecutionResults
+):
     __backend__ = True
 
     __only_on__ = "postgresql > 8.3"
@@ -164,16 +178,18 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
             "the native_enum flag does not apply to the "
             "sqlalchemy.dialects.postgresql.ENUM datatype;"
         ):
-            e1 = postgresql.ENUM("a", "b", "c", native_enum=False)
+            e1 = postgresql.ENUM(
+                "a", "b", "c", name="pgenum", native_enum=False
+            )
 
-        e2 = postgresql.ENUM("a", "b", "c", native_enum=True)
-        e3 = postgresql.ENUM("a", "b", "c")
+        e2 = postgresql.ENUM("a", "b", "c", name="pgenum", native_enum=True)
+        e3 = postgresql.ENUM("a", "b", "c", name="pgenum")
 
         is_(e1.native_enum, True)
         is_(e2.native_enum, True)
         is_(e3.native_enum, True)
 
-    def test_create_table(self, metadata, connection):
+    def test_enum_create_table(self, metadata, connection):
         metadata = self.metadata
         t1 = Table(
             "table",
@@ -193,50 +209,147 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
             [(1, "two"), (2, "three"), (3, "three")],
         )
 
+    def test_domain_create_table(self, metadata, connection):
+        metadata = self.metadata
+        Email = DOMAIN(
+            name="email",
+            data_type=Text,
+            check=r"VALUE ~ '[^@]+@[^@]+\.[^@]+'",
+        )
+        PosInt = DOMAIN(
+            name="pos_int",
+            data_type=Integer,
+            not_null=True,
+            check=r"VALUE > 0",
+        )
+        t1 = Table(
+            "table",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("email", Email),
+            Column("number", PosInt),
+        )
+        t1.create(connection)
+        t1.create(connection, checkfirst=True)  # check the create
+        connection.execute(
+            t1.insert(), {"email": "test@example.com", "number": 42}
+        )
+        connection.execute(t1.insert(), {"email": "a@b.c", "number": 1})
+        connection.execute(
+            t1.insert(), {"email": "example@gmail.co.uk", "number": 99}
+        )
+        eq_(
+            connection.execute(t1.select().order_by(t1.c.id)).fetchall(),
+            [
+                (1, "test@example.com", 42),
+                (2, "a@b.c", 1),
+                (3, "example@gmail.co.uk", 99),
+            ],
+        )
+
+    @testing.combinations(
+        (ENUM("one", "two", "three", name="mytype"), "get_enums"),
+        (
+            DOMAIN(
+                name="mytype",
+                data_type=Text,
+                check=r"VALUE ~ '[^@]+@[^@]+\.[^@]+'",
+            ),
+            "get_domains",
+        ),
+        argnames="datatype, method",
+    )
+    def test_drops_on_table(
+        self, connection, metadata, datatype: "NamedType", method
+    ):
+        table = Table("e1", metadata, Column("e1", datatype))
+
+        table.create(connection)
+        table.drop(connection)
+
+        assert "mytype" not in [
+            e["name"] for e in getattr(inspect(connection), method)()
+        ]
+        table.create(connection)
+        assert "mytype" in [
+            e["name"] for e in getattr(inspect(connection), method)()
+        ]
+        table.drop(connection)
+        assert "mytype" not in [
+            e["name"] for e in getattr(inspect(connection), method)()
+        ]
+
+    @testing.combinations(
+        (
+            lambda symbol_name: ENUM(
+                "one", "two", "three", name="schema_mytype", schema=symbol_name
+            ),
+            ["two", "three", "three"],
+            "get_enums",
+        ),
+        (
+            lambda symbol_name: DOMAIN(
+                name="schema_mytype",
+                data_type=Text,
+                check=r"VALUE ~ '[^@]+@[^@]+\.[^@]+'",
+                schema=symbol_name,
+            ),
+            ["test@example.com", "a@b.c", "example@gmail.co.uk"],
+            "get_domains",
+        ),
+        argnames="datatype,data,method",
+    )
     @testing.combinations(None, "foo", argnames="symbol_name")
-    def test_create_table_schema_translate_map(self, connection, symbol_name):
+    def test_create_table_schema_translate_map(
+        self, connection, symbol_name, datatype, data, method
+    ):
         # note we can't use the fixture here because it will not drop
         # from the correct schema
         metadata = MetaData()
+
+        dt = datatype(symbol_name)
 
         t1 = Table(
             "table",
             metadata,
             Column("id", Integer, primary_key=True),
-            Column(
-                "value",
-                Enum(
-                    "one",
-                    "two",
-                    "three",
-                    name="schema_enum",
-                    schema=symbol_name,
-                ),
-            ),
+            Column("value", dt),
             schema=symbol_name,
         )
         conn = connection.execution_options(
             schema_translate_map={symbol_name: testing.config.test_schema}
         )
         t1.create(conn)
-        assert "schema_enum" in [
+        assert "schema_mytype" in [
             e["name"]
-            for e in inspect(conn).get_enums(schema=testing.config.test_schema)
+            for e in getattr(inspect(conn), method)(
+                schema=testing.config.test_schema
+            )
         ]
         t1.create(conn, checkfirst=True)
 
-        conn.execute(t1.insert(), dict(value="two"))
-        conn.execute(t1.insert(), dict(value="three"))
-        conn.execute(t1.insert(), dict(value="three"))
+        conn.execute(
+            t1.insert(),
+            dict(value=data[0]),
+        )
+        conn.execute(t1.insert(), dict(value=data[1]))
+        conn.execute(t1.insert(), dict(value=data[2]))
         eq_(
             conn.execute(t1.select().order_by(t1.c.id)).fetchall(),
-            [(1, "two"), (2, "three"), (3, "three")],
+            [
+                (1, data[0]),
+                (2, data[1]),
+                (3, data[2]),
+            ],
         )
 
         t1.drop(conn)
-        assert "schema_enum" not in [
+
+        assert "schema_mytype" not in [
             e["name"]
-            for e in inspect(conn).get_enums(schema=testing.config.test_schema)
+            for e in getattr(inspect(conn), method)(
+                schema=testing.config.test_schema
+            )
         ]
         t1.drop(conn, checkfirst=True)
 
@@ -247,40 +360,48 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
         ("override_metadata_schema",),
         argnames="test_case",
     )
+    @testing.combinations("enum", "domain", argnames="datatype")
     @testing.requires.schemas
-    def test_schema_inheritance(self, test_case, metadata, connection):
+    def test_schema_inheritance(
+        self, test_case, metadata, connection, datatype
+    ):
         """test #6373"""
 
         metadata.schema = testing.config.test_schema
 
+        def make_type(**kw):
+            if datatype == "enum":
+                return Enum("four", "five", "six", name="mytype", **kw)
+            elif datatype == "domain":
+                return DOMAIN(
+                    name="mytype",
+                    data_type=Text,
+                    check=r"VALUE ~ '[^@]+@[^@]+\.[^@]+'",
+                    **kw,
+                )
+            else:
+                assert False
+
         if test_case == "metadata_schema_only":
-            enum = Enum(
-                "four", "five", "six", metadata=metadata, name="myenum"
-            )
+            enum = make_type(metadata=metadata)
             assert_schema = testing.config.test_schema
         elif test_case == "override_metadata_schema":
-            enum = Enum(
-                "four",
-                "five",
-                "six",
+            enum = make_type(
                 metadata=metadata,
                 schema=testing.config.test_schema_2,
-                name="myenum",
             )
             assert_schema = testing.config.test_schema_2
         elif test_case == "inherit_table_schema":
-            enum = Enum(
-                "four",
-                "five",
-                "six",
+            enum = make_type(
                 metadata=metadata,
                 inherit_schema=True,
-                name="myenum",
             )
             assert_schema = testing.config.test_schema_2
         elif test_case == "local_schema":
-            enum = Enum("four", "five", "six", name="myenum")
+            enum = make_type()
             assert_schema = testing.config.db.dialect.default_schema_name
+        else:
+            assert False
 
         Table(
             "t",
@@ -291,27 +412,98 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
 
         metadata.create_all(connection)
 
-        eq_(
-            inspect(connection).get_enums(schema=assert_schema),
-            [
-                {
-                    "labels": ["four", "five", "six"],
-                    "name": "myenum",
-                    "schema": assert_schema,
-                    "visible": assert_schema
-                    == testing.config.db.dialect.default_schema_name,
-                }
-            ],
-        )
+        if datatype == "enum":
+            eq_(
+                inspect(connection).get_enums(schema=assert_schema),
+                [
+                    {
+                        "labels": ["four", "five", "six"],
+                        "name": "mytype",
+                        "schema": assert_schema,
+                        "visible": assert_schema
+                        == testing.config.db.dialect.default_schema_name,
+                    }
+                ],
+            )
+        elif datatype == "domain":
 
-    def test_name_required(self, metadata, connection):
-        etype = Enum("four", "five", "six", metadata=metadata)
-        assert_raises(exc.CompileError, etype.create, connection)
+            def_schame = testing.config.db.dialect.default_schema_name
+            eq_(
+                inspect(connection).get_domains(schema=assert_schema),
+                [
+                    {
+                        "name": "mytype",
+                        "type": "text",
+                        "nullable": True,
+                        "default": None,
+                        "schema": assert_schema,
+                        "visible": assert_schema == def_schame,
+                        "constraints": [
+                            {
+                                "name": "mytype_check",
+                                "check": r"VALUE ~ '[^@]+@[^@]+\.[^@]+'::text",
+                            }
+                        ],
+                    }
+                ],
+            )
+        else:
+            assert False
+
+    @testing.combinations(
+        (Enum("one", "two", "three")),
+        (ENUM("one", "two", "three", name=None)),
+        (
+            DOMAIN(
+                name=None,
+                data_type=Text,
+                check=r"VALUE ~ '[^@]+@[^@]+\.[^@]+'",
+            ),
+        ),
+        argnames="datatype",
+    )
+    def test_name_required(self, metadata, connection, datatype):
+
+        assert_raises(exc.CompileError, datatype.create, connection)
         assert_raises(
-            exc.CompileError, etype.compile, dialect=connection.dialect
+            exc.CompileError, datatype.compile, dialect=connection.dialect
         )
 
-    def test_unicode_labels(self, connection, metadata):
+    def test_enum_doesnt_construct_ENUM(self):
+        """in 2.0 we made ENUM name required.   check that Enum adapt to
+        ENUM doesnt call this constructor."""
+
+        e1 = Enum("x", "y")
+        eq_(e1.name, None)
+        e2 = e1.adapt(ENUM)
+        eq_(e2.name, None)
+
+        # no name
+        assert_raises(
+            exc.CompileError, e2.compile, dialect=postgresql.dialect()
+        )
+
+    def test_py_enum_name_is_used(self):
+        class MyEnum(_PY_Enum):
+            x = "1"
+            y = "2"
+
+        e1 = Enum(MyEnum)
+        eq_(e1.name, "myenum")
+        e2 = e1.adapt(ENUM)
+
+        # note that by making "name" required, we are now not supporting this:
+        # e2 = ENUM(MyEnum)
+        # they'd need ENUM(MyEnum, name="myenum")
+        # I might be OK with that.   Use of pg.ENUM directly is not as
+        # common and it suggests more explicitness on the part of the
+        # programmer in any case
+
+        eq_(e2.name, "myenum")
+
+        self.assert_compile(e2, "myenum")
+
+    def test_enum_unicode_labels(self, connection, metadata):
         t1 = Table(
             "table",
             metadata,
@@ -319,30 +511,30 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
             Column(
                 "value",
                 Enum(
-                    util.u("réveillé"),
-                    util.u("drôle"),
-                    util.u("S’il"),
+                    "réveillé",
+                    "drôle",
+                    "S’il",
                     name="onetwothreetype",
                 ),
             ),
         )
         metadata.create_all(connection)
-        connection.execute(t1.insert(), dict(value=util.u("drôle")))
-        connection.execute(t1.insert(), dict(value=util.u("réveillé")))
-        connection.execute(t1.insert(), dict(value=util.u("S’il")))
+        connection.execute(t1.insert(), dict(value="drôle"))
+        connection.execute(t1.insert(), dict(value="réveillé"))
+        connection.execute(t1.insert(), dict(value="S’il"))
         eq_(
             connection.execute(t1.select().order_by(t1.c.id)).fetchall(),
             [
-                (1, util.u("drôle")),
-                (2, util.u("réveillé")),
-                (3, util.u("S’il")),
+                (1, "drôle"),
+                (2, "réveillé"),
+                (3, "S’il"),
             ],
         )
         m2 = MetaData()
         t2 = Table("table", m2, autoload_with=connection)
         eq_(
             t2.c.value.type.enums,
-            [util.u("réveillé"), util.u("drôle"), util.u("S’il")],
+            ["réveillé", "drôle", "S’il"],
         )
 
     def test_non_native_enum(self, metadata, connection):
@@ -390,7 +582,7 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
                 "bar",
                 Enum(
                     "B",
-                    util.u("Ü"),
+                    "Ü",
                     name="myenum",
                     create_constraint=True,
                     native_enum=False,
@@ -406,35 +598,41 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
             go,
             [
                 (
-                    util.u(
-                        "CREATE TABLE foo (\tbar "
-                        "VARCHAR(1), \tCONSTRAINT myenum CHECK "
-                        "(bar IN ('B', 'Ü')))"
-                    ),
+                    "CREATE TABLE foo (\tbar "
+                    "VARCHAR(1), \tCONSTRAINT myenum CHECK "
+                    "(bar IN ('B', 'Ü')))",
                     {},
                 )
             ],
         )
 
-        connection.execute(t1.insert(), {"bar": util.u("Ü")})
-        eq_(connection.scalar(select(t1.c.bar)), util.u("Ü"))
+        connection.execute(t1.insert(), {"bar": "Ü"})
+        eq_(connection.scalar(select(t1.c.bar)), "Ü")
 
-    def test_disable_create(self, metadata, connection):
+    @testing.combinations(
+        (ENUM("one", "two", "three", name="mytype", create_type=False),),
+        (
+            DOMAIN(
+                name="mytype",
+                data_type=Text,
+                check=r"VALUE ~ '[^@]+@[^@]+\.[^@]+'",
+                create_type=False,
+            ),
+        ),
+        argnames="datatype",
+    )
+    def test_disable_create(self, metadata, connection, datatype):
         metadata = self.metadata
 
-        e1 = postgresql.ENUM(
-            "one", "two", "three", name="myenum", create_type=False
-        )
-
-        t1 = Table("e1", metadata, Column("c1", e1))
+        t1 = Table("e1", metadata, Column("c1", datatype))
         # table can be created separately
         # without conflict
-        e1.create(bind=connection)
+        datatype.create(bind=connection)
         t1.create(connection)
         t1.drop(connection)
-        e1.drop(bind=connection)
+        datatype.drop(bind=connection)
 
-    def test_dont_keep_checking(self, metadata, connection):
+    def test_enum_dont_keep_checking(self, metadata, connection):
         metadata = self.metadata
 
         e1 = postgresql.ENUM("one", "two", "three", name="myenum")
@@ -447,11 +645,16 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
         asserter.assert_(
             # check for table
             RegexSQL(
-                "select relname from pg_class c join pg_namespace.*",
+                "SELECT pg_catalog.pg_class.relname FROM pg_catalog."
+                "pg_class JOIN pg_catalog.pg_namespace.*",
                 dialect="postgresql",
             ),
             # check for enum, just once
-            RegexSQL(r".*SELECT EXISTS ", dialect="postgresql"),
+            RegexSQL(
+                r"SELECT pg_catalog.pg_type.typname .* WHERE "
+                "pg_catalog.pg_type.typname = ",
+                dialect="postgresql",
+            ),
             RegexSQL("CREATE TYPE myenum AS ENUM .*", dialect="postgresql"),
             RegexSQL(r"CREATE TABLE t .*", dialect="postgresql"),
         )
@@ -461,15 +664,49 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
 
         asserter.assert_(
             RegexSQL(
-                "select relname from pg_class c join pg_namespace.*",
+                "SELECT pg_catalog.pg_class.relname FROM pg_catalog."
+                "pg_class JOIN pg_catalog.pg_namespace.*",
                 dialect="postgresql",
             ),
             RegexSQL("DROP TABLE t", dialect="postgresql"),
-            RegexSQL(r".*SELECT EXISTS ", dialect="postgresql"),
+            RegexSQL(
+                r"SELECT pg_catalog.pg_type.typname .* WHERE "
+                "pg_catalog.pg_type.typname = ",
+                dialect="postgresql",
+            ),
             RegexSQL("DROP TYPE myenum", dialect="postgresql"),
         )
 
-    def test_generate_multiple(self, metadata, connection):
+    @testing.combinations(
+        (
+            Enum(
+                "one",
+                "two",
+                "three",
+                name="mytype",
+            ),
+            "get_enums",
+        ),
+        (
+            ENUM(
+                "one",
+                "two",
+                "three",
+                name="mytype",
+            ),
+            "get_enums",
+        ),
+        (
+            DOMAIN(
+                name="mytype",
+                data_type=Text,
+                check=r"VALUE ~ '[^@]+@[^@]+\.[^@]+'",
+            ),
+            "get_domains",
+        ),
+        argnames="datatype, method",
+    )
+    def test_generate_multiple(self, metadata, connection, datatype, method):
         """Test that the same enum twice only generates once
         for the create_all() call, without using checkfirst.
 
@@ -477,15 +714,20 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
         now handles this.
 
         """
-        e1 = Enum("one", "two", "three", name="myenum")
-        Table("e1", metadata, Column("c1", e1))
+        Table("e1", metadata, Column("c1", datatype))
 
-        Table("e2", metadata, Column("c1", e1))
+        Table("e2", metadata, Column("c1", datatype))
 
         metadata.create_all(connection, checkfirst=False)
+
+        assert "mytype" in [
+            e["name"] for e in getattr(inspect(connection), method)()
+        ]
+
         metadata.drop_all(connection, checkfirst=False)
-        assert "myenum" not in [
-            e["name"] for e in inspect(connection).get_enums()
+
+        assert "mytype" not in [
+            e["name"] for e in getattr(inspect(connection), method)()
         ]
 
     def test_generate_alone_on_metadata(self, connection, metadata):
@@ -552,23 +794,6 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
         assert "myenum" not in [
             e["name"]
             for e in inspect(connection).get_enums(schema="test_schema")
-        ]
-
-    def test_drops_on_table(self, connection, metadata):
-
-        e1 = Enum("one", "two", "three", name="myenum")
-        table = Table("e1", metadata, Column("c1", e1))
-
-        table.create(connection)
-        table.drop(connection)
-        assert "myenum" not in [
-            e["name"] for e in inspect(connection).get_enums()
-        ]
-        table.create(connection)
-        assert "myenum" in [e["name"] for e in inspect(connection).get_enums()]
-        table.drop(connection)
-        assert "myenum" not in [
-            e["name"] for e in inspect(connection).get_enums()
         ]
 
     def test_create_drop_schema_translate_map(self, connection):
@@ -687,23 +912,6 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
                 connection, "fourfivesixtype"
             )
 
-    def test_no_support(self, testing_engine):
-        def server_version_info(self):
-            return (8, 2)
-
-        e = testing_engine()
-        dialect = e.dialect
-        dialect._get_server_version_info = server_version_info
-
-        assert dialect.supports_native_enum
-        e.connect()
-        assert not dialect.supports_native_enum
-
-        # initialize is called again on new pool
-        e.dispose()
-        e.connect()
-        assert not dialect.supports_native_enum
-
     def test_reflection(self, metadata, connection):
         etype = Enum(
             "four", "five", "six", name="fourfivesixtype", metadata=metadata
@@ -780,24 +988,33 @@ class EnumTest(fixtures.TestBase, AssertsExecutionResults):
         connection.execute(t1.insert(), {"data": "two"})
         eq_(connection.scalar(select(t1.c.data)), "twoHITHERE")
 
-    def test_generic_w_pg_variant(self, metadata, connection):
+    @testing.combinations(
+        (
+            Enum(
+                "one",
+                "two",
+                "three",
+                native_enum=True  # make sure this is True because
+                # it should *not* take effect due to
+                # the variant
+            ).with_variant(
+                postgresql.ENUM("four", "five", "six", name="my_enum"),
+                "postgresql",
+            )
+        ),
+        (
+            String(50).with_variant(
+                postgresql.ENUM("four", "five", "six", name="my_enum"),
+                "postgresql",
+            )
+        ),
+        argnames="datatype",
+    )
+    def test_generic_w_pg_variant(self, metadata, connection, datatype):
         some_table = Table(
             "some_table",
             self.metadata,
-            Column(
-                "data",
-                Enum(
-                    "one",
-                    "two",
-                    "three",
-                    native_enum=True  # make sure this is True because
-                    # it should *not* take effect due to
-                    # the variant
-                ).with_variant(
-                    postgresql.ENUM("four", "five", "six", name="my_enum"),
-                    "postgresql",
-                ),
-            ),
+            Column("data", datatype),
         )
 
         assert "my_enum" not in [
@@ -922,16 +1139,14 @@ class NumericInterpretationTest(fixtures.TestBase):
 
     def test_numeric_codes(self):
         from sqlalchemy.dialects.postgresql import (
+            base,
             pg8000,
-            pygresql,
             psycopg2,
             psycopg2cffi,
-            base,
         )
 
         dialects = (
             pg8000.dialect(),
-            pygresql.dialect(),
             psycopg2.dialect(),
             psycopg2cffi.dialect(),
         )
@@ -1208,7 +1423,7 @@ class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
 
         self.assert_compile(
             expr,
-            "x IN ([POSTCOMPILE_x_1~~~~REPL~~::myenum[]~~])",
+            "x IN (__[POSTCOMPILE_x_1])",
             dialect=postgresql.psycopg2.dialect(),
         )
 
@@ -1219,6 +1434,23 @@ class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
             render_postcompile=True,
         )
 
+    def test_array_literal_render_no_inner_render(self):
+        class MyType(UserDefinedType):
+            cache_ok = True
+
+            def get_col_spec(self, **kw):
+                return "MYTYPE"
+
+        with expect_raises_message(
+            NotImplementedError,
+            r"Don't know how to literal-quote value \[1, 2, 3\]",
+        ):
+            self.assert_compile(
+                select(literal([1, 2, 3], ARRAY(MyType()))),
+                "nothing",
+                literal_binds=True,
+            )
+
     def test_array_in_str_psycopg2_cast(self):
         expr = column("x", postgresql.ARRAY(String(15))).in_(
             [["one", "two"], ["three", "four"]]
@@ -1226,7 +1458,7 @@ class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
 
         self.assert_compile(
             expr,
-            "x IN ([POSTCOMPILE_x_1~~~~REPL~~::VARCHAR(15)[]~~])",
+            "x IN (__[POSTCOMPILE_x_1])",
             dialect=postgresql.psycopg2.dialect(),
         )
 
@@ -1260,16 +1492,16 @@ class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
         col = column("x", postgresql.ARRAY(Integer))
         self.assert_compile(
             select(col.any(7, operator=operators.lt)),
-            "SELECT %(param_1)s < ANY (x) AS anon_1",
-            checkparams={"param_1": 7},
+            "SELECT %(x_1)s < ANY (x) AS anon_1",
+            checkparams={"x_1": 7},
         )
 
     def test_array_all(self):
         col = column("x", postgresql.ARRAY(Integer))
         self.assert_compile(
             select(col.all(7, operator=operators.lt)),
-            "SELECT %(param_1)s < ALL (x) AS anon_1",
-            checkparams={"param_1": 7},
+            "SELECT %(x_1)s < ALL (x) AS anon_1",
+            checkparams={"x_1": 7},
         )
 
     def test_array_contains(self):
@@ -1415,19 +1647,22 @@ class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
         argnames="with_enum, using_aggregate_order_by",
     )
     def test_array_agg_specific(self, with_enum, using_aggregate_order_by):
-        from sqlalchemy.dialects.postgresql import aggregate_order_by
-        from sqlalchemy.dialects.postgresql import array_agg
-        from sqlalchemy.dialects.postgresql import ENUM
+        from sqlalchemy.dialects.postgresql import (
+            ENUM,
+            aggregate_order_by,
+            array_agg,
+        )
 
-        element_type = ENUM if with_enum else Integer
+        element = ENUM(name="pgenum") if with_enum else Integer()
+        element_type = type(element)
         expr = (
             array_agg(
                 aggregate_order_by(
-                    column("q", element_type), column("idx", Integer)
+                    column("q", element), column("idx", Integer)
                 )
             )
             if using_aggregate_order_by
-            else array_agg(column("q", element_type))
+            else array_agg(column("q", element))
         )
         is_(expr.type.__class__, postgresql.ARRAY)
         is_(expr.type.item_type.__class__, element_type)
@@ -1439,11 +1674,10 @@ AnEnum("Bar", 2)
 AnEnum("Baz", 3)
 
 
-class ArrayRoundTripTest(object):
+class ArrayRoundTripTest:
 
     __only_on__ = "postgresql"
     __backend__ = True
-    __unsupported_on__ = ("postgresql+pg8000",)
 
     ARRAY = postgresql.ARRAY
 
@@ -1511,14 +1745,14 @@ class ArrayRoundTripTest(object):
                 {
                     "id": 1,
                     "intarr": [1, 2, 3],
-                    "strarr": [u"one", u"two", u"three"],
+                    "strarr": ["one", "two", "three"],
                 },
                 {
                     "id": 2,
                     "intarr": [4, 5, 6],
-                    "strarr": [u"four", u"five", u"six"],
+                    "strarr": ["four", "five", "six"],
                 },
-                {"id": 3, "intarr": [1, 5], "strarr": [u"one", u"five"]},
+                {"id": 3, "intarr": [1, 5], "strarr": ["one", "five"]},
                 {"id": 4, "intarr": [], "strarr": []},
             ],
         )
@@ -1552,9 +1786,9 @@ class ArrayRoundTripTest(object):
             .where(
                 arrtable.c.strarr.in_(
                     [
-                        [u"one", u"five"],
-                        [u"four", u"five", u"six"],
-                        [u"nine", u"ten"],
+                        ["one", "five"],
+                        ["four", "five", "six"],
+                        ["nine", "ten"],
                     ]
                 )
             )
@@ -1631,13 +1865,13 @@ class ArrayRoundTripTest(object):
             arrtable.insert(),
             dict(
                 intarr=[1, 2, 3],
-                strarr=[util.u("abc"), util.u("def")],
+                strarr=["abc", "def"],
             ),
         )
         results = connection.execute(arrtable.select()).fetchall()
         eq_(len(results), 1)
         eq_(results[0].intarr, [1, 2, 3])
-        eq_(results[0].strarr, [util.u("abc"), util.u("def")])
+        eq_(results[0].strarr, ["abc", "def"])
 
     def test_insert_array_w_null(self, connection):
         arrtable = self.tables.arrtable
@@ -1645,13 +1879,13 @@ class ArrayRoundTripTest(object):
             arrtable.insert(),
             dict(
                 intarr=[1, None, 3],
-                strarr=[util.u("abc"), None],
+                strarr=["abc", None],
             ),
         )
         results = connection.execute(arrtable.select()).fetchall()
         eq_(len(results), 1)
         eq_(results[0].intarr, [1, None, 3])
-        eq_(results[0].strarr, [util.u("abc"), None])
+        eq_(results[0].strarr, ["abc", None])
 
     def test_array_where(self, connection):
         arrtable = self.tables.arrtable
@@ -1659,11 +1893,11 @@ class ArrayRoundTripTest(object):
             arrtable.insert(),
             dict(
                 intarr=[1, 2, 3],
-                strarr=[util.u("abc"), util.u("def")],
+                strarr=["abc", "def"],
             ),
         )
         connection.execute(
-            arrtable.insert(), dict(intarr=[4, 5, 6], strarr=util.u("ABC"))
+            arrtable.insert(), dict(intarr=[4, 5, 6], strarr="ABC")
         )
         results = connection.execute(
             arrtable.select().where(arrtable.c.intarr == [1, 2, 3])
@@ -1675,7 +1909,7 @@ class ArrayRoundTripTest(object):
         arrtable = self.tables.arrtable
         connection.execute(
             arrtable.insert(),
-            dict(intarr=[1, 2, 3], strarr=[util.u("abc"), util.u("def")]),
+            dict(intarr=[1, 2, 3], strarr=["abc", "def"]),
         )
         results = connection.execute(
             select(arrtable.c.intarr + [4, 5, 6])
@@ -1687,9 +1921,7 @@ class ArrayRoundTripTest(object):
         arrtable = self.tables.arrtable
         connection.execute(
             arrtable.insert(),
-            dict(
-                id=5, intarr=[1, 2, 3], strarr=[util.u("abc"), util.u("def")]
-            ),
+            dict(id=5, intarr=[1, 2, 3], strarr=["abc", "def"]),
         )
         results = connection.execute(
             select(arrtable.c.id).where(arrtable.c.intarr < [4, 5, 6])
@@ -1703,24 +1935,24 @@ class ArrayRoundTripTest(object):
             arrtable.insert(),
             dict(
                 intarr=[4, 5, 6],
-                strarr=[[util.ue("m\xe4\xe4")], [util.ue("m\xf6\xf6")]],
+                strarr=[["m\xe4\xe4"], ["m\xf6\xf6"]],
             ),
         )
         connection.execute(
             arrtable.insert(),
             dict(
                 intarr=[1, 2, 3],
-                strarr=[util.ue("m\xe4\xe4"), util.ue("m\xf6\xf6")],
+                strarr=["m\xe4\xe4", "m\xf6\xf6"],
             ),
         )
         results = connection.execute(
             arrtable.select().order_by(arrtable.c.intarr)
         ).fetchall()
         eq_(len(results), 2)
-        eq_(results[0].strarr, [util.ue("m\xe4\xe4"), util.ue("m\xf6\xf6")])
+        eq_(results[0].strarr, ["m\xe4\xe4", "m\xf6\xf6"])
         eq_(
             results[1].strarr,
-            [[util.ue("m\xe4\xe4")], [util.ue("m\xf6\xf6")]],
+            [["m\xe4\xe4"], ["m\xf6\xf6"]],
         )
 
     def test_array_literal_roundtrip(self, connection):
@@ -1793,7 +2025,7 @@ class ArrayRoundTripTest(object):
             arrtable.insert(),
             dict(
                 intarr=[4, 5, 6],
-                strarr=[util.u("abc"), util.u("def")],
+                strarr=["abc", "def"],
             ),
         )
         eq_(connection.scalar(select(arrtable.c.intarr[2:3])), [5, 6])
@@ -1906,17 +2138,17 @@ class ArrayRoundTripTest(object):
         t.drop(connection)
         eq_(inspect(connection).get_enums(), [])
 
-    def _type_combinations(exclude_json=False):
+    def _type_combinations(exclude_json=False, exclude_empty_lists=False):
         def str_values(x):
             return ["one", "two: %s" % x, "three", "four", "five"]
 
         def unicode_values(x):
             return [
-                util.u("réveillé"),
-                util.u("drôle"),
-                util.u("S’il %s" % x),
-                util.u("🐍 %s" % x),
-                util.u("« S’il vous"),
+                "réveillé",
+                "drôle",
+                "S’il %s" % x,
+                "🐍 %s" % x,
+                "« S’il vous",
             ]
 
         def json_values(x):
@@ -1940,6 +2172,9 @@ class ArrayRoundTripTest(object):
                 AnEnum.Foo,
             ]
 
+        def empty_list(x):
+            return []
+
         class inet_str(str):
             def __eq__(self, other):
                 return str(self) == str(other)
@@ -1955,6 +2190,23 @@ class ArrayRoundTripTest(object):
             def __ne__(self, other):
                 return not self.__eq__(other)
 
+        difficult_enum = [
+            "Value",
+            "With space",
+            "With,comma",
+            'With"quote',
+            "With\\escape",
+            """Various!@#$%^*()"'\\][{};:.<>|_+~chars""",
+        ]
+
+        def make_difficult_enum(cls_, native):
+            return cls_(
+                *difficult_enum, name="difficult_enum", native_enum=native
+            )
+
+        def difficult_enum_values(x):
+            return [v for i, v in enumerate(difficult_enum) if i != x - 1]
+
         elements = [
             (sqltypes.Integer, lambda x: [1, x, 3, 4, 5]),
             (sqltypes.Text, str_values),
@@ -1962,14 +2214,8 @@ class ArrayRoundTripTest(object):
             (sqltypes.Unicode, unicode_values),
             (postgresql.JSONB, json_values),
             (sqltypes.Boolean, lambda x: [False] + [True] * x),
-            (
-                sqltypes.LargeBinary,
-                binary_values,
-            ),
-            (
-                postgresql.BYTEA,
-                binary_values,
-            ),
+            (sqltypes.LargeBinary, binary_values),
+            (postgresql.BYTEA, binary_values),
             (
                 postgresql.INET,
                 lambda x: [
@@ -2044,11 +2290,41 @@ class ArrayRoundTripTest(object):
                 ],
                 testing.requires.hstore,
             ),
-            (postgresql.ENUM(AnEnum), enum_values),
+            (postgresql.ENUM(AnEnum, name="pgenum"), enum_values),
             (sqltypes.Enum(AnEnum, native_enum=True), enum_values),
             (sqltypes.Enum(AnEnum, native_enum=False), enum_values),
+            (
+                postgresql.ENUM(AnEnum, name="pgenum", native_enum=True),
+                enum_values,
+            ),
+            (
+                make_difficult_enum(sqltypes.Enum, native=True),
+                difficult_enum_values,
+            ),
+            (
+                make_difficult_enum(sqltypes.Enum, native=False),
+                difficult_enum_values,
+            ),
+            (
+                make_difficult_enum(postgresql.ENUM, native=True),
+                difficult_enum_values,
+            ),
         ]
 
+        if not exclude_empty_lists:
+            elements.extend(
+                [
+                    (postgresql.ENUM(AnEnum, name="pgenum"), empty_list),
+                    (sqltypes.Enum(AnEnum, native_enum=True), empty_list),
+                    (sqltypes.Enum(AnEnum, native_enum=False), empty_list),
+                    (
+                        postgresql.ENUM(
+                            AnEnum, name="pgenum", native_enum=True
+                        ),
+                        empty_list,
+                    ),
+                ]
+            )
         if not exclude_json:
             elements.extend(
                 [
@@ -2056,6 +2332,22 @@ class ArrayRoundTripTest(object):
                     (postgresql.JSON, json_values),
                 ]
             )
+
+        _pg8000_skip_types = {
+            postgresql.HSTORE,  # return not parsed returned as string
+        }
+        for i in range(len(elements)):
+            elem = elements[i]
+            if (
+                elem[0] in _pg8000_skip_types
+                or type(elem[0]) in _pg8000_skip_types
+            ):
+                elem += (
+                    testing.skip_if(
+                        "postgresql+pg8000", "type not supported by pg8000"
+                    ),
+                )
+                elements[i] = elem
 
         return testing.combinations_list(
             elements, argnames="type_,gen", id_="na"
@@ -2121,7 +2413,7 @@ class ArrayRoundTripTest(object):
             connection.scalar(select(table.c.bar).where(table.c.id == 2)),
         )
 
-    @_type_combinations()
+    @_type_combinations(exclude_empty_lists=True)
     def test_type_specific_slice_update(
         self, type_specific_fixture, connection, type_, gen
     ):
@@ -2129,7 +2421,7 @@ class ArrayRoundTripTest(object):
 
         new_gen = gen(3)
 
-        if isinstance(table.c.bar.type, Variant):
+        if not table.c.bar.type._variant_mapping:
             # this is not likely to occur to users but we need to just
             # exercise this as far as we can
             expr = type_coerce(table.c.bar, ARRAY(type_))[1:3]
@@ -2148,7 +2440,7 @@ class ArrayRoundTripTest(object):
 
         eq_(rows, [(gen(1),), (sliced_gen,)])
 
-    @_type_combinations(exclude_json=True)
+    @_type_combinations(exclude_json=True, exclude_empty_lists=True)
     def test_type_specific_value_delete(
         self, type_specific_fixture, connection, type_, gen
     ):
@@ -2320,6 +2612,11 @@ class ArrayEnum(fixtures.TestBase):
     @testing.fixture
     def array_of_enum_fixture(self, metadata, connection):
         def go(array_cls, enum_cls):
+            class MyEnum(_PY_Enum):
+                a = "aaa"
+                b = "bbb"
+                c = "ccc"
+
             tbl = Table(
                 "enum_table",
                 metadata,
@@ -2328,28 +2625,19 @@ class ArrayEnum(fixtures.TestBase):
                     "enum_col",
                     array_cls(enum_cls("foo", "bar", "baz", name="an_enum")),
                 ),
+                Column(
+                    "pyenum_col",
+                    array_cls(enum_cls(MyEnum, name="pgenum")),
+                ),
             )
-            if util.py3k:
-                from enum import Enum
-
-                class MyEnum(Enum):
-                    a = "aaa"
-                    b = "bbb"
-                    c = "ccc"
-
-                tbl.append_column(
-                    Column(
-                        "pyenum_col",
-                        array_cls(enum_cls(MyEnum)),
-                    ),
-                )
-            else:
-                MyEnum = None
 
             metadata.create_all(connection)
             connection.execute(
                 tbl.insert(),
-                [{"enum_col": ["foo"]}, {"enum_col": ["foo", "bar"]}],
+                [
+                    {"enum_col": ["foo"], "pyenum_col": [MyEnum.a, MyEnum.b]},
+                    {"enum_col": ["foo", "bar"], "pyenum_col": [MyEnum.b]},
+                ],
             )
             return tbl, MyEnum
 
@@ -2362,10 +2650,30 @@ class ArrayEnum(fixtures.TestBase):
             testing.combinations(
                 sqltypes.ARRAY,
                 postgresql.ARRAY,
-                (_ArrayOfEnum, testing.only_on("postgresql+psycopg2")),
+                (_ArrayOfEnum, testing.requires.psycopg_compatibility),
                 argnames="array_cls",
             )(fn)
         )
+
+    @_enum_combinations
+    @testing.combinations("all", "any", argnames="fn")
+    def test_any_all_roundtrip(
+        self, array_of_enum_fixture, connection, array_cls, enum_cls, fn
+    ):
+        """test #6515"""
+
+        tbl, MyEnum = array_of_enum_fixture(array_cls, enum_cls)
+
+        if fn == "all":
+            expr = tbl.c.pyenum_col.all(MyEnum.b)
+            result = [([MyEnum.b],)]
+        elif fn == "any":
+            expr = tbl.c.pyenum_col.any(MyEnum.b)
+            result = [([MyEnum.a, MyEnum.b],), ([MyEnum.b],)]
+        else:
+            assert False
+        sel = select(tbl.c.pyenum_col).where(expr).order_by(tbl.c.id)
+        eq_(connection.execute(sel).fetchall(), result)
 
     @_enum_combinations
     def test_array_of_enums_roundtrip(
@@ -2395,7 +2703,6 @@ class ArrayEnum(fixtures.TestBase):
         eq_(connection.execute(sel).fetchall(), [(["foo", "bar"],)])
 
     @_enum_combinations
-    @testing.requires.python3
     def test_array_of_enums_native_roundtrip(
         self, array_of_enum_fixture, connection, array_cls, enum_cls
     ):
@@ -2704,7 +3011,11 @@ class SpecialTypesTest(fixtures.TablesTest, ComparesTables):
 
 class UUIDTest(fixtures.TestBase):
 
-    """Test the bind/return values of the UUID type."""
+    """Test postgresql-specific UUID cases.
+
+    See also generic UUID tests in testing/suite/test_types
+
+    """
 
     __only_on__ = "postgresql >= 8.3"
     __backend__ = True
@@ -2750,6 +3061,37 @@ class UUIDTest(fixtures.TestBase):
     # passes pg8000 as of 1.19.1
     def test_uuid_array(self, datatype, value1, value2, connection):
         self.test_round_trip(datatype, value1, value2, connection)
+
+    @testing.combinations(
+        (
+            "not_as_uuid",
+            postgresql.UUID(as_uuid=False),
+            str(uuid.uuid4()),
+        ),
+        (
+            "as_uuid",
+            postgresql.UUID(as_uuid=True),
+            uuid.uuid4(),
+        ),
+        id_="iaa",
+        argnames="datatype, value1",
+    )
+    def test_uuid_literal(self, datatype, value1, connection):
+        v1 = connection.execute(
+            select(
+                bindparam(
+                    "key",
+                    value=value1,
+                    literal_execute=True,
+                    type_=datatype,
+                )
+            ),
+        )
+        eq_(v1.fetchone()[0], value1)
+
+    def test_python_type(self):
+        eq_(postgresql.UUID(as_uuid=True).python_type, uuid.UUID)
+        eq_(postgresql.UUID(as_uuid=False).python_type, str)
 
 
 class HStoreTest(AssertsCompiledSQL, fixtures.TestBase):
@@ -3069,7 +3411,7 @@ class HStoreRoundTripTest(fixtures.TablesTest):
 
     @testing.fixture
     def non_native_hstore_connection(self, testing_engine):
-        local_engine = testing.requires.psycopg2_native_hstore.enabled
+        local_engine = testing.requires.native_hstore.enabled
 
         if local_engine:
             engine = testing_engine(options=dict(use_native_hstore=False))
@@ -3099,14 +3441,14 @@ class HStoreRoundTripTest(fixtures.TablesTest):
         )["1"]
         eq_(connection.scalar(select(expr)), "3")
 
-    @testing.requires.psycopg2_native_hstore
+    @testing.requires.native_hstore
     def test_insert_native(self, connection):
         self._test_insert(connection)
 
     def test_insert_python(self, non_native_hstore_connection):
         self._test_insert(non_native_hstore_connection)
 
-    @testing.requires.psycopg2_native_hstore
+    @testing.requires.native_hstore
     def test_criterion_native(self, connection):
         self._fixture_data(connection)
         self._test_criterion(connection)
@@ -3137,31 +3479,31 @@ class HStoreRoundTripTest(fixtures.TablesTest):
     def test_fixed_round_trip_python(self, non_native_hstore_connection):
         self._test_fixed_round_trip(non_native_hstore_connection)
 
-    @testing.requires.psycopg2_native_hstore
+    @testing.requires.native_hstore
     def test_fixed_round_trip_native(self, connection):
         self._test_fixed_round_trip(connection)
 
     def _test_unicode_round_trip(self, connection):
         s = select(
             hstore(
-                array([util.u("réveillé"), util.u("drôle"), util.u("S’il")]),
-                array([util.u("réveillé"), util.u("drôle"), util.u("S’il")]),
+                array(["réveillé", "drôle", "S’il"]),
+                array(["réveillé", "drôle", "S’il"]),
             )
         )
         eq_(
             connection.scalar(s),
             {
-                util.u("réveillé"): util.u("réveillé"),
-                util.u("drôle"): util.u("drôle"),
-                util.u("S’il"): util.u("S’il"),
+                "réveillé": "réveillé",
+                "drôle": "drôle",
+                "S’il": "S’il",
             },
         )
 
-    @testing.requires.psycopg2_native_hstore
+    @testing.requires.native_hstore
     def test_unicode_round_trip_python(self, non_native_hstore_connection):
         self._test_unicode_round_trip(non_native_hstore_connection)
 
-    @testing.requires.psycopg2_native_hstore
+    @testing.requires.native_hstore
     def test_unicode_round_trip_native(self, connection):
         self._test_unicode_round_trip(connection)
 
@@ -3170,7 +3512,7 @@ class HStoreRoundTripTest(fixtures.TablesTest):
     ):
         self._test_escaped_quotes_round_trip(non_native_hstore_connection)
 
-    @testing.requires.psycopg2_native_hstore
+    @testing.requires.native_hstore
     def test_escaped_quotes_round_trip_native(self, connection):
         self._test_escaped_quotes_round_trip(connection)
 
@@ -3182,7 +3524,7 @@ class HStoreRoundTripTest(fixtures.TablesTest):
         self._assert_data([{r"key \"foo\"": r'value \"bar"\ xyz'}], connection)
 
     def test_orm_round_trip(self, registry):
-        class Data(object):
+        class Data:
             def __init__(self, name, data):
                 self.name = name
                 self.data = data
@@ -3359,7 +3701,7 @@ class _RangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
 
 
 class _RangeTypeRoundTrip(fixtures.TablesTest):
-    __requires__ = "range_types", "psycopg2_compatibility"
+    __requires__ = "range_types", "psycopg_compatibility"
     __backend__ = True
 
     def extras(self):
@@ -3367,8 +3709,18 @@ class _RangeTypeRoundTrip(fixtures.TablesTest):
         # older psycopg2 versions.
         if testing.against("postgresql+psycopg2cffi"):
             from psycopg2cffi import extras
-        else:
+        elif testing.against("postgresql+psycopg2"):
             from psycopg2 import extras
+        elif testing.against("postgresql+psycopg"):
+            from psycopg.types.range import Range
+
+            class psycopg_extras:
+                def __getattr__(self, _):
+                    return Range
+
+            extras = psycopg_extras()
+        else:
+            assert False, "Unknown dialect"
         return extras
 
     @classmethod
@@ -3439,7 +3791,7 @@ class _RangeTypeRoundTrip(fixtures.TablesTest):
         eq_(data, [(self._data_obj().__class__(empty=True),)])
 
 
-class _Int4RangeTests(object):
+class _Int4RangeTests:
 
     _col_type = INT4RANGE
     _col_str = "INT4RANGE"
@@ -3451,7 +3803,7 @@ class _Int4RangeTests(object):
         return self.extras().NumericRange(1, 2)
 
 
-class _Int8RangeTests(object):
+class _Int8RangeTests:
 
     _col_type = INT8RANGE
     _col_str = "INT8RANGE"
@@ -3465,7 +3817,7 @@ class _Int8RangeTests(object):
         )
 
 
-class _NumRangeTests(object):
+class _NumRangeTests:
 
     _col_type = NUMRANGE
     _col_str = "NUMRANGE"
@@ -3479,7 +3831,7 @@ class _NumRangeTests(object):
         )
 
 
-class _DateRangeTests(object):
+class _DateRangeTests:
 
     _col_type = DATERANGE
     _col_str = "DATERANGE"
@@ -3493,7 +3845,7 @@ class _DateRangeTests(object):
         )
 
 
-class _DateTimeRangeTests(object):
+class _DateTimeRangeTests:
 
     _col_type = TSRANGE
     _col_str = "TSRANGE"
@@ -3508,7 +3860,7 @@ class _DateTimeRangeTests(object):
         )
 
 
-class _DateTimeTZRangeTests(object):
+class _DateTimeTZRangeTests:
 
     _col_type = TSTZRANGE
     _col_str = "TSTZRANGE"
@@ -3717,6 +4069,33 @@ class JSONRoundTripTest(fixtures.TablesTest):
         ).fetchall()
         eq_([d for d, in data], [None])
 
+    @testing.combinations(
+        "key",
+        "réve🐍 illé",
+        'name_with"quotes"name',
+        "name with spaces",
+        "name with ' single ' quotes",
+        'some_key("idx")',
+        argnames="key",
+    )
+    def test_indexed_special_keys(self, connection, key):
+        data_table = self.tables.data_table
+        data_element = {key: "some value"}
+
+        connection.execute(
+            data_table.insert(),
+            {
+                "name": "row1",
+                "data": data_element,
+                "nulldata": data_element,
+            },
+        )
+
+        row = connection.execute(
+            select(data_table.c.data[key], data_table.c.nulldata[key])
+        ).one()
+        eq_(row, ("some value", "some value"))
+
     def test_reflect(self, connection):
         insp = inspect(connection)
         cols = insp.get_columns("data_table")
@@ -3819,10 +4198,7 @@ class JSONRoundTripTest(fixtures.TablesTest):
         result = connection.execute(
             select(data_table.c.data["k1"].astext)
         ).first()
-        if connection.dialect.returns_unicode_strings:
-            assert isinstance(result[0], util.text_type)
-        else:
-            assert isinstance(result[0], util.string_types)
+        assert isinstance(result[0], str)
 
     def test_query_returned_as_int(self, connection):
         self._fixture_data(connection)
@@ -3850,8 +4226,8 @@ class JSONRoundTripTest(fixtures.TablesTest):
         s = select(
             cast(
                 {
-                    util.u("réveillé"): util.u("réveillé"),
-                    "data": {"k1": util.u("drôle")},
+                    "réveillé": "réveillé",
+                    "data": {"k1": "drôle"},
                 },
                 self.data_type,
             )
@@ -3859,8 +4235,8 @@ class JSONRoundTripTest(fixtures.TablesTest):
         eq_(
             connection.scalar(s),
             {
-                util.u("réveillé"): util.u("réveillé"),
-                "data": {"k1": util.u("drôle")},
+                "réveillé": "réveillé",
+                "data": {"k1": "drôle"},
             },
         )
 

@@ -3,15 +3,15 @@ from sqlalchemy import event
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
-from sqlalchemy import util
 from sqlalchemy.orm import attributes
 from sqlalchemy.orm import class_mapper
 from sqlalchemy.orm import clear_mappers
 from sqlalchemy.orm import instrumentation
 from sqlalchemy.orm import relationship
 from sqlalchemy.testing import assert_raises
-from sqlalchemy.testing import assert_raises_message
+from sqlalchemy.testing import assert_warns_message
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import ne_
 from sqlalchemy.testing.fixtures import fixture_session
@@ -44,7 +44,7 @@ class InitTest(fixtures.ORMTest):
     def test_ai(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -54,7 +54,7 @@ class InitTest(fixtures.ORMTest):
     def test_A(self):
         inits = []
 
-        class A(object):
+        class A:
             pass
 
         self.register(A, inits)
@@ -65,7 +65,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -77,7 +77,7 @@ class InitTest(fixtures.ORMTest):
     def test_ai_B(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -97,7 +97,7 @@ class InitTest(fixtures.ORMTest):
     def test_ai_Bi(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -119,7 +119,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_bi(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -141,7 +141,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_Bi(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -165,7 +165,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_B(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -187,7 +187,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_Bi_Ci(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -230,7 +230,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_bi_Ci(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -271,7 +271,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_b_Ci(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -302,7 +302,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_B_Ci(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -335,7 +335,7 @@ class InitTest(fixtures.ORMTest):
     def test_Ai_B_C(self):
         inits = []
 
-        class A(object):
+        class A:
             def __init__(self):
                 inits.append((A, "__init__"))
 
@@ -366,7 +366,7 @@ class InitTest(fixtures.ORMTest):
     def test_A_Bi_C(self):
         inits = []
 
-        class A(object):
+        class A:
             pass
 
         self.register(A, inits)
@@ -397,7 +397,7 @@ class InitTest(fixtures.ORMTest):
     def test_A_B_Ci(self):
         inits = []
 
-        class A(object):
+        class A:
             pass
 
         self.register(A, inits)
@@ -428,7 +428,7 @@ class InitTest(fixtures.ORMTest):
     def test_A_B_C(self):
         inits = []
 
-        class A(object):
+        class A:
             pass
 
         self.register(A, inits)
@@ -456,7 +456,7 @@ class InitTest(fixtures.ORMTest):
         eq_(inits, [(C, "init", C)])
 
     def test_defaulted_init(self):
-        class X(object):
+        class X:
             def __init__(self_, a, b=123, c="abc"):
                 self_.a = a
                 self_.b = b
@@ -469,10 +469,10 @@ class InitTest(fixtures.ORMTest):
         eq_(o.b, 123)
         eq_(o.c, "abc")
 
-        class Y(object):
+        class Y:
             unique = object()
 
-            class OutOfScopeForEval(object):
+            class OutOfScopeForEval:
                 def __repr__(self_):
                     # misleading repr
                     return "123"
@@ -502,7 +502,7 @@ class MapperInitTest(fixtures.MappedTest):
         )
 
     def test_partially_mapped_inheritance(self):
-        class A(object):
+        class A:
             pass
 
         class B(A):
@@ -521,11 +521,11 @@ class MapperInitTest(fixtures.MappedTest):
         assert_raises(sa.orm.exc.UnmappedClassError, class_mapper, C)
 
     def test_del_warning(self):
-        class A(object):
+        class A:
             def __del__(self):
                 pass
 
-        assert_raises_message(
+        assert_warns_message(
             sa.exc.SAWarning,
             r"__del__\(\) method on class "
             r"<class '.*\.A'> will cause "
@@ -546,7 +546,7 @@ class OnLoadTest(fixtures.ORMTest):
 
         global A
 
-        class A(object):
+        class A:
             pass
 
         def canary(instance):
@@ -566,7 +566,7 @@ class OnLoadTest(fixtures.ORMTest):
 
 class NativeInstrumentationTest(fixtures.MappedTest):
     def test_register_reserved_attribute(self):
-        class T(object):
+        class T:
             pass
 
         instrumentation.register_class(T)
@@ -593,7 +593,7 @@ class NativeInstrumentationTest(fixtures.MappedTest):
             Column(instrumentation.ClassManager.STATE_ATTR, Integer),
         )
 
-        class T(object):
+        class T:
             pass
 
         assert_raises(KeyError, self.mapper_registry.map_imperatively, T, t)
@@ -606,15 +606,13 @@ class NativeInstrumentationTest(fixtures.MappedTest):
             Column(instrumentation.ClassManager.MANAGER_ATTR, Integer),
         )
 
-        class T(object):
+        class T:
             pass
 
         assert_raises(KeyError, self.mapper_registry.map_imperatively, T, t)
 
 
 class Py3KFunctionInstTest(fixtures.ORMTest):
-    __requires__ = ("python3",)
-
     def _instrument(self, cls):
         manager = instrumentation.register_class(cls)
         canary = []
@@ -657,39 +655,32 @@ class Py3KFunctionInstTest(fixtures.ORMTest):
 
         assert_raises(TypeError, cls, "a", "b", c="c")
 
+    def _kw_only_fixture(self):
+        class A(object):
+            def __init__(self, a, *, b, c):
+                self.a = a
+                self.b = b
+                self.c = c
 
-if util.py3k:
-    _locals = {}
-    exec(
-        """
-def _kw_only_fixture(self):
-    class A(object):
-        def __init__(self, a, *, b, c):
-            self.a = a
-            self.b = b
-            self.c = c
-    return self._instrument(A)
+        return self._instrument(A)
 
-def _kw_plus_posn_fixture(self):
-    class A(object):
-        def __init__(self, a, *args, b, c):
-            self.a = a
-            self.b = b
-            self.c = c
-    return self._instrument(A)
+    def _kw_plus_posn_fixture(self):
+        class A(object):
+            def __init__(self, a, *args, b, c):
+                self.a = a
+                self.b = b
+                self.c = c
 
-def _kw_opt_fixture(self):
-    class A(object):
-        def __init__(self, a, *, b, c="c"):
-            self.a = a
-            self.b = b
-            self.c = c
-    return self._instrument(A)
-""",
-        _locals,
-    )
-    for k in _locals:
-        setattr(Py3KFunctionInstTest, k, _locals[k])
+        return self._instrument(A)
+
+    def _kw_opt_fixture(self):
+        class A(object):
+            def __init__(self, a, *, b, c="c"):
+                self.a = a
+                self.b = b
+                self.c = c
+
+        return self._instrument(A)
 
 
 class MiscTest(fixtures.MappedTest):
@@ -703,7 +694,7 @@ class MiscTest(fixtures.MappedTest):
             Column("x", Integer),
         )
 
-        class A(object):
+        class A:
             pass
 
         self.mapper_registry.map_imperatively(A, t)
@@ -726,10 +717,10 @@ class MiscTest(fixtures.MappedTest):
             Column("t1_id", Integer, ForeignKey("t1.id")),
         )
 
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
         self.mapper_registry.map_imperatively(
@@ -741,16 +732,29 @@ class MiscTest(fixtures.MappedTest):
         assert not a.bs
 
     def test_uninstrument(self):
-        class A(object):
+        class A:
             pass
 
         manager = instrumentation.register_class(A)
-        attributes.register_attribute(A, "x", uselist=False, useobject=False)
+        attributes.register_attribute(
+            A,
+            "x",
+            comparator=object(),
+            parententity=object(),
+            uselist=False,
+            useobject=False,
+        )
 
         assert instrumentation.manager_of_class(A) is manager
         instrumentation.unregister_class(A)
-        assert instrumentation.manager_of_class(A) is None
+        assert instrumentation.opt_manager_of_class(A) is None
         assert not hasattr(A, "x")
+
+        with expect_raises_message(
+            sa.orm.exc.UnmappedClassError,
+            r"Can't locate an instrumentation manager for class .*A",
+        ):
+            instrumentation.manager_of_class(A)
 
         assert A.__init__ == object.__init__
 
@@ -769,7 +773,7 @@ class MiscTest(fixtures.MappedTest):
             Column("t1_id", Integer, ForeignKey("t1.id")),
         )
 
-        class Base(object):
+        class Base:
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -812,11 +816,11 @@ class MiscTest(fixtures.MappedTest):
             Column("t1_id", Integer, ForeignKey("t1.id")),
         )
 
-        class Base(object):
+        class Base:
             def __init__(self):
                 pass
 
-        class Base_AKW(object):
+        class Base_AKW:
             def __init__(self, *args, **kwargs):
                 pass
 

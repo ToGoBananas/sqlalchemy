@@ -1,9 +1,11 @@
 # sqlite/base.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
+
 
 r"""
 .. dialect:: sqlite
@@ -218,6 +220,46 @@ by *not even emitting BEGIN* until the first write operation.
 .. seealso::
 
     :ref:`dbapi_autocommit`
+
+INSERT/UPDATE/DELETE...RETURNING
+---------------------------------
+
+The SQLite dialect supports SQLite 3.35's  ``INSERT|UPDATE|DELETE..RETURNING``
+syntax.   ``INSERT..RETURNING`` may be used
+automatically in some cases in order to fetch newly generated identifiers in
+place of the traditional approach of using ``cursor.lastrowid``, however
+``cursor.lastrowid`` is currently still preferred for simple single-statement
+cases for its better performance.
+
+To specify an explicit ``RETURNING`` clause, use the
+:meth:`._UpdateBase.returning` method on a per-statement basis::
+
+    # INSERT..RETURNING
+    result = connection.execute(
+        table.insert().
+        values(name='foo').
+        returning(table.c.col1, table.c.col2)
+    )
+    print(result.all())
+
+    # UPDATE..RETURNING
+    result = connection.execute(
+        table.update().
+        where(table.c.name=='foo').
+        values(name='bar').
+        returning(table.c.col1, table.c.col2)
+    )
+    print(result.all())
+
+    # DELETE..RETURNING
+    result = connection.execute(
+        table.delete().
+        where(table.c.name=='foo').
+        returning(table.c.col1, table.c.col2)
+    )
+    print(result.all())
+
+.. versionadded:: 2.0  Added support for SQLite RETURNING
 
 SAVEPOINT Support
 ----------------------------
@@ -818,13 +860,14 @@ from .json import JSON
 from .json import JSONIndexType
 from .json import JSONPathType
 from ... import exc
-from ... import processors
 from ... import schema as sa_schema
 from ... import sql
 from ... import types as sqltypes
 from ... import util
 from ...engine import default
+from ...engine import processors
 from ...engine import reflection
+from ...engine.reflection import ReflectionDefaults
 from ...sql import coercions
 from ...sql import ColumnElement
 from ...sql import compiler
@@ -863,7 +906,7 @@ class _SQliteJson(JSON):
         return process
 
 
-class _DateTimeMixin(object):
+class _DateTimeMixin:
     _reg = None
     _storage_format = None
 
@@ -926,6 +969,12 @@ class DATETIME(_DateTimeMixin, sqltypes.DateTime):
 
         2021-03-15 12:05:57.105542
 
+    The incoming storage format is by default parsed using the
+    Python ``datetime.fromisoformat()`` function.
+
+    .. versionchanged:: 2.0  ``datetime.fromisoformat()`` is used for default
+       datetime string parsing.
+
     The storage format can be customized to some degree using the
     ``storage_format`` and ``regexp`` parameters, such as::
 
@@ -941,7 +990,8 @@ class DATETIME(_DateTimeMixin, sqltypes.DateTime):
      with keys year, month, day, hour, minute, second, and microsecond.
 
     :param regexp: regular expression which will be applied to incoming result
-     rows. If the regexp contains named groups, the resulting match dict is
+     rows, replacing the use of ``datetime.fromisoformat()`` to parse incoming
+     strings. If the regexp contains named groups, the resulting match dict is
      applied to the Python datetime() constructor as keyword arguments.
      Otherwise, if positional groups are used, the datetime() constructor
      is called with positional arguments via
@@ -1027,6 +1077,13 @@ class DATE(_DateTimeMixin, sqltypes.Date):
 
         2011-03-15
 
+    The incoming storage format is by default parsed using the
+    Python ``date.fromisoformat()`` function.
+
+    .. versionchanged:: 2.0  ``date.fromisoformat()`` is used for default
+       date string parsing.
+
+
     The storage format can be customized to some degree using the
     ``storage_format`` and ``regexp`` parameters, such as::
 
@@ -1042,11 +1099,13 @@ class DATE(_DateTimeMixin, sqltypes.Date):
      dict with keys year, month, and day.
 
     :param regexp: regular expression which will be applied to
-     incoming result rows. If the regexp contains named groups, the
-     resulting match dict is applied to the Python date() constructor
-     as keyword arguments. Otherwise, if positional groups are used, the
-     date() constructor is called with positional arguments via
+     incoming result rows, replacing the use of ``date.fromisoformat()`` to
+     parse incoming strings. If the regexp contains named groups, the resulting
+     match dict is applied to the Python date() constructor as keyword
+     arguments. Otherwise, if positional groups are used, the date()
+     constructor is called with positional arguments via
      ``*map(int, match_obj.groups(0))``.
+
     """
 
     _storage_format = "%(year)04d-%(month)02d-%(day)02d"
@@ -1092,6 +1151,12 @@ class TIME(_DateTimeMixin, sqltypes.Time):
 
         12:05:57.10558
 
+    The incoming storage format is by default parsed using the
+    Python ``time.fromisoformat()`` function.
+
+    .. versionchanged:: 2.0  ``time.fromisoformat()`` is used for default
+       time string parsing.
+
     The storage format can be customized to some degree using the
     ``storage_format`` and ``regexp`` parameters, such as::
 
@@ -1107,10 +1172,12 @@ class TIME(_DateTimeMixin, sqltypes.Time):
      with keys hour, minute, second, and microsecond.
 
     :param regexp: regular expression which will be applied to incoming result
-     rows. If the regexp contains named groups, the resulting match dict is
+     rows, replacing the use of ``datetime.fromisoformat()`` to parse incoming
+     strings. If the regexp contains named groups, the resulting match dict is
      applied to the Python time() constructor as keyword arguments. Otherwise,
      if positional groups are used, the time() constructor is called with
      positional arguments via ``*map(int, match_obj.groups(0))``.
+
     """
 
     _storage_format = "%(hour)02d:%(minute)02d:%(second)02d.%(microsecond)06d"
@@ -1179,7 +1246,7 @@ ischema_names = {
     "DATE_CHAR": sqltypes.DATE,
     "DATETIME": sqltypes.DATETIME,
     "DATETIME_CHAR": sqltypes.DATETIME,
-    "DOUBLE": sqltypes.FLOAT,
+    "DOUBLE": sqltypes.DOUBLE,
     "DECIMAL": sqltypes.DECIMAL,
     "FLOAT": sqltypes.FLOAT,
     "INT": sqltypes.INTEGER,
@@ -1215,6 +1282,13 @@ class SQLiteCompiler(compiler.SQLCompiler):
         },
     )
 
+    def visit_truediv_binary(self, binary, operator, **kw):
+        return (
+            self.process(binary.left, **kw)
+            + " / "
+            + "(%s + 0.0)" % self.process(binary.right, **kw)
+        )
+
     def visit_now_func(self, fn, **kw):
         return "CURRENT_TIMESTAMP"
 
@@ -1243,12 +1317,22 @@ class SQLiteCompiler(compiler.SQLCompiler):
                 self.process(extract.expr, **kw),
             )
         except KeyError as err:
-            util.raise_(
-                exc.CompileError(
-                    "%s is not a valid extract argument." % extract.field
-                ),
-                replace_context=err,
-            )
+            raise exc.CompileError(
+                "%s is not a valid extract argument." % extract.field
+            ) from err
+
+    def returning_clause(
+        self,
+        stmt,
+        returning_cols,
+        *,
+        populate_result_map,
+        **kw,
+    ):
+        kw["include_table"] = False
+        return super().returning_clause(
+            stmt, returning_cols, populate_result_map=populate_result_map, **kw
+        )
 
     def limit_clause(self, select, **kw):
         text = ""
@@ -1324,7 +1408,7 @@ class SQLiteCompiler(compiler.SQLCompiler):
             target_text = "(%s)" % ", ".join(
                 (
                     self.preparer.quote(c)
-                    if isinstance(c, util.string_types)
+                    if isinstance(c, str)
                     else self.process(c, include_table=False, use_schema=False)
                 )
                 for c in clause.inferred_target_elements
@@ -1341,6 +1425,11 @@ class SQLiteCompiler(compiler.SQLCompiler):
             target_text = ""
 
         return target_text
+
+    def visit_insert(self, insert_stmt, **kw):
+        if insert_stmt._post_values_clause is not None:
+            kw["disable_implicit_returning"] = True
+        return super().visit_insert(insert_stmt, **kw)
 
     def visit_on_conflict_do_nothing(self, on_conflict, **kw):
 
@@ -1385,7 +1474,7 @@ class SQLiteCompiler(compiler.SQLCompiler):
                     value.type = c.type
             value_text = self.process(value.self_group(), use_schema=False)
 
-            key_text = self.preparer.quote(col_key)
+            key_text = self.preparer.quote(c.name)
             action_set_ops.append("%s = %s" % (key_text, value_text))
 
         # check for names that don't match columns
@@ -1401,7 +1490,7 @@ class SQLiteCompiler(compiler.SQLCompiler):
             for k, v in set_parameters.items():
                 key_text = (
                     self.preparer.quote(k)
-                    if isinstance(k, util.string_types)
+                    if isinstance(k, str)
                     else self.process(k, use_schema=False)
                 )
                 value_text = self.process(
@@ -1422,7 +1511,7 @@ class SQLiteCompiler(compiler.SQLCompiler):
 class SQLiteDDLCompiler(compiler.DDLCompiler):
     def get_column_specification(self, column, **kwargs):
 
-        coltype = self.dialect.type_compiler.process(
+        coltype = self.dialect.type_compiler_instance.process(
             column.type, type_expression=column
         )
         colspec = self.preparer.format_column(column) + " " + coltype
@@ -1795,29 +1884,30 @@ class SQLiteExecutionContext(default.DefaultExecutionContext):
 class SQLiteDialect(default.DefaultDialect):
     name = "sqlite"
     supports_alter = False
-    supports_unicode_statements = True
-    supports_unicode_binds = True
 
     # SQlite supports "DEFAULT VALUES" but *does not* support
     # "VALUES (DEFAULT)"
     supports_default_values = True
     supports_default_metavalue = False
 
+    # https://github.com/python/cpython/issues/93421
+    supports_sane_rowcount_returning = False
+
     supports_empty_insert = False
     supports_cast = True
     supports_multivalues_insert = True
     tuple_in_values = True
     supports_statement_cache = True
+    insert_null_pk_still_autoincrements = True
 
     default_paramstyle = "qmark"
     execution_ctx_cls = SQLiteExecutionContext
     statement_compiler = SQLiteCompiler
     ddl_compiler = SQLiteDDLCompiler
-    type_compiler = SQLiteTypeCompiler
+    type_compiler_cls = SQLiteTypeCompiler
     preparer = SQLiteIdentifierPreparer
     ischema_names = ischema_names
     colspecs = colspecs
-    isolation_level = None
 
     construct_arguments = [
         (
@@ -1858,16 +1948,14 @@ class SQLiteDialect(default.DefaultDialect):
     )
     def __init__(
         self,
-        isolation_level=None,
         native_datetime=False,
         json_serializer=None,
         json_deserializer=None,
         _json_serializer=None,
         _json_deserializer=None,
-        **kwargs
+        **kwargs,
     ):
         default.DefaultDialect.__init__(self, **kwargs)
-        self.isolation_level = isolation_level
 
         if _json_serializer:
             json_serializer = _json_serializer
@@ -1892,6 +1980,8 @@ class SQLiteDialect(default.DefaultDialect):
                     % (self.dbapi.sqlite_version_info,)
                 )
 
+            # NOTE: python 3.7 on fedora for me has SQLite 3.34.1.  These
+            # version checks are getting very stale.
             self._broken_dotted_colnames = self.dbapi.sqlite_version_info < (
                 3,
                 10,
@@ -1916,32 +2006,27 @@ class SQLiteDialect(default.DefaultDialect):
                 14,
             )
 
+            if self.dbapi.sqlite_version_info >= (3, 35):
+                self.update_returning = (
+                    self.delete_returning
+                ) = self.insert_returning = True
+
     _isolation_lookup = util.immutabledict(
         {"READ UNCOMMITTED": 1, "SERIALIZABLE": 0}
     )
 
-    def set_isolation_level(self, connection, level):
-        try:
-            isolation_level = self._isolation_lookup[level.replace("_", " ")]
-        except KeyError as err:
-            util.raise_(
-                exc.ArgumentError(
-                    "Invalid value '%s' for isolation_level. "
-                    "Valid isolation levels for %s are %s"
-                    % (
-                        level,
-                        self.name,
-                        ", ".join(self._isolation_lookup),
-                    )
-                ),
-                replace_context=err,
-            )
-        cursor = connection.cursor()
-        cursor.execute("PRAGMA read_uncommitted = %d" % isolation_level)
+    def get_isolation_level_values(self, dbapi_connection):
+        return list(self._isolation_lookup)
+
+    def set_isolation_level(self, dbapi_connection, level):
+        isolation_level = self._isolation_lookup[level]
+
+        cursor = dbapi_connection.cursor()
+        cursor.execute(f"PRAGMA read_uncommitted = {isolation_level}")
         cursor.close()
 
-    def get_isolation_level(self, connection):
-        cursor = connection.cursor()
+    def get_isolation_level(self, dbapi_connection):
+        cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA read_uncommitted")
         res = cursor.fetchone()
         if res:
@@ -1962,16 +2047,6 @@ class SQLiteDialect(default.DefaultDialect):
         else:
             assert False, "Unknown isolation level %s" % value
 
-    def on_connect(self):
-        if self.isolation_level is not None:
-
-            def connect(conn):
-                self.set_isolation_level(conn, self.isolation_level)
-
-            return connect
-        else:
-            return None
-
     @reflection.cache
     def get_schema_names(self, connection, **kw):
         s = "PRAGMA database_list"
@@ -1979,28 +2054,27 @@ class SQLiteDialect(default.DefaultDialect):
 
         return [db[1] for db in dl if db[1] != "temp"]
 
-    @reflection.cache
-    def get_table_names(self, connection, schema=None, **kw):
+    def _format_schema(self, schema, table_name):
         if schema is not None:
             qschema = self.identifier_preparer.quote_identifier(schema)
-            master = "%s.sqlite_master" % qschema
+            name = f"{qschema}.{table_name}"
         else:
-            master = "sqlite_master"
-        s = ("SELECT name FROM %s " "WHERE type='table' ORDER BY name") % (
-            master,
-        )
-        rs = connection.exec_driver_sql(s)
-        return [row[0] for row in rs]
+            name = table_name
+        return name
+
+    @reflection.cache
+    def get_table_names(self, connection, schema=None, **kw):
+        main = self._format_schema(schema, "sqlite_master")
+        s = f"SELECT name FROM {main} WHERE type='table' ORDER BY name"
+        names = connection.exec_driver_sql(s).scalars().all()
+        return names
 
     @reflection.cache
     def get_temp_table_names(self, connection, **kw):
-        s = (
-            "SELECT name FROM sqlite_temp_master "
-            "WHERE type='table' ORDER BY name "
-        )
-        rs = connection.exec_driver_sql(s)
-
-        return [row[0] for row in rs]
+        main = "sqlite_temp_master"
+        s = f"SELECT name FROM {main} WHERE type='table' ORDER BY name"
+        names = connection.exec_driver_sql(s).scalars().all()
+        return names
 
     @reflection.cache
     def get_temp_view_names(self, connection, **kw):
@@ -2008,11 +2082,11 @@ class SQLiteDialect(default.DefaultDialect):
             "SELECT name FROM sqlite_temp_master "
             "WHERE type='view' ORDER BY name "
         )
-        rs = connection.exec_driver_sql(s)
+        names = connection.exec_driver_sql(s).scalars().all()
+        return names
 
-        return [row[0] for row in rs]
-
-    def has_table(self, connection, table_name, schema=None):
+    @reflection.cache
+    def has_table(self, connection, table_name, schema=None, **kw):
         self._ensure_has_table_connection(connection)
 
         info = self._get_table_pragma(
@@ -2025,23 +2099,16 @@ class SQLiteDialect(default.DefaultDialect):
 
     @reflection.cache
     def get_view_names(self, connection, schema=None, **kw):
-        if schema is not None:
-            qschema = self.identifier_preparer.quote_identifier(schema)
-            master = "%s.sqlite_master" % qschema
-        else:
-            master = "sqlite_master"
-        s = ("SELECT name FROM %s " "WHERE type='view' ORDER BY name") % (
-            master,
-        )
-        rs = connection.exec_driver_sql(s)
-
-        return [row[0] for row in rs]
+        main = self._format_schema(schema, "sqlite_master")
+        s = f"SELECT name FROM {main} WHERE type='view' ORDER BY name"
+        names = connection.exec_driver_sql(s).scalars().all()
+        return names
 
     @reflection.cache
     def get_view_definition(self, connection, view_name, schema=None, **kw):
         if schema is not None:
             qschema = self.identifier_preparer.quote_identifier(schema)
-            master = "%s.sqlite_master" % qschema
+            master = f"{qschema}.sqlite_master"
             s = ("SELECT sql FROM %s WHERE name = ? AND type='view'") % (
                 master,
             )
@@ -2066,6 +2133,10 @@ class SQLiteDialect(default.DefaultDialect):
         result = rs.fetchall()
         if result:
             return result[0].sql
+        else:
+            raise exc.NoSuchTableError(
+                f"{schema}.{view_name}" if schema else view_name
+            )
 
     @reflection.cache
     def get_columns(self, connection, table_name, schema=None, **kw):
@@ -2112,7 +2183,14 @@ class SQLiteDialect(default.DefaultDialect):
                     tablesql,
                 )
             )
-        return columns
+        if columns:
+            return columns
+        elif not self.has_table(connection, table_name, schema):
+            raise exc.NoSuchTableError(
+                f"{schema}.{table_name}" if schema else table_name
+            )
+        else:
+            return ReflectionDefaults.columns()
 
     def _get_column_info(
         self,
@@ -2135,14 +2213,13 @@ class SQLiteDialect(default.DefaultDialect):
         coltype = self._resolve_type_affinity(type_)
 
         if default is not None:
-            default = util.text_type(default)
+            default = str(default)
 
         colspec = {
             "name": name,
             "type": coltype,
             "nullable": nullable,
             "default": default,
-            "autoincrement": "auto",
             "primary_key": primary_key,
         }
         if generated:
@@ -2221,13 +2298,16 @@ class SQLiteDialect(default.DefaultDialect):
             constraint_name = result.group(1) if result else None
 
         cols = self.get_columns(connection, table_name, schema, **kw)
+        # consider only pk columns. This also avoids sorting the cached
+        # value returned by get_columns
+        cols = [col for col in cols if col.get("primary_key", 0) > 0]
         cols.sort(key=lambda col: col.get("primary_key"))
-        pkeys = []
-        for col in cols:
-            if col["primary_key"]:
-                pkeys.append(col["name"])
+        pkeys = [col["name"] for col in cols]
 
-        return {"constrained_columns": pkeys, "name": constraint_name}
+        if pkeys:
+            return {"constrained_columns": pkeys, "name": constraint_name}
+        else:
+            return ReflectionDefaults.pk_constraint()
 
     @reflection.cache
     def get_foreign_keys(self, connection, table_name, schema=None, **kw):
@@ -2247,12 +2327,14 @@ class SQLiteDialect(default.DefaultDialect):
                 # original DDL.  The referred columns of the foreign key
                 # constraint are therefore the primary key of the referred
                 # table.
-                referred_pk = self.get_pk_constraint(
-                    connection, rtbl, schema=schema, **kw
-                )
-                # note that if table doesn't exist, we still get back a record,
-                # just it has no columns in it
-                referred_columns = referred_pk["constrained_columns"]
+                try:
+                    referred_pk = self.get_pk_constraint(
+                        connection, rtbl, schema=schema, **kw
+                    )
+                    referred_columns = referred_pk["constrained_columns"]
+                except exc.NoSuchTableError:
+                    # ignore not existing parents
+                    referred_columns = []
             else:
                 # note we use this list only if this is the first column
                 # in the constraint.  for subsequent columns we ignore the
@@ -2304,11 +2386,11 @@ class SQLiteDialect(default.DefaultDialect):
         )
 
         table_data = self._get_table_sql(connection, table_name, schema=schema)
-        if table_data is None:
-            # system tables, etc.
-            return []
 
         def parse_fks():
+            if table_data is None:
+                # system tables, etc.
+                return
             FK_PATTERN = (
                 r"(?:CONSTRAINT (\w+) +)?"
                 r"FOREIGN KEY *\( *(.+?) *\) +"
@@ -2379,7 +2461,10 @@ class SQLiteDialect(default.DefaultDialect):
         # use them as is as it's extremely difficult to parse inline
         # constraints
         fkeys.extend(keys_by_signature.values())
-        return fkeys
+        if fkeys:
+            return fkeys
+        else:
+            return ReflectionDefaults.foreign_keys()
 
     def _find_cols_in_sig(self, sig):
         for match in re.finditer(r'(?:"(.+?)")|([a-z0-9_]+)', sig, re.I):
@@ -2396,7 +2481,7 @@ class SQLiteDialect(default.DefaultDialect):
             table_name,
             schema=schema,
             include_auto_indexes=True,
-            **kw
+            **kw,
         ):
             if not idx["name"].startswith("sqlite_autoindex"):
                 continue
@@ -2406,15 +2491,15 @@ class SQLiteDialect(default.DefaultDialect):
         table_data = self._get_table_sql(
             connection, table_name, schema=schema, **kw
         )
-        if not table_data:
-            return []
-
         unique_constraints = []
 
         def parse_uqs():
+            if table_data is None:
+                return
             UNIQUE_PATTERN = r'(?:CONSTRAINT "?(.+?)"? +)?UNIQUE *\((.+?)\)'
             INLINE_UNIQUE_PATTERN = (
-                r'(?:(".+?")|([a-z0-9]+)) ' r"+[a-z0-9_ ]+? +UNIQUE"
+                r'(?:(".+?")|(?:[\[`])?([a-z0-9_]+)(?:[\]`])?) '
+                r"+[a-z0-9_ ]+? +UNIQUE"
             )
 
             for match in re.finditer(UNIQUE_PATTERN, table_data, re.I):
@@ -2438,29 +2523,37 @@ class SQLiteDialect(default.DefaultDialect):
                 unique_constraints.append(parsed_constraint)
         # NOTE: auto_index_by_sig might not be empty here,
         # the PRIMARY KEY may have an entry.
-        return unique_constraints
+        if unique_constraints:
+            return unique_constraints
+        else:
+            return ReflectionDefaults.unique_constraints()
 
     @reflection.cache
     def get_check_constraints(self, connection, table_name, schema=None, **kw):
         table_data = self._get_table_sql(
             connection, table_name, schema=schema, **kw
         )
-        if not table_data:
-            return []
 
-        CHECK_PATTERN = r"(?:CONSTRAINT (\w+) +)?" r"CHECK *\( *(.+) *\),? *"
-        check_constraints = []
+        CHECK_PATTERN = r"(?:CONSTRAINT (.+) +)?" r"CHECK *\( *(.+) *\),? *"
+        cks = []
         # NOTE: we aren't using re.S here because we actually are
         # taking advantage of each CHECK constraint being all on one
         # line in the table definition in order to delineate.  This
         # necessarily makes assumptions as to how the CREATE TABLE
         # was emitted.
-        for match in re.finditer(CHECK_PATTERN, table_data, re.I):
-            check_constraints.append(
-                {"sqltext": match.group(2), "name": match.group(1)}
-            )
 
-        return check_constraints
+        for match in re.finditer(CHECK_PATTERN, table_data or "", re.I):
+            name = match.group(1)
+
+            if name:
+                name = re.sub(r'^"|"$', "", name)
+
+            cks.append({"sqltext": match.group(2), "name": name})
+        cks.sort(key=lambda d: d["name"] or "~")  # sort None as last
+        if cks:
+            return cks
+        else:
+            return ReflectionDefaults.check_constraints()
 
     @reflection.cache
     def get_indexes(self, connection, table_name, schema=None, **kw):
@@ -2482,7 +2575,7 @@ class SQLiteDialect(default.DefaultDialect):
         # loop thru unique indexes to get the column names.
         for idx in list(indexes):
             pragma_index = self._get_table_pragma(
-                connection, "index_info", idx["name"]
+                connection, "index_info", idx["name"], schema=schema
             )
 
             for row in pragma_index:
@@ -2495,7 +2588,23 @@ class SQLiteDialect(default.DefaultDialect):
                     break
                 else:
                     idx["column_names"].append(row[2])
-        return indexes
+        indexes.sort(key=lambda d: d["name"] or "~")  # sort None as last
+        if indexes:
+            return indexes
+        elif not self.has_table(connection, table_name, schema):
+            raise exc.NoSuchTableError(
+                f"{schema}.{table_name}" if schema else table_name
+            )
+        else:
+            return ReflectionDefaults.indexes()
+
+    def _is_sys_table(self, table_name):
+        return table_name in {
+            "sqlite_schema",
+            "sqlite_master",
+            "sqlite_temp_schema",
+            "sqlite_temp_master",
+        }
 
     @reflection.cache
     def _get_table_sql(self, connection, table_name, schema=None, **kw):
@@ -2511,22 +2620,25 @@ class SQLiteDialect(default.DefaultDialect):
                 " (SELECT * FROM %(schema)ssqlite_master UNION ALL "
                 "  SELECT * FROM %(schema)ssqlite_temp_master) "
                 "WHERE name = ? "
-                "AND type = 'table'" % {"schema": schema_expr}
+                "AND type in ('table', 'view')" % {"schema": schema_expr}
             )
             rs = connection.exec_driver_sql(s, (table_name,))
         except exc.DBAPIError:
             s = (
                 "SELECT sql FROM %(schema)ssqlite_master "
                 "WHERE name = ? "
-                "AND type = 'table'" % {"schema": schema_expr}
+                "AND type in ('table', 'view')" % {"schema": schema_expr}
             )
             rs = connection.exec_driver_sql(s, (table_name,))
-        return rs.scalar()
+        value = rs.scalar()
+        if value is None and not self._is_sys_table(table_name):
+            raise exc.NoSuchTableError(f"{schema_expr}{table_name}")
+        return value
 
     def _get_table_pragma(self, connection, pragma, table_name, schema=None):
         quote = self.identifier_preparer.quote_identifier
         if schema is not None:
-            statements = ["PRAGMA %s." % quote(schema)]
+            statements = [f"PRAGMA {quote(schema)}."]
         else:
             # because PRAGMA looks in all attached databases if no schema
             # given, need to specify "main" schema, however since we want
@@ -2536,7 +2648,7 @@ class SQLiteDialect(default.DefaultDialect):
 
         qtable = quote(table_name)
         for statement in statements:
-            statement = "%s%s(%s)" % (statement, pragma, qtable)
+            statement = f"{statement}{pragma}({qtable})"
             cursor = connection.exec_driver_sql(statement)
             if not cursor._soft_closed:
                 # work around SQLite issue whereby cursor.description

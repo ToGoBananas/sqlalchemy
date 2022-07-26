@@ -1,9 +1,11 @@
 # orm/dynamic.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
+
 
 """Dynamic collection API.
 
@@ -12,24 +14,42 @@ basic add/delete mutation.
 
 """
 
+from __future__ import annotations
+
+from typing import Any
+from typing import Optional
+from typing import overload
+from typing import TYPE_CHECKING
+from typing import Union
+
 from . import attributes
 from . import exc as orm_exc
 from . import interfaces
-from . import object_mapper
-from . import object_session
 from . import relationships
 from . import strategies
 from . import util as orm_util
+from .base import object_mapper
+from .base import PassiveFlag
 from .query import Query
+from .session import object_session
 from .. import exc
 from .. import log
 from .. import util
 from ..engine import result
+from ..util.typing import Literal
+
+if TYPE_CHECKING:
+    from ._typing import _InstanceDict
+    from .attributes import _AdaptedCollectionProtocol
+    from .attributes import AttributeEventToken
+    from .attributes import CollectionAdapter
+    from .base import LoaderCallableStatus
+    from .state import InstanceState
 
 
 @log.class_logger
-@relationships.RelationshipProperty.strategy_for(lazy="dynamic")
-class DynaLoader(strategies.AbstractRelationshipLoader):
+@relationships.Relationship.strategy_for(lazy="dynamic")
+class DynaLoader(strategies.AbstractRelationshipLoader, log.Identified):
     def init_class_attribute(self, mapper):
         self.is_class_level = True
         if not self.uselist:
@@ -60,7 +80,9 @@ class DynaLoader(strategies.AbstractRelationshipLoader):
         )
 
 
-class DynamicAttributeImpl(attributes.AttributeImpl):
+class DynamicAttributeImpl(
+    attributes.HasCollectionAdapter, attributes.AttributeImpl
+):
     uses_objects = True
     default_accepts_scalar_loader = False
     supports_population = False
@@ -77,7 +99,7 @@ class DynamicAttributeImpl(attributes.AttributeImpl):
         target_mapper,
         order_by,
         query_class=None,
-        **kw
+        **kw,
     ):
         super(DynamicAttributeImpl, self).__init__(
             class_, key, typecallable, dispatch, **kw
@@ -100,13 +122,47 @@ class DynamicAttributeImpl(attributes.AttributeImpl):
         else:
             return self.query_class(self, state)
 
+    @overload
     def get_collection(
         self,
-        state,
-        dict_,
-        user_data=None,
-        passive=attributes.PASSIVE_NO_INITIALIZE,
-    ):
+        state: InstanceState[Any],
+        dict_: _InstanceDict,
+        user_data: Literal[None] = ...,
+        passive: Literal[PassiveFlag.PASSIVE_OFF] = ...,
+    ) -> CollectionAdapter:
+        ...
+
+    @overload
+    def get_collection(
+        self,
+        state: InstanceState[Any],
+        dict_: _InstanceDict,
+        user_data: _AdaptedCollectionProtocol = ...,
+        passive: PassiveFlag = ...,
+    ) -> CollectionAdapter:
+        ...
+
+    @overload
+    def get_collection(
+        self,
+        state: InstanceState[Any],
+        dict_: _InstanceDict,
+        user_data: Optional[_AdaptedCollectionProtocol] = ...,
+        passive: PassiveFlag = ...,
+    ) -> Union[
+        Literal[LoaderCallableStatus.PASSIVE_NO_RESULT], CollectionAdapter
+    ]:
+        ...
+
+    def get_collection(
+        self,
+        state: InstanceState[Any],
+        dict_: _InstanceDict,
+        user_data: Optional[_AdaptedCollectionProtocol] = None,
+        passive: PassiveFlag = PassiveFlag.PASSIVE_OFF,
+    ) -> Union[
+        Literal[LoaderCallableStatus.PASSIVE_NO_RESULT], CollectionAdapter
+    ]:
         if not passive & attributes.SQL_OK:
             data = self._get_collection_history(state, passive).added_items
         else:
@@ -116,11 +172,11 @@ class DynamicAttributeImpl(attributes.AttributeImpl):
 
     @util.memoized_property
     def _append_token(self):
-        return attributes.Event(self, attributes.OP_APPEND)
+        return attributes.AttributeEventToken(self, attributes.OP_APPEND)
 
     @util.memoized_property
     def _remove_token(self):
-        return attributes.Event(self, attributes.OP_REMOVE)
+        return attributes.AttributeEventToken(self, attributes.OP_REMOVE)
 
     def fire_append_event(
         self, state, dict_, value, initiator, collection_history=None
@@ -164,15 +220,15 @@ class DynamicAttributeImpl(attributes.AttributeImpl):
 
     def set(
         self,
-        state,
-        dict_,
-        value,
-        initiator=None,
-        passive=attributes.PASSIVE_OFF,
-        check_old=None,
-        pop=False,
-        _adapt=True,
-    ):
+        state: InstanceState[Any],
+        dict_: _InstanceDict,
+        value: Any,
+        initiator: Optional[AttributeEventToken] = None,
+        passive: PassiveFlag = PassiveFlag.PASSIVE_OFF,
+        check_old: Any = None,
+        pop: bool = False,
+        _adapt: bool = True,
+    ) -> None:
         if initiator and initiator.parent_token is self.parent_token:
             return
 
@@ -263,7 +319,7 @@ class DynamicAttributeImpl(attributes.AttributeImpl):
         self.remove(state, dict_, value, initiator, passive=passive)
 
 
-class DynamicCollectionAdapter(object):
+class DynamicCollectionAdapter:
     """simplified CollectionAdapter for internal API consistency"""
 
     def __init__(self, data):
@@ -284,7 +340,7 @@ class DynamicCollectionAdapter(object):
     __nonzero__ = __bool__
 
 
-class AppenderMixin(object):
+class AppenderMixin:
     query_class = None
 
     def __init__(self, attr, state):
@@ -302,7 +358,10 @@ class AppenderMixin(object):
             # is in the FROM.  So we purposely put the mapper selectable
             # in _from_obj[0] to ensure a user-defined join() later on
             # doesn't fail, and secondary is then in _from_obj[1].
-            self._from_obj = (prop.mapper.selectable, prop.secondary)
+
+            # note also, we are using the official ORM-annotated selectable
+            # from __clause_element__(), see #7868
+            self._from_obj = (prop.mapper.__clause_element__(), prop.secondary)
 
         self._where_criteria = (
             prop._with_parent(instance, alias_secondary=False),
@@ -434,7 +493,7 @@ def mixin_user_query(cls):
     return type(name, (AppenderMixin, cls), {"query_class": cls})
 
 
-class CollectionHistory(object):
+class CollectionHistory:
     """Overrides AttributeHistory to receive append/remove events directly."""
 
     def __init__(self, attr, state, apply_to=None):

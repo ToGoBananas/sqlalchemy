@@ -25,13 +25,14 @@ from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import mock
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 
 
-class _UpdateFromTestBase(object):
+class _UpdateFromTestBase:
     @classmethod
     def define_tables(cls, metadata):
         Table(
@@ -128,7 +129,7 @@ class UpdateTest(_UpdateFromTestBase, fixtures.TablesTest, AssertsCompiledSQL):
     def test_update_custom_key_thing(self):
         table1 = self.tables.mytable
 
-        class Thing(object):
+        class Thing:
             def __clause_element__(self):
                 return table1.c.name
 
@@ -147,7 +148,7 @@ class UpdateTest(_UpdateFromTestBase, fixtures.TablesTest, AssertsCompiledSQL):
     def test_update_ordered_custom_key_thing(self):
         table1 = self.tables.mytable
 
-        class Thing(object):
+        class Thing:
             def __clause_element__(self):
                 return table1.c.name
 
@@ -166,7 +167,7 @@ class UpdateTest(_UpdateFromTestBase, fixtures.TablesTest, AssertsCompiledSQL):
     def test_update_broken_custom_key_thing(self):
         table1 = self.tables.mytable
 
-        class Thing(object):
+        class Thing:
             def __clause_element__(self):
                 return 5
 
@@ -180,7 +181,7 @@ class UpdateTest(_UpdateFromTestBase, fixtures.TablesTest, AssertsCompiledSQL):
     def test_update_ordered_broken_custom_key_thing(self):
         table1 = self.tables.mytable
 
-        class Thing(object):
+        class Thing:
             def __clause_element__(self):
                 return 5
 
@@ -829,7 +830,7 @@ class UpdateTest(_UpdateFromTestBase, fixtures.TablesTest, AssertsCompiledSQL):
                 (t, combination)
                 for i, combination in zip(range(10), combinations())
             ],
-            argnames="t, idx_to_value"
+            argnames="t, idx_to_value",
         )
 
     @random_update_order_parameters()
@@ -1015,6 +1016,46 @@ class UpdateFromCompileTest(
             checkparams={"addresses_name": "new address", "name": "newname"},
             dialect="mysql",
         )
+
+    def test_update_from_join_unsupported_cases(self):
+        """
+        found_during_typing
+
+        It's unclear how to cleanly guard against this case without producing
+        false positives, particularly due to the support for UPDATE
+        of a CTE.  I'm also not sure of the nature of the failure and why
+        it happens this way.
+
+        """
+        users, addresses = self.tables.users, self.tables.addresses
+
+        j = users.join(addresses)
+
+        with expect_raises_message(
+            exc.CompileError,
+            r"Encountered unsupported case when compiling an INSERT or UPDATE "
+            r"statement.  If this is a multi-table "
+            r"UPDATE statement, please provide string-named arguments to the "
+            r"values\(\) method with distinct names; support for multi-table "
+            r"UPDATE statements that "
+            r"target multiple tables for UPDATE is very limited",
+        ):
+            update(j).where(addresses.c.email_address == "e1").values(
+                {users.c.id: 10, addresses.c.email_address: "asdf"}
+            ).compile(dialect=mysql.dialect())
+
+        with expect_raises_message(
+            exc.CompileError,
+            r"Encountered unsupported case when compiling an INSERT or UPDATE "
+            r"statement.  If this is a multi-table "
+            r"UPDATE statement, please provide string-named arguments to the "
+            r"values\(\) method with distinct names; support for multi-table "
+            r"UPDATE statements that "
+            r"target multiple tables for UPDATE is very limited",
+        ):
+            update(j).where(addresses.c.email_address == "e1").compile(
+                dialect=mysql.dialect()
+            )
 
     def test_update_from_join_mysql_whereclause(self):
         users, addresses = self.tables.users, self.tables.addresses
@@ -1328,7 +1369,7 @@ class UpdateFromRoundTripTest(_UpdateFromTestBase, fixtures.TablesTest):
         ]
         self._assert_addresses(connection, addresses, expected)
 
-    @testing.only_on("mysql", "Multi table update")
+    @testing.requires.multi_table_update
     def test_exec_multitable(self, connection):
         users, addresses = self.tables.users, self.tables.addresses
 
@@ -1353,7 +1394,7 @@ class UpdateFromRoundTripTest(_UpdateFromTestBase, fixtures.TablesTest):
         expected = [(7, "jack"), (8, "ed2"), (9, "fred"), (10, "chuck")]
         self._assert_users(connection, users, expected)
 
-    @testing.only_on("mysql", "Multi table update")
+    @testing.requires.multi_table_update
     def test_exec_join_multitable(self, connection):
         users, addresses = self.tables.users, self.tables.addresses
 
@@ -1377,7 +1418,7 @@ class UpdateFromRoundTripTest(_UpdateFromTestBase, fixtures.TablesTest):
         expected = [(7, "jack"), (8, "ed2"), (9, "fred"), (10, "chuck")]
         self._assert_users(connection, users, expected)
 
-    @testing.only_on("mysql", "Multi table update")
+    @testing.requires.multi_table_update
     def test_exec_multitable_same_name(self, connection):
         users, addresses = self.tables.users, self.tables.addresses
 
@@ -1471,7 +1512,7 @@ class UpdateFromMultiTableUpdateDefaultsTest(
             ),
         )
 
-    @testing.only_on("mysql", "Multi table update")
+    @testing.requires.multi_table_update
     def test_defaults_second_table(self, connection):
         users, addresses = self.tables.users, self.tables.addresses
 
@@ -1496,7 +1537,7 @@ class UpdateFromMultiTableUpdateDefaultsTest(
         expected = [(8, "ed2", "im the update"), (9, "fred", "value")]
         self._assert_users(connection, users, expected)
 
-    @testing.only_on("mysql", "Multi table update")
+    @testing.requires.multi_table_update
     def test_defaults_second_table_same_name(self, connection):
         users, foobar = self.tables.users, self.tables.foobar
 
@@ -1524,7 +1565,7 @@ class UpdateFromMultiTableUpdateDefaultsTest(
         expected = [(8, "ed2", "im the update"), (9, "fred", "value")]
         self._assert_users(connection, users, expected)
 
-    @testing.only_on("mysql", "Multi table update")
+    @testing.requires.multi_table_update
     def test_no_defaults_second_table(self, connection):
         users, addresses = self.tables.users, self.tables.addresses
 

@@ -18,8 +18,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import subqueryload
 from sqlalchemy.orm import undefer
 from sqlalchemy.orm import with_polymorphic
-from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
+from sqlalchemy.testing import assert_warns
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
@@ -86,6 +86,48 @@ class EagerTest(_fixtures.FixtureTest, testing.AssertsCompiledSQL):
 
         def go():
             eq_(self.static.user_address_result, q.order_by(User.id).all())
+
+        self.assert_sql_count(testing.db, go, 2)
+
+    @testing.combinations(True, False)
+    def test_from_statement(self, legacy):
+        users, Address, addresses, User = (
+            self.tables.users,
+            self.classes.Address,
+            self.tables.addresses,
+            self.classes.User,
+        )
+
+        self.mapper_registry.map_imperatively(
+            User,
+            users,
+            properties={
+                "addresses": relationship(
+                    self.mapper_registry.map_imperatively(Address, addresses),
+                    order_by=Address.id,
+                )
+            },
+        )
+        sess = fixture_session()
+
+        stmt = select(User).where(User.id == 7)
+
+        def go():
+            if legacy:
+                ret = (
+                    sess.query(User)
+                    .from_statement(stmt)
+                    .options(selectinload(User.addresses))
+                    .all()
+                )
+            else:
+                ret = sess.scalars(
+                    select(User)
+                    .from_statement(stmt)
+                    .options(selectinload(User.addresses))
+                ).all()
+
+            eq_(self.static.user_address_result[0:1], ret)
 
         self.assert_sql_count(testing.db, go, 2)
 
@@ -221,15 +263,13 @@ class EagerTest(_fixtures.FixtureTest, testing.AssertsCompiledSQL):
         )
         sess = fixture_session()
 
-        q = sess.query(User).options(selectinload(User.addresses))
-
         def go():
             eq_(
                 User(
                     id=7,
                     addresses=[Address(id=1, email_address="jack@bean.com")],
                 ),
-                q.get(7),
+                sess.get(User, 7, options=[selectinload(User.addresses)]),
             )
 
         self.assert_sql_count(testing.db, go, 2)
@@ -352,7 +392,7 @@ class EagerTest(_fixtures.FixtureTest, testing.AssertsCompiledSQL):
         def go():
             eq_(
                 self.static.item_keyword_result[0:2],
-                q.join("keywords").filter(Keyword.name == "red").all(),
+                q.join(Item.keywords).filter(Keyword.name == "red").all(),
             )
 
         self.assert_sql_count(testing.db, go, 2)
@@ -386,7 +426,7 @@ class EagerTest(_fixtures.FixtureTest, testing.AssertsCompiledSQL):
             ka = aliased(Keyword)
             eq_(
                 self.static.item_keyword_result[0:2],
-                (q.join(ka, "keywords").filter(ka.name == "red")).all(),
+                (q.join(ka, Item.keywords).filter(ka.name == "red")).all(),
             )
 
         self.assert_sql_count(testing.db, go, 2)
@@ -1253,7 +1293,7 @@ class EagerTest(_fixtures.FixtureTest, testing.AssertsCompiledSQL):
         def go():
             a = q.filter(addresses.c.id == 1).one()
             is_not(a.user, None)
-            u1 = sess.query(User).get(7)
+            u1 = sess.get(User, 7)
             is_(a.user, u1)
 
         self.assert_sql_count(testing.db, go, 2)
@@ -1418,7 +1458,7 @@ class EagerTest(_fixtures.FixtureTest, testing.AssertsCompiledSQL):
         )
         self.mapper_registry.map_imperatively(Order, orders)
         s = fixture_session()
-        assert_raises(
+        assert_warns(
             sa.exc.SAWarning,
             s.query(User).options(selectinload(User.order)).all,
         )
@@ -1502,7 +1542,7 @@ class LoadOnExistingTest(_fixtures.FixtureTest):
     def test_runs_query_on_refresh(self):
         User, Address, sess = self._eager_config_fixture()
 
-        u1 = sess.query(User).get(8)
+        u1 = sess.get(User, 8)
         assert "addresses" in u1.__dict__
         sess.expire(u1)
 
@@ -1540,7 +1580,7 @@ class LoadOnExistingTest(_fixtures.FixtureTest):
 
     def test_no_query_on_deferred(self):
         User, Address, sess = self._deferred_config_fixture()
-        u1 = sess.query(User).get(8)
+        u1 = sess.get(User, 8)
         assert "addresses" in u1.__dict__
         sess.expire(u1, ["addresses"])
 
@@ -1552,7 +1592,7 @@ class LoadOnExistingTest(_fixtures.FixtureTest):
 
     def test_populate_existing_propagate(self):
         User, Address, sess = self._eager_config_fixture()
-        u1 = sess.query(User).get(8)
+        u1 = sess.get(User, 8)
         u1.addresses[2].email_address = "foofoo"
         del u1.addresses[1]
         u1 = sess.query(User).populate_existing().filter_by(id=8).one()
@@ -1565,13 +1605,13 @@ class LoadOnExistingTest(_fixtures.FixtureTest):
     def test_loads_second_level_collection_to_scalar(self):
         User, Address, Dingaling, sess = self._collection_to_scalar_fixture()
 
-        u1 = sess.query(User).get(8)
+        u1 = sess.get(User, 8)
         a1 = Address()
         u1.addresses.append(a1)
         a2 = u1.addresses[0]
         a2.email_address = "foo"
         sess.query(User).options(
-            selectinload("addresses").selectinload("dingaling")
+            selectinload(User.addresses).selectinload(Address.dingaling)
         ).filter_by(id=8).all()
         assert u1.addresses[-1] is a1
         for a in u1.addresses:
@@ -1585,12 +1625,12 @@ class LoadOnExistingTest(_fixtures.FixtureTest):
     def test_loads_second_level_collection_to_collection(self):
         User, Order, Item, sess = self._collection_to_collection_fixture()
 
-        u1 = sess.query(User).get(7)
+        u1 = sess.get(User, 7)
         u1.orders
         o1 = Order()
         u1.orders.append(o1)
         sess.query(User).options(
-            selectinload("orders").selectinload("items")
+            selectinload(User.orders).selectinload(Order.items)
         ).filter_by(id=7).all()
         for o in u1.orders:
             if o is not o1:
@@ -1604,11 +1644,11 @@ class LoadOnExistingTest(_fixtures.FixtureTest):
         u1 = (
             sess.query(User)
             .filter_by(id=8)
-            .options(selectinload("addresses"))
+            .options(selectinload(User.addresses))
             .one()
         )
         sess.query(User).filter_by(id=8).options(
-            selectinload("addresses").selectinload("dingaling")
+            selectinload(User.addresses).selectinload(Address.dingaling)
         ).first()
         assert "dingaling" in u1.addresses[0].__dict__
 
@@ -1618,11 +1658,11 @@ class LoadOnExistingTest(_fixtures.FixtureTest):
         u1 = (
             sess.query(User)
             .filter_by(id=7)
-            .options(selectinload("orders"))
+            .options(selectinload(User.orders))
             .one()
         )
         sess.query(User).filter_by(id=7).options(
-            selectinload("orders").selectinload("items")
+            selectinload(User.orders).selectinload(Order.items)
         ).first()
         assert "items" in u1.orders[0].__dict__
 
@@ -1842,7 +1882,7 @@ class BaseRelationFromJoinedSubclassTest(_Polymorphic):
                 "paperwork.paperwork_id AS paperwork_paperwork_id, "
                 "paperwork.description AS paperwork_description "
                 "FROM paperwork WHERE paperwork.person_id "
-                "IN ([POSTCOMPILE_primary_keys]) "
+                "IN (__[POSTCOMPILE_primary_keys]) "
                 "ORDER BY paperwork.paperwork_id",
                 [{"primary_keys": [1]}],
             ),
@@ -1892,7 +1932,7 @@ class BaseRelationFromJoinedSubclassTest(_Polymorphic):
                 "paperwork.paperwork_id AS paperwork_paperwork_id, "
                 "paperwork.description AS paperwork_description "
                 "FROM paperwork WHERE paperwork.person_id "
-                "IN ([POSTCOMPILE_primary_keys]) "
+                "IN (__[POSTCOMPILE_primary_keys]) "
                 "ORDER BY paperwork.paperwork_id",
                 [{"primary_keys": [1]}],
             ),
@@ -1938,7 +1978,7 @@ class BaseRelationFromJoinedSubclassTest(_Polymorphic):
                 "paperwork.paperwork_id AS paperwork_paperwork_id, "
                 "paperwork.description AS paperwork_description "
                 "FROM paperwork WHERE paperwork.person_id "
-                "IN ([POSTCOMPILE_primary_keys]) "
+                "IN (__[POSTCOMPILE_primary_keys]) "
                 "ORDER BY paperwork.paperwork_id",
                 [{"primary_keys": [1]}],
             ),
@@ -1992,7 +2032,7 @@ class BaseRelationFromJoinedSubclassTest(_Polymorphic):
                 "paperwork.paperwork_id AS paperwork_paperwork_id, "
                 "paperwork.description AS paperwork_description "
                 "FROM paperwork WHERE paperwork.person_id "
-                "IN ([POSTCOMPILE_primary_keys]) "
+                "IN (__[POSTCOMPILE_primary_keys]) "
                 "ORDER BY paperwork.paperwork_id",
                 [{"primary_keys": [1]}],
             ),
@@ -2040,7 +2080,7 @@ class BaseRelationFromJoinedSubclassTest(_Polymorphic):
                 "paperwork.paperwork_id AS paperwork_paperwork_id, "
                 "paperwork.description AS paperwork_description "
                 "FROM paperwork WHERE paperwork.person_id "
-                "IN ([POSTCOMPILE_primary_keys]) "
+                "IN (__[POSTCOMPILE_primary_keys]) "
                 "ORDER BY paperwork.paperwork_id",
                 [{"primary_keys": [1]}],
             ),
@@ -2261,7 +2301,7 @@ class TupleTest(fixtures.DeclarativeMappedTest):
             CompiledSQL(
                 "SELECT b.a_id1 AS b_a_id1, b.a_id2 AS b_a_id2, b.id AS b_id "
                 "FROM b WHERE (b.a_id1, b.a_id2) IN "
-                "([POSTCOMPILE_primary_keys]) ORDER BY b.id",
+                "(__[POSTCOMPILE_primary_keys]) ORDER BY b.id",
                 [{"primary_keys": [(i, i + 2) for i in range(1, 20)]}],
             ),
         )
@@ -2292,7 +2332,7 @@ class TupleTest(fixtures.DeclarativeMappedTest):
             ),
             CompiledSQL(
                 "SELECT a.id1 AS a_id1, a.id2 AS a_id2 FROM a "
-                "WHERE (a.id1, a.id2) IN ([POSTCOMPILE_primary_keys])",
+                "WHERE (a.id1, a.id2) IN (__[POSTCOMPILE_primary_keys])",
                 [{"primary_keys": [(i, i + 2) for i in range(1, 20)]}],
             ),
         )
@@ -2366,19 +2406,19 @@ class ChunkingTest(fixtures.DeclarativeMappedTest):
             CompiledSQL(
                 "SELECT b.a_id AS b_a_id, b.id AS b_id "
                 "FROM b WHERE b.a_id IN "
-                "([POSTCOMPILE_primary_keys]) ORDER BY b.id",
+                "(__[POSTCOMPILE_primary_keys]) ORDER BY b.id",
                 {"primary_keys": list(range(1, 48))},
             ),
             CompiledSQL(
                 "SELECT b.a_id AS b_a_id, b.id AS b_id "
                 "FROM b WHERE b.a_id IN "
-                "([POSTCOMPILE_primary_keys]) ORDER BY b.id",
+                "(__[POSTCOMPILE_primary_keys]) ORDER BY b.id",
                 {"primary_keys": list(range(48, 95))},
             ),
             CompiledSQL(
                 "SELECT b.a_id AS b_a_id, b.id AS b_id "
                 "FROM b WHERE b.a_id IN "
-                "([POSTCOMPILE_primary_keys]) ORDER BY b.id",
+                "(__[POSTCOMPILE_primary_keys]) ORDER BY b.id",
                 {"primary_keys": list(range(95, 101))},
             ),
         )
@@ -2442,19 +2482,19 @@ class ChunkingTest(fixtures.DeclarativeMappedTest):
             # chunk size is 47.  so first chunk are a 1->47...
             CompiledSQL(
                 "SELECT a.id AS a_id FROM a WHERE a.id IN "
-                "([POSTCOMPILE_primary_keys])",
+                "(__[POSTCOMPILE_primary_keys])",
                 {"primary_keys": list(range(1, 48))},
             ),
             # second chunk is a 48-94
             CompiledSQL(
                 "SELECT a.id AS a_id FROM a WHERE a.id IN "
-                "([POSTCOMPILE_primary_keys])",
+                "(__[POSTCOMPILE_primary_keys])",
                 {"primary_keys": list(range(48, 95))},
             ),
             # third and final chunk 95-100.
             CompiledSQL(
                 "SELECT a.id AS a_id FROM a WHERE a.id IN "
-                "([POSTCOMPILE_primary_keys])",
+                "(__[POSTCOMPILE_primary_keys])",
                 {"primary_keys": list(range(95, 101))},
             ),
         )
@@ -2623,12 +2663,74 @@ class SelfReferentialTest(fixtures.MappedTest):
             Column("data", String(30)),
         )
 
-    def test_basic(self):
-        nodes = self.tables.nodes
-
-        class Node(fixtures.ComparableEntity):
+    @classmethod
+    def setup_classes(cls):
+        class Node(cls.Comparable):
             def append(self, node):
                 self.children.append(node)
+
+    @testing.fixture
+    def data_fixture(self):
+        def go(sess):
+            Node = self.classes.Node
+            n1 = Node(data="n1")
+            n1.append(Node(data="n11"))
+            n1.append(Node(data="n12"))
+            n1.append(Node(data="n13"))
+
+            n1.children[0].children = [Node(data="n111"), Node(data="n112")]
+
+            n1.children[1].append(Node(data="n121"))
+            n1.children[1].append(Node(data="n122"))
+            n1.children[1].append(Node(data="n123"))
+            n2 = Node(data="n2")
+            n2.append(Node(data="n21"))
+            n2.children[0].append(Node(data="n211"))
+            n2.children[0].append(Node(data="n212"))
+            sess.add(n1)
+            sess.add(n2)
+            sess.flush()
+            sess.expunge_all()
+            return n1, n2
+
+        return go
+
+    def _full_structure(self):
+        Node = self.classes.Node
+        return [
+            Node(
+                data="n1",
+                children=[
+                    Node(data="n11"),
+                    Node(
+                        data="n12",
+                        children=[
+                            Node(data="n121"),
+                            Node(data="n122"),
+                            Node(data="n123"),
+                        ],
+                    ),
+                    Node(data="n13"),
+                ],
+            ),
+            Node(
+                data="n2",
+                children=[
+                    Node(
+                        data="n21",
+                        children=[
+                            Node(data="n211"),
+                            Node(data="n212"),
+                        ],
+                    )
+                ],
+            ),
+        ]
+
+    def test_basic(self, data_fixture):
+        nodes = self.tables.nodes
+
+        Node = self.classes.Node
 
         self.mapper_registry.map_imperatively(
             Node,
@@ -2640,22 +2742,7 @@ class SelfReferentialTest(fixtures.MappedTest):
             },
         )
         sess = fixture_session()
-        n1 = Node(data="n1")
-        n1.append(Node(data="n11"))
-        n1.append(Node(data="n12"))
-        n1.append(Node(data="n13"))
-        n1.children[1].append(Node(data="n121"))
-        n1.children[1].append(Node(data="n122"))
-        n1.children[1].append(Node(data="n123"))
-        n2 = Node(data="n2")
-        n2.append(Node(data="n21"))
-        n2.children[0].append(Node(data="n211"))
-        n2.children[0].append(Node(data="n212"))
-
-        sess.add(n1)
-        sess.add(n2)
-        sess.flush()
-        sess.expunge_all()
+        n1, n2 = data_fixture(sess)
 
         def go():
             d = (
@@ -2665,46 +2752,15 @@ class SelfReferentialTest(fixtures.MappedTest):
                 .all()
             )
             eq_(
-                [
-                    Node(
-                        data="n1",
-                        children=[
-                            Node(data="n11"),
-                            Node(
-                                data="n12",
-                                children=[
-                                    Node(data="n121"),
-                                    Node(data="n122"),
-                                    Node(data="n123"),
-                                ],
-                            ),
-                            Node(data="n13"),
-                        ],
-                    ),
-                    Node(
-                        data="n2",
-                        children=[
-                            Node(
-                                data="n21",
-                                children=[
-                                    Node(data="n211"),
-                                    Node(data="n212"),
-                                ],
-                            )
-                        ],
-                    ),
-                ],
+                self._full_structure(),
                 d,
             )
 
         self.assert_sql_count(testing.db, go, 4)
 
-    def test_lazy_fallback_doesnt_affect_eager(self):
+    def test_lazy_fallback_doesnt_affect_eager(self, data_fixture):
         nodes = self.tables.nodes
-
-        class Node(fixtures.ComparableEntity):
-            def append(self, node):
-                self.children.append(node)
+        Node = self.classes.Node
 
         self.mapper_registry.map_imperatively(
             Node,
@@ -2716,18 +2772,7 @@ class SelfReferentialTest(fixtures.MappedTest):
             },
         )
         sess = fixture_session()
-        n1 = Node(data="n1")
-        n1.append(Node(data="n11"))
-        n1.append(Node(data="n12"))
-        n1.append(Node(data="n13"))
-        n1.children[0].append(Node(data="n111"))
-        n1.children[0].append(Node(data="n112"))
-        n1.children[1].append(Node(data="n121"))
-        n1.children[1].append(Node(data="n122"))
-        n1.children[1].append(Node(data="n123"))
-        sess.add(n1)
-        sess.flush()
-        sess.expunge_all()
+        n1, n2 = data_fixture(sess)
 
         def go():
             allnodes = sess.query(Node).order_by(Node.data).all()
@@ -2745,12 +2790,9 @@ class SelfReferentialTest(fixtures.MappedTest):
 
         self.assert_sql_count(testing.db, go, 2)
 
-    def test_with_deferred(self):
+    def test_with_deferred(self, data_fixture):
         nodes = self.tables.nodes
-
-        class Node(fixtures.ComparableEntity):
-            def append(self, node):
-                self.children.append(node)
+        Node = self.classes.Node
 
         self.mapper_registry.map_imperatively(
             Node,
@@ -2763,52 +2805,68 @@ class SelfReferentialTest(fixtures.MappedTest):
             },
         )
         sess = fixture_session()
-        n1 = Node(data="n1")
-        n1.append(Node(data="n11"))
-        n1.append(Node(data="n12"))
-        sess.add(n1)
-        sess.flush()
-        sess.expunge_all()
+        n1, n2 = data_fixture(sess)
 
         def go():
             eq_(
-                Node(data="n1", children=[Node(data="n11"), Node(data="n12")]),
+                Node(
+                    data="n1",
+                    children=[
+                        Node(data="n11"),
+                        Node(data="n12"),
+                        Node(data="n13"),
+                    ],
+                ),
                 sess.query(Node).order_by(Node.id).first(),
             )
 
-        self.assert_sql_count(testing.db, go, 6)
+        self.assert_sql_count(testing.db, go, 8)
 
         sess.expunge_all()
 
         def go():
             eq_(
-                Node(data="n1", children=[Node(data="n11"), Node(data="n12")]),
+                Node(
+                    data="n1",
+                    children=[
+                        Node(data="n11"),
+                        Node(data="n12"),
+                        Node(data="n13"),
+                    ],
+                ),
                 sess.query(Node)
-                .options(undefer("data"))
+                .options(undefer(Node.data))
                 .order_by(Node.id)
                 .first(),
             )
 
-        self.assert_sql_count(testing.db, go, 5)
+        self.assert_sql_count(testing.db, go, 7)
 
         sess.expunge_all()
 
         def go():
             eq_(
-                Node(data="n1", children=[Node(data="n11"), Node(data="n12")]),
+                Node(
+                    data="n1",
+                    children=[
+                        Node(data="n11"),
+                        Node(data="n12"),
+                        Node(data="n13"),
+                    ],
+                ),
                 sess.query(Node)
-                .options(undefer("data"), undefer("children.data"))
+                .options(
+                    undefer(Node.data),
+                    defaultload(Node.children).undefer(Node.data),
+                )
                 .first(),
             )
 
-        self.assert_sql_count(testing.db, go, 3)
+        self.assert_sql_count(testing.db, go, 4)
 
-    def test_options(self):
+    def test_options(self, data_fixture):
         nodes = self.tables.nodes
-
-        class Node(fixtures.ComparableEntity):
-            def append(self, node):
-                self.children.append(node)
+        Node = self.classes.Node
 
         self.mapper_registry.map_imperatively(
             Node,
@@ -2816,23 +2874,16 @@ class SelfReferentialTest(fixtures.MappedTest):
             properties={"children": relationship(Node, order_by=nodes.c.id)},
         )
         sess = fixture_session()
-        n1 = Node(data="n1")
-        n1.append(Node(data="n11"))
-        n1.append(Node(data="n12"))
-        n1.append(Node(data="n13"))
-        n1.children[1].append(Node(data="n121"))
-        n1.children[1].append(Node(data="n122"))
-        n1.children[1].append(Node(data="n123"))
-        sess.add(n1)
-        sess.flush()
-        sess.expunge_all()
+        n1, n2 = data_fixture(sess)
 
         def go():
             d = (
                 sess.query(Node)
                 .filter_by(data="n1")
                 .order_by(Node.id)
-                .options(selectinload("children").selectinload("children"))
+                .options(
+                    selectinload(Node.children).selectinload(Node.children)
+                )
                 .first()
             )
             eq_(
@@ -2856,14 +2907,11 @@ class SelfReferentialTest(fixtures.MappedTest):
 
         self.assert_sql_count(testing.db, go, 3)
 
-    def test_no_depth(self):
+    def test_no_depth(self, data_fixture):
         """no join depth is set, so no eager loading occurs."""
 
         nodes = self.tables.nodes
-
-        class Node(fixtures.ComparableEntity):
-            def append(self, node):
-                self.children.append(node)
+        Node = self.classes.Node
 
         self.mapper_registry.map_imperatively(
             Node,
@@ -2871,19 +2919,7 @@ class SelfReferentialTest(fixtures.MappedTest):
             properties={"children": relationship(Node, lazy="selectin")},
         )
         sess = fixture_session()
-        n1 = Node(data="n1")
-        n1.append(Node(data="n11"))
-        n1.append(Node(data="n12"))
-        n1.append(Node(data="n13"))
-        n1.children[1].append(Node(data="n121"))
-        n1.children[1].append(Node(data="n122"))
-        n1.children[1].append(Node(data="n123"))
-        n2 = Node(data="n2")
-        n2.append(Node(data="n21"))
-        sess.add(n1)
-        sess.add(n2)
-        sess.flush()
-        sess.expunge_all()
+        n1, n2 = data_fixture(sess)
 
         def go():
             d = (
@@ -2957,17 +2993,22 @@ class SelfRefInheritanceAliasedTest(
     def test_twolevel_selectin_w_polymorphic(self):
         Foo, Bar = self.classes("Foo", "Bar")
 
-        for count in range(3):
+        for count in range(1):
             r = with_polymorphic(Foo, "*", aliased=True)
             attr1 = Foo.foo.of_type(r)
             attr2 = r.foo
 
             s = fixture_session()
-            q = (
-                s.query(Foo)
-                .filter(Foo.id == 2)
-                .options(selectinload(attr1).selectinload(attr2))
-            )
+
+            from sqlalchemy.orm import Load
+
+            opt1 = selectinload(attr1).selectinload(attr2)  # noqa
+            opt2 = Load(Foo).selectinload(attr1).selectinload(attr2)  # noqa
+
+            q = s.query(Foo).filter(Foo.id == 2).options(opt2)
+            # q.all()
+            # return
+
             results = self.assert_sql_execution(
                 testing.db,
                 q.all,
@@ -2980,13 +3021,13 @@ class SelfRefInheritanceAliasedTest(
                     "SELECT foo_1.id AS foo_1_id, "
                     "foo_1.type AS foo_1_type, foo_1.foo_id AS foo_1_foo_id "
                     "FROM foo AS foo_1 "
-                    "WHERE foo_1.id IN ([POSTCOMPILE_primary_keys])",
+                    "WHERE foo_1.id IN (__[POSTCOMPILE_primary_keys])",
                     {"primary_keys": [3]},
                 ),
                 CompiledSQL(
                     "SELECT foo.id AS foo_id_1, foo.type AS foo_type, "
                     "foo.foo_id AS foo_foo_id FROM foo "
-                    "WHERE foo.id IN ([POSTCOMPILE_primary_keys])",
+                    "WHERE foo.id IN (__[POSTCOMPILE_primary_keys])",
                     {"primary_keys": [1]},
                 ),
             )
@@ -3150,13 +3191,13 @@ class SingleInhSubclassTest(
             q.all,
             CompiledSQL(
                 'SELECT "user".id AS user_id, "user".type AS user_type '
-                'FROM "user" WHERE "user".type IN ([POSTCOMPILE_type_1])',
+                'FROM "user" WHERE "user".type IN (__[POSTCOMPILE_type_1])',
                 {"type_1": ["employer"]},
             ),
             CompiledSQL(
                 "SELECT role.user_id AS role_user_id, role.id AS role_id "
                 "FROM role WHERE role.user_id "
-                "IN ([POSTCOMPILE_primary_keys])",
+                "IN (__[POSTCOMPILE_primary_keys])",
                 {"primary_keys": [1]},
             ),
         )
@@ -3274,12 +3315,12 @@ class M2OWDegradeTest(
             q.all,
             CompiledSQL(
                 "SELECT a.id AS a_id, a.b_id AS a_b_id, a.q AS a_q "
-                "FROM a WHERE a.id IN ([POSTCOMPILE_id_1]) ORDER BY a.id",
+                "FROM a WHERE a.id IN (__[POSTCOMPILE_id_1]) ORDER BY a.id",
                 [{"id_1": [1, 3]}],
             ),
             CompiledSQL(
                 "SELECT b.id AS b_id, b.x AS b_x, b.y AS b_y "
-                "FROM b WHERE b.id IN ([POSTCOMPILE_primary_keys])",
+                "FROM b WHERE b.id IN (__[POSTCOMPILE_primary_keys])",
                 [{"primary_keys": [1, 2]}],
             ),
         )
@@ -3303,7 +3344,7 @@ class M2OWDegradeTest(
             q.all,
             CompiledSQL(
                 "SELECT a.id AS a_id, a.q AS a_q "
-                "FROM a WHERE a.id IN ([POSTCOMPILE_id_1]) ORDER BY a.id",
+                "FROM a WHERE a.id IN (__[POSTCOMPILE_id_1]) ORDER BY a.id",
                 [{"id_1": [1, 3]}],
             ),
             # in the very unlikely case that the the FK col on parent is
@@ -3314,7 +3355,7 @@ class M2OWDegradeTest(
                 "SELECT a_1.id AS a_1_id, b.id AS b_id, b.x AS b_x, "
                 "b.y AS b_y "
                 "FROM a AS a_1 JOIN b ON b.id = a_1.b_id "
-                "WHERE a_1.id IN ([POSTCOMPILE_primary_keys])",
+                "WHERE a_1.id IN (__[POSTCOMPILE_primary_keys])",
                 [{"primary_keys": [1, 3]}],
             ),
         )
@@ -3338,7 +3379,7 @@ class M2OWDegradeTest(
             ),
             CompiledSQL(
                 "SELECT b.id AS b_id, b.x AS b_x, b.y AS b_y "
-                "FROM b WHERE b.id IN ([POSTCOMPILE_primary_keys])",
+                "FROM b WHERE b.id IN (__[POSTCOMPILE_primary_keys])",
                 [{"primary_keys": [1, 2]}],
             ),
         )
@@ -3370,7 +3411,7 @@ class M2OWDegradeTest(
             CompiledSQL(
                 "SELECT a_1.id AS a_1_id, b.id AS b_id, b.x AS b_x, "
                 "b.y AS b_y FROM a AS a_1 JOIN b ON b.id = a_1.b_id "
-                "WHERE a_1.id IN ([POSTCOMPILE_primary_keys])",
+                "WHERE a_1.id IN (__[POSTCOMPILE_primary_keys])",
                 [{"primary_keys": [1, 2, 3, 4, 5]}],
             ),
         )
@@ -3405,7 +3446,7 @@ class M2OWDegradeTest(
                 "SELECT a_1.id AS a_1_id, b.id AS b_id, b.x AS b_x, "
                 "b.y AS b_y "
                 "FROM a AS a_1 JOIN b ON b.id = a_1.b_id "
-                "WHERE a_1.id IN ([POSTCOMPILE_primary_keys])",
+                "WHERE a_1.id IN (__[POSTCOMPILE_primary_keys])",
                 [{"primary_keys": [1, 2, 3, 4, 5]}],
             ),
         )
@@ -3517,13 +3558,15 @@ class SameNamePolymorphicTest(fixtures.DeclarativeMappedTest):
                 CompiledSQL(
                     "SELECT child_a.parent_id AS child_a_parent_id, "
                     "child_a.id AS child_a_id FROM child_a "
-                    "WHERE child_a.parent_id IN ([POSTCOMPILE_primary_keys])",
+                    "WHERE child_a.parent_id IN "
+                    "(__[POSTCOMPILE_primary_keys])",
                     [{"primary_keys": [1]}],
                 ),
                 CompiledSQL(
                     "SELECT child_b.parent_id AS child_b_parent_id, "
                     "child_b.id AS child_b_id FROM child_b "
-                    "WHERE child_b.parent_id IN ([POSTCOMPILE_primary_keys])",
+                    "WHERE child_b.parent_id IN "
+                    "(__[POSTCOMPILE_primary_keys])",
                     [{"primary_keys": [2]}],
                 ),
             ),

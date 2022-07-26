@@ -1,5 +1,5 @@
 # sql/dml.py
-# Copyright (C) 2009-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2009-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -9,54 +9,189 @@ Provide :class:`_expression.Insert`, :class:`_expression.Update` and
 :class:`_expression.Delete`.
 
 """
-from sqlalchemy.types import NullType
+from __future__ import annotations
+
+import collections.abc as collections_abc
+import operator
+import typing
+from typing import Any
+from typing import cast
+from typing import Dict
+from typing import Iterable
+from typing import List
+from typing import MutableMapping
+from typing import NoReturn
+from typing import Optional
+from typing import overload
+from typing import Sequence
+from typing import Tuple
+from typing import Type
+from typing import TYPE_CHECKING
+from typing import TypeVar
+from typing import Union
+
 from . import coercions
 from . import roles
 from . import util as sql_util
+from ._typing import _no_kw
+from ._typing import _TP
+from ._typing import is_column_element
+from ._typing import is_named_from_clause
 from .base import _entity_namespace_key
 from .base import _exclusive_against
 from .base import _from_objects
 from .base import _generative
+from .base import _select_iterables
 from .base import ColumnCollection
 from .base import CompileState
 from .base import DialectKWArgs
 from .base import Executable
+from .base import Generative
 from .base import HasCompileState
 from .elements import BooleanClauseList
 from .elements import ClauseElement
+from .elements import ColumnClause
+from .elements import ColumnElement
 from .elements import Null
+from .selectable import Alias
+from .selectable import ExecutableReturnsRows
+from .selectable import FromClause
 from .selectable import HasCTE
 from .selectable import HasPrefixes
-from .selectable import ReturnsRows
+from .selectable import Join
+from .selectable import TableClause
+from .selectable import TypedReturnsRows
+from .sqltypes import NullType
 from .visitors import InternalTraversal
 from .. import exc
 from .. import util
-from ..util import collections_abc
+from ..util.typing import TypeGuard
+
+if TYPE_CHECKING:
+    from ._typing import _ColumnExpressionArgument
+    from ._typing import _ColumnsClauseArgument
+    from ._typing import _DMLColumnArgument
+    from ._typing import _DMLTableArgument
+    from ._typing import _T0  # noqa
+    from ._typing import _T1  # noqa
+    from ._typing import _T2  # noqa
+    from ._typing import _T3  # noqa
+    from ._typing import _T4  # noqa
+    from ._typing import _T5  # noqa
+    from ._typing import _T6  # noqa
+    from ._typing import _T7  # noqa
+    from ._typing import _TypedColumnClauseArgument as _TCCA  # noqa
+    from .base import ReadOnlyColumnCollection
+    from .compiler import SQLCompiler
+    from .elements import KeyedColumnElement
+    from .selectable import _ColumnsClauseElement
+    from .selectable import _SelectIterable
+    from .selectable import Select
+    from .selectable import Selectable
+
+    def isupdate(dml: DMLState) -> TypeGuard[UpdateDMLState]:
+        ...
+
+    def isdelete(dml: DMLState) -> TypeGuard[DeleteDMLState]:
+        ...
+
+    def isinsert(dml: DMLState) -> TypeGuard[InsertDMLState]:
+        ...
+
+else:
+    isupdate = operator.attrgetter("isupdate")
+    isdelete = operator.attrgetter("isdelete")
+    isinsert = operator.attrgetter("isinsert")
+
+
+_T = TypeVar("_T", bound=Any)
+
+_DMLColumnElement = Union[str, ColumnClause[Any]]
+_DMLTableElement = Union[TableClause, Alias, Join]
 
 
 class DMLState(CompileState):
     _no_parameters = True
-    _dict_parameters = None
-    _multi_parameters = None
-    _ordered_values = None
-    _parameter_ordering = None
+    _dict_parameters: Optional[MutableMapping[_DMLColumnElement, Any]] = None
+    _multi_parameters: Optional[
+        List[MutableMapping[_DMLColumnElement, Any]]
+    ] = None
+    _ordered_values: Optional[List[Tuple[_DMLColumnElement, Any]]] = None
+    _parameter_ordering: Optional[List[_DMLColumnElement]] = None
     _has_multi_parameters = False
+    _primary_table: FromClause
+    _supports_implicit_returning = True
+
     isupdate = False
     isdelete = False
     isinsert = False
 
-    def __init__(self, statement, compiler, **kw):
+    statement: UpdateBase
+
+    def __init__(
+        self, statement: UpdateBase, compiler: SQLCompiler, **kw: Any
+    ):
         raise NotImplementedError()
 
+    @classmethod
+    def get_entity_description(cls, statement: UpdateBase) -> Dict[str, Any]:
+        return {
+            "name": statement.table.name
+            if is_named_from_clause(statement.table)
+            else None,
+            "table": statement.table,
+        }
+
+    @classmethod
+    def get_returning_column_descriptions(
+        cls, statement: UpdateBase
+    ) -> List[Dict[str, Any]]:
+        return [
+            {
+                "name": c.key,
+                "type": c.type,
+                "expr": c,
+            }
+            for c in statement._all_selected_columns
+        ]
+
     @property
-    def dml_table(self):
+    def dml_table(self) -> _DMLTableElement:
         return self.statement.table
 
-    def _make_extra_froms(self, statement):
-        froms = []
+    if TYPE_CHECKING:
+
+        @classmethod
+        def get_plugin_class(cls, statement: Executable) -> Type[DMLState]:
+            ...
+
+    @classmethod
+    def _get_crud_kv_pairs(
+        cls,
+        statement: UpdateBase,
+        kv_iterator: Iterable[Tuple[_DMLColumnArgument, Any]],
+    ) -> List[Tuple[_DMLColumnElement, Any]]:
+        return [
+            (
+                coercions.expect(roles.DMLColumnRole, k),
+                coercions.expect(
+                    roles.ExpressionElementRole,
+                    v,
+                    type_=NullType(),
+                    is_crud=True,
+                ),
+            )
+            for k, v in kv_iterator
+        ]
+
+    def _make_extra_froms(
+        self, statement: DMLWhereBase
+    ) -> Tuple[FromClause, List[FromClause]]:
+        froms: List[FromClause] = []
 
         all_tables = list(sql_util.tables_from_leftmost(statement.table))
-        seen = {all_tables[0]}
+        primary_table = all_tables[0]
+        seen = {primary_table}
 
         for crit in statement._where_criteria:
             for item in _from_objects(crit):
@@ -65,17 +200,22 @@ class DMLState(CompileState):
                 seen.update(item._cloned_set)
 
         froms.extend(all_tables[1:])
-        return froms
+        return primary_table, froms
 
-    def _process_multi_values(self, statement):
+    def _process_multi_values(self, statement: ValuesBase) -> None:
         if not statement._supports_multi_parameters:
             raise exc.InvalidRequestError(
                 "%s construct does not support "
                 "multiple parameter sets." % statement.__visit_name__.upper()
             )
+        else:
+            assert isinstance(statement, Insert)
+
+            # which implies...
+            # assert isinstance(statement.table, TableClause)
 
         for parameters in statement._multi_values:
-            multi_parameters = [
+            multi_parameters: List[MutableMapping[_DMLColumnElement, Any]] = [
                 {
                     c.key: value
                     for c, value in zip(statement.table.c, parameter_set)
@@ -93,9 +233,10 @@ class DMLState(CompileState):
             elif not self._has_multi_parameters:
                 self._cant_mix_formats_error()
             else:
+                assert self._multi_parameters
                 self._multi_parameters.extend(multi_parameters)
 
-    def _process_values(self, statement):
+    def _process_values(self, statement: ValuesBase) -> None:
         if self._no_parameters:
             self._has_multi_parameters = False
             self._dict_parameters = statement._values
@@ -103,11 +244,12 @@ class DMLState(CompileState):
         elif self._has_multi_parameters:
             self._cant_mix_formats_error()
 
-    def _process_ordered_values(self, statement):
+    def _process_ordered_values(self, statement: ValuesBase) -> None:
         parameters = statement._ordered_values
 
         if self._no_parameters:
             self._no_parameters = False
+            assert parameters is not None
             self._dict_parameters = dict(parameters)
             self._ordered_values = parameters
             self._parameter_ordering = [key for key, value in parameters]
@@ -119,8 +261,9 @@ class DMLState(CompileState):
                 "with any other values() call"
             )
 
-    def _process_select_values(self, statement):
-        parameters = {
+    def _process_select_values(self, statement: ValuesBase) -> None:
+        assert statement._select_names is not None
+        parameters: MutableMapping[_DMLColumnElement, Any] = {
             coercions.expect(roles.DMLColumnRole, name, as_key=True): Null()
             for name in statement._select_names
         }
@@ -133,7 +276,7 @@ class DMLState(CompileState):
             # does not allow this construction to occur
             assert False, "This statement already has parameters"
 
-    def _cant_mix_formats_error(self):
+    def _cant_mix_formats_error(self) -> NoReturn:
         raise exc.InvalidRequestError(
             "Can't mix single and multiple VALUES "
             "formats in one INSERT statement; one style appends to a "
@@ -148,8 +291,18 @@ class InsertDMLState(DMLState):
 
     include_table_with_column_exprs = False
 
-    def __init__(self, statement, compiler, **kw):
+    def __init__(
+        self,
+        statement: Insert,
+        compiler: SQLCompiler,
+        disable_implicit_returning: bool = False,
+        **kw: Any,
+    ):
         self.statement = statement
+        self._primary_table = statement.table
+
+        if disable_implicit_returning:
+            self._supports_implicit_returning = False
 
         self.isinsert = True
         if statement._select_names:
@@ -159,6 +312,14 @@ class InsertDMLState(DMLState):
         if statement._multi_values:
             self._process_multi_values(statement)
 
+    @util.memoized_property
+    def _insert_col_keys(self) -> List[str]:
+        # this is also done in crud.py -> _key_getters_for_crud_column
+        return [
+            coercions.expect_as_key(roles.DMLColumnRole, col)
+            for col in self._dict_parameters or ()
+        ]
+
 
 @CompileState.plugin_for("default", "update")
 class UpdateDMLState(DMLState):
@@ -166,19 +327,23 @@ class UpdateDMLState(DMLState):
 
     include_table_with_column_exprs = False
 
-    def __init__(self, statement, compiler, **kw):
+    def __init__(self, statement: Update, compiler: SQLCompiler, **kw: Any):
         self.statement = statement
+
         self.isupdate = True
-        self._preserve_parameter_order = statement._preserve_parameter_order
         if statement._ordered_values is not None:
             self._process_ordered_values(statement)
         elif statement._values is not None:
             self._process_values(statement)
         elif statement._multi_values:
             self._process_multi_values(statement)
-        self._extra_froms = ef = self._make_extra_froms(statement)
-        self.is_multitable = mt = ef and self._dict_parameters
-        self.include_table_with_column_exprs = (
+        t, ef = self._make_extra_froms(statement)
+        self._primary_table = t
+        self._extra_froms = ef
+
+        self.is_multitable = mt = ef
+
+        self.include_table_with_column_exprs = bool(
             mt and compiler.render_table_with_column_in_update_from
         )
 
@@ -187,11 +352,16 @@ class UpdateDMLState(DMLState):
 class DeleteDMLState(DMLState):
     isdelete = True
 
-    def __init__(self, statement, compiler, **kw):
+    def __init__(self, statement: Delete, compiler: SQLCompiler, **kw: Any):
         self.statement = statement
 
         self.isdelete = True
-        self._extra_froms = self._make_extra_froms(statement)
+        t, ef = self._make_extra_froms(statement)
+        self._primary_table = t
+        self._extra_froms = ef
+
+
+SelfUpdateBase = typing.TypeVar("SelfUpdateBase", bound="UpdateBase")
 
 
 class UpdateBase(
@@ -200,96 +370,39 @@ class UpdateBase(
     HasCompileState,
     DialectKWArgs,
     HasPrefixes,
-    ReturnsRows,
-    Executable,
+    Generative,
+    ExecutableReturnsRows,
     ClauseElement,
 ):
     """Form the base for ``INSERT``, ``UPDATE``, and ``DELETE`` statements."""
 
     __visit_name__ = "update_base"
 
-    _execution_options = Executable._execution_options.union(
-        {"autocommit": True}
-    )
-    _hints = util.immutabledict()
+    _hints: util.immutabledict[
+        Tuple[_DMLTableElement, str], str
+    ] = util.EMPTY_DICT
     named_with_column = False
 
+    table: _DMLTableElement
+
     _return_defaults = False
-    _return_defaults_columns = None
-    _returning = ()
+    _return_defaults_columns: Optional[
+        Tuple[_ColumnsClauseElement, ...]
+    ] = None
+    _returning: Tuple[_ColumnsClauseElement, ...] = ()
 
     is_dml = True
 
-    @classmethod
-    def _constructor_20_deprecations(cls, fn_name, clsname, names):
-
-        param_to_method_lookup = dict(
-            whereclause=(
-                "The :paramref:`%(func)s.whereclause` parameter "
-                "will be removed "
-                "in SQLAlchemy 2.0.  Please refer to the "
-                ":meth:`%(classname)s.where` method."
-            ),
-            values=(
-                "The :paramref:`%(func)s.values` parameter will be removed "
-                "in SQLAlchemy 2.0.  Please refer to the "
-                ":meth:`%(classname)s.values` method."
-            ),
-            bind=(
-                "The :paramref:`%(func)s.bind` parameter will be removed in "
-                "SQLAlchemy 2.0.  Please use explicit connection execution."
-            ),
-            inline=(
-                "The :paramref:`%(func)s.inline` parameter will be "
-                "removed in "
-                "SQLAlchemy 2.0.  Please use the "
-                ":meth:`%(classname)s.inline` method."
-            ),
-            prefixes=(
-                "The :paramref:`%(func)s.prefixes parameter will be "
-                "removed in "
-                "SQLAlchemy 2.0.  Please use the "
-                ":meth:`%(classname)s.prefix_with` "
-                "method."
-            ),
-            return_defaults=(
-                "The :paramref:`%(func)s.return_defaults` parameter will be "
-                "removed in SQLAlchemy 2.0.  Please use the "
-                ":meth:`%(classname)s.return_defaults` method."
-            ),
-            returning=(
-                "The :paramref:`%(func)s.returning` parameter will be "
-                "removed in SQLAlchemy 2.0.  Please use the "
-                ":meth:`%(classname)s.returning`` method."
-            ),
-            preserve_parameter_order=(
-                "The :paramref:`%(func)s.preserve_parameter_order` parameter "
-                "will be removed in SQLAlchemy 2.0.   Use the "
-                ":meth:`%(classname)s.ordered_values` method with a list "
-                "of tuples. "
-            ),
-        )
-
-        return util.deprecated_params(
-            **{
-                name: (
-                    "2.0",
-                    param_to_method_lookup[name]
-                    % {
-                        "func": "_expression.%s" % fn_name,
-                        "classname": "_expression.%s" % clsname,
-                    },
-                )
-                for name in names
-            }
-        )
-
-    def _generate_fromclause_column_proxies(self, fromclause):
+    def _generate_fromclause_column_proxies(
+        self, fromclause: FromClause
+    ) -> None:
         fromclause._columns._populate_separate_keys(
-            col._make_proxy(fromclause) for col in self._returning
+            col._make_proxy(fromclause)
+            for col in self._all_selected_columns
+            if is_column_element(col)
         )
 
-    def params(self, *arg, **kw):
+    def params(self, *arg: Any, **kw: Any) -> NoReturn:
         """Set the parameters for the statement.
 
         This method raises ``NotImplementedError`` on the base class,
@@ -304,7 +417,9 @@ class UpdateBase(
         )
 
     @_generative
-    def with_dialect_options(self, **opt):
+    def with_dialect_options(
+        self: SelfUpdateBase, **opt: Any
+    ) -> SelfUpdateBase:
         """Add dialect options to this INSERT/UPDATE/DELETE object.
 
         e.g.::
@@ -317,30 +432,12 @@ class UpdateBase(
 
         """
         self._validate_dialect_kwargs(opt)
-
-    def _validate_dialect_kwargs_deprecated(self, dialect_kw):
-        util.warn_deprecated_20(
-            "Passing dialect keyword arguments directly to the "
-            "%s constructor is deprecated and will be removed in SQLAlchemy "
-            "2.0.  Please use the ``with_dialect_options()`` method."
-            % (self.__class__.__name__)
-        )
-        self._validate_dialect_kwargs(dialect_kw)
-
-    def bind(self):
-        """Return a 'bind' linked to this :class:`.UpdateBase`
-        or a :class:`_schema.Table` associated with it.
-
-        """
-        return self._bind or self.table.bind
-
-    def _set_bind(self, bind):
-        self._bind = bind
-
-    bind = property(bind, _set_bind)
+        return self
 
     @_generative
-    def returning(self, *cols):
+    def returning(
+        self, *cols: _ColumnsClauseArgument[Any], **__kw: Any
+    ) -> UpdateBase:
         r"""Add a :term:`RETURNING` or equivalent clause to this statement.
 
         e.g.:
@@ -409,7 +506,9 @@ class UpdateBase(
 
           :ref:`tutorial_insert_returning` - in the :ref:`unified_tutorial`
 
-        """  # noqa E501
+        """  # noqa: E501
+        if __kw:
+            raise _no_kw()
         if self._return_defaults:
             raise exc.InvalidRequestError(
                 "return_defaults() is already configured on this statement"
@@ -417,26 +516,42 @@ class UpdateBase(
         self._returning += tuple(
             coercions.expect(roles.ColumnsClauseRole, c) for c in cols
         )
+        return self
 
-    @property
-    def _all_selected_columns(self):
-        return self._returning
+    def corresponding_column(
+        self, column: KeyedColumnElement[Any], require_embedded: bool = False
+    ) -> Optional[ColumnElement[Any]]:
+        return self.exported_columns.corresponding_column(
+            column, require_embedded=require_embedded
+        )
 
-    @property
-    def exported_columns(self):
+    @util.ro_memoized_property
+    def _all_selected_columns(self) -> _SelectIterable:
+        return [c for c in _select_iterables(self._returning)]
+
+    @util.ro_memoized_property
+    def exported_columns(
+        self,
+    ) -> ReadOnlyColumnCollection[Optional[str], ColumnElement[Any]]:
         """Return the RETURNING columns as a column collection for this
         statement.
 
         .. versionadded:: 1.4
 
         """
-        # TODO: no coverage here
         return ColumnCollection(
-            (c.key, c) for c in self._all_selected_columns
-        ).as_immutable()
+            (c.key, c)
+            for c in self._all_selected_columns
+            if is_column_element(c)
+        ).as_readonly()
 
     @_generative
-    def with_hint(self, text, selectable=None, dialect_name="*"):
+    def with_hint(
+        self: SelfUpdateBase,
+        text: str,
+        selectable: Optional[_DMLTableArgument] = None,
+        dialect_name: str = "*",
+    ) -> SelfUpdateBase:
         """Add a table hint for a single table to this
         INSERT/UPDATE/DELETE statement.
 
@@ -468,8 +583,96 @@ class UpdateBase(
         """
         if selectable is None:
             selectable = self.table
-
+        else:
+            selectable = coercions.expect(roles.DMLTableRole, selectable)
         self._hints = self._hints.union({(selectable, dialect_name): text})
+        return self
+
+    @property
+    def entity_description(self) -> Dict[str, Any]:
+        """Return a :term:`plugin-enabled` description of the table and/or entity
+        which this DML construct is operating against.
+
+        This attribute is generally useful when using the ORM, as an
+        extended structure which includes information about mapped
+        entities is returned.  The section :ref:`queryguide_inspection`
+        contains more background.
+
+        For a Core statement, the structure returned by this accessor
+        is derived from the :attr:`.UpdateBase.table` attribute, and
+        refers to the :class:`.Table` being inserted, updated, or deleted::
+
+            >>> stmt = insert(user_table)
+            >>> stmt.entity_description
+            {
+                "name": "user_table",
+                "table": Table("user_table", ...)
+            }
+
+        .. versionadded:: 1.4.33
+
+        .. seealso::
+
+            :attr:`.UpdateBase.returning_column_descriptions`
+
+            :attr:`.Select.column_descriptions` - entity information for
+            a :func:`.select` construct
+
+            :ref:`queryguide_inspection` - ORM background
+
+        """
+        meth = DMLState.get_plugin_class(self).get_entity_description
+        return meth(self)
+
+    @property
+    def returning_column_descriptions(self) -> List[Dict[str, Any]]:
+        """Return a :term:`plugin-enabled` description of the columns
+        which this DML construct is RETURNING against, in other words
+        the expressions established as part of :meth:`.UpdateBase.returning`.
+
+        This attribute is generally useful when using the ORM, as an
+        extended structure which includes information about mapped
+        entities is returned.  The section :ref:`queryguide_inspection`
+        contains more background.
+
+        For a Core statement, the structure returned by this accessor is
+        derived from the same objects that are returned by the
+        :attr:`.UpdateBase.exported_columns` accessor::
+
+            >>> stmt = insert(user_table).returning(user_table.c.id, user_table.c.name)
+            >>> stmt.entity_description
+            [
+                {
+                    "name": "id",
+                    "type": Integer,
+                    "expr": Column("id", Integer(), table=<user>, ...)
+                },
+                {
+                    "name": "name",
+                    "type": String(),
+                    "expr": Column("name", String(), table=<user>, ...)
+                },
+            ]
+
+        .. versionadded:: 1.4.33
+
+        .. seealso::
+
+            :attr:`.UpdateBase.entity_description`
+
+            :attr:`.Select.column_descriptions` - entity information for
+            a :func:`.select` construct
+
+            :ref:`queryguide_inspection` - ORM background
+
+        """  # noqa: E501
+        meth = DMLState.get_plugin_class(
+            self
+        ).get_returning_column_descriptions
+        return meth(self)
+
+
+SelfValuesBase = typing.TypeVar("SelfValuesBase", bound="ValuesBase")
 
 
 class ValuesBase(UpdateBase):
@@ -479,25 +682,33 @@ class ValuesBase(UpdateBase):
     __visit_name__ = "values_base"
 
     _supports_multi_parameters = False
-    _preserve_parameter_order = False
-    select = None
-    _post_values_clause = None
 
-    _values = None
-    _multi_values = ()
-    _ordered_values = None
-    _select_names = None
+    select: Optional[Select[Any]] = None
+    """SELECT statement for INSERT .. FROM SELECT"""
 
-    _returning = ()
+    _post_values_clause: Optional[ClauseElement] = None
+    """used by extensions to Insert etc. to add additional syntacitcal
+    constructs, e.g. ON CONFLICT etc."""
 
-    def __init__(self, table, values, prefixes):
+    _values: Optional[util.immutabledict[_DMLColumnElement, Any]] = None
+    _multi_values: Tuple[
+        Union[
+            Sequence[Dict[_DMLColumnElement, Any]],
+            Sequence[Sequence[Any]],
+        ],
+        ...,
+    ] = ()
+
+    _ordered_values: Optional[List[Tuple[_DMLColumnElement, Any]]] = None
+
+    _select_names: Optional[List[str]] = None
+    _inline: bool = False
+    _returning: Tuple[_ColumnsClauseElement, ...] = ()
+
+    def __init__(self, table: _DMLTableArgument):
         self.table = coercions.expect(
             roles.DMLTableRole, table, apply_propagate_attrs=self
         )
-        if values is not None:
-            self.values.non_generative(self, values)
-        if prefixes:
-            self._setup_prefixes(prefixes)
 
     @_generative
     @_exclusive_against(
@@ -509,7 +720,14 @@ class ValuesBase(UpdateBase):
             "values present",
         },
     )
-    def values(self, *args, **kwargs):
+    def values(
+        self: SelfValuesBase,
+        *args: Union[
+            Dict[_DMLColumnArgument, Any],
+            Sequence[Any],
+        ],
+        **kwargs: Any,
+    ) -> SelfValuesBase:
         r"""Specify a fixed VALUES clause for an INSERT statement, or the SET
         clause for an UPDATE.
 
@@ -590,7 +808,7 @@ class ValuesBase(UpdateBase):
 
            .. seealso::
 
-               :ref:`execute_multiple` - an introduction to
+               :ref:`tutorial_multiple_parameters` - an introduction to
                the traditional Core method of multiple parameter set
                invocation for INSERTs and other statements.
 
@@ -640,28 +858,23 @@ class ValuesBase(UpdateBase):
                     "dictionaries/tuples is accepted positionally."
                 )
 
-            elif not self._preserve_parameter_order and isinstance(
-                arg, collections_abc.Sequence
-            ):
-
+            elif isinstance(arg, collections_abc.Sequence):
                 if arg and isinstance(arg[0], (list, dict, tuple)):
                     self._multi_values += (arg,)
-                    return
+                    return self
+
+                if TYPE_CHECKING:
+                    # crud.py raises during compilation if this is not the
+                    # case
+                    assert isinstance(self, Insert)
 
                 # tuple values
                 arg = {c.key: value for c, value in zip(self.table.c, arg)}
-            elif self._preserve_parameter_order and not isinstance(
-                arg, collections_abc.Sequence
-            ):
-                raise ValueError(
-                    "When preserve_parameter_order is True, "
-                    "values() only accepts a list of 2-tuples"
-                )
 
         else:
             # kwarg path.  this is the most common path for non-multi-params
             # so this is fairly quick.
-            arg = kwargs
+            arg = cast("Dict[_DMLColumnArgument, Any]", kwargs)
             if args:
                 raise exc.ArgumentError(
                     "Only a single dictionary/tuple or list of "
@@ -674,34 +887,13 @@ class ValuesBase(UpdateBase):
         # crud.py now intercepts bound parameters with unique=True from here
         # and ensures they get the "crud"-style name when rendered.
 
-        if self._preserve_parameter_order:
-            arg = [
-                (
-                    coercions.expect(roles.DMLColumnRole, k),
-                    coercions.expect(
-                        roles.ExpressionElementRole,
-                        v,
-                        type_=NullType(),
-                        is_crud=True,
-                    ),
-                )
-                for k, v in arg
-            ]
-            self._ordered_values = arg
+        kv_generator = DMLState.get_plugin_class(self)._get_crud_kv_pairs
+        coerced_arg = {k: v for k, v in kv_generator(self, arg.items())}
+        if self._values:
+            self._values = self._values.union(coerced_arg)
         else:
-            arg = {
-                coercions.expect(roles.DMLColumnRole, k): coercions.expect(
-                    roles.ExpressionElementRole,
-                    v,
-                    type_=NullType(),
-                    is_crud=True,
-                )
-                for k, v in arg.items()
-            }
-            if self._values:
-                self._values = self._values.union(arg)
-            else:
-                self._values = util.immutabledict(arg)
+            self._values = util.immutabledict(coerced_arg)
+        return self
 
     @_generative
     @_exclusive_against(
@@ -711,7 +903,9 @@ class ValuesBase(UpdateBase):
         },
         defaults={"_returning": _returning},
     )
-    def return_defaults(self, *cols):
+    def return_defaults(
+        self: SelfValuesBase, *cols: _DMLColumnArgument
+    ) -> SelfValuesBase:
         """Make use of a :term:`RETURNING` clause for the purpose
         of fetching server-side expressions and defaults.
 
@@ -773,7 +967,7 @@ class ValuesBase(UpdateBase):
 
         :meth:`.ValuesBase.return_defaults` is used by the ORM to provide
         an efficient implementation for the ``eager_defaults`` feature of
-        :func:`.mapper`.
+        :class:`_orm.Mapper`.
 
         :param cols: optional list of column key names or
          :class:`_schema.Column`
@@ -796,7 +990,13 @@ class ValuesBase(UpdateBase):
 
         """
         self._return_defaults = True
-        self._return_defaults_columns = cols
+        self._return_defaults_columns = tuple(
+            coercions.expect(roles.ColumnsClauseRole, c) for c in cols
+        )
+        return self
+
+
+SelfInsert = typing.TypeVar("SelfInsert", bound="Insert")
 
 
 class Insert(ValuesBase):
@@ -815,6 +1015,8 @@ class Insert(ValuesBase):
     include_insert_from_select_defaults = False
 
     is_insert = True
+
+    table: TableClause
 
     _traverse_internals = (
         [
@@ -839,110 +1041,11 @@ class Insert(ValuesBase):
         + HasCTE._has_ctes_traverse_internals
     )
 
-    @ValuesBase._constructor_20_deprecations(
-        "insert",
-        "Insert",
-        [
-            "values",
-            "inline",
-            "bind",
-            "prefixes",
-            "returning",
-            "return_defaults",
-        ],
-    )
-    def __init__(
-        self,
-        table,
-        values=None,
-        inline=False,
-        bind=None,
-        prefixes=None,
-        returning=None,
-        return_defaults=False,
-        **dialect_kw
-    ):
-        """Construct an :class:`_expression.Insert` object.
-
-        E.g.::
-
-            from sqlalchemy import insert
-
-            stmt = (
-                insert(user_table).
-                values(name='username', fullname='Full Username')
-            )
-
-        Similar functionality is available via the
-        :meth:`_expression.TableClause.insert` method on
-        :class:`_schema.Table`.
-
-        .. seealso::
-
-            :ref:`coretutorial_insert_expressions` - in the
-            :ref:`1.x tutorial <sqlexpression_toplevel>`
-
-            :ref:`tutorial_core_insert` - in the :ref:`unified_tutorial`
-
-
-        :param table: :class:`_expression.TableClause`
-         which is the subject of the
-         insert.
-
-        :param values: collection of values to be inserted; see
-         :meth:`_expression.Insert.values`
-         for a description of allowed formats here.
-         Can be omitted entirely; a :class:`_expression.Insert` construct
-         will also dynamically render the VALUES clause at execution time
-         based on the parameters passed to :meth:`_engine.Connection.execute`.
-
-        :param inline: if True, no attempt will be made to retrieve the
-         SQL-generated default values to be provided within the statement;
-         in particular,
-         this allows SQL expressions to be rendered 'inline' within the
-         statement without the need to pre-execute them beforehand; for
-         backends that support "returning", this turns off the "implicit
-         returning" feature for the statement.
-
-        If both :paramref:`_expression.Insert.values` and compile-time bind
-        parameters are present, the compile-time bind parameters override the
-        information specified within :paramref:`_expression.Insert.values` on a
-        per-key basis.
-
-        The keys within :paramref:`_expression.Insert.values` can be either
-        :class:`~sqlalchemy.schema.Column` objects or their string
-        identifiers. Each key may reference one of:
-
-        * a literal data value (i.e. string, number, etc.);
-        * a Column object;
-        * a SELECT statement.
-
-        If a ``SELECT`` statement is specified which references this
-        ``INSERT`` statement's table, the statement will be correlated
-        against the ``INSERT`` statement.
-
-        .. seealso::
-
-            :ref:`coretutorial_insert_expressions` - SQL Expression Tutorial
-
-            :ref:`inserts_and_updates` - SQL Expression Tutorial
-
-        """
-        super(Insert, self).__init__(table, values, prefixes)
-        self._bind = bind
-        self._inline = inline
-        if returning:
-            self._returning = returning
-        if dialect_kw:
-            self._validate_dialect_kwargs_deprecated(dialect_kw)
-
-        if return_defaults:
-            self._return_defaults = True
-            if not isinstance(return_defaults, bool):
-                self._return_defaults_columns = return_defaults
+    def __init__(self, table: _DMLTableArgument):
+        super(Insert, self).__init__(table)
 
     @_generative
-    def inline(self):
+    def inline(self: SelfInsert) -> SelfInsert:
         """Make this :class:`_expression.Insert` construct "inline" .
 
         When set, no attempt will be made to retrieve the
@@ -960,9 +1063,15 @@ class Insert(ValuesBase):
 
         """
         self._inline = True
+        return self
 
     @_generative
-    def from_select(self, names, select, include_defaults=True):
+    def from_select(
+        self: SelfInsert,
+        names: List[str],
+        select: Selectable,
+        include_defaults: bool = True,
+    ) -> SelfInsert:
         """Return a new :class:`_expression.Insert` construct which represents
         an ``INSERT...FROM SELECT`` statement.
 
@@ -1021,13 +1130,128 @@ class Insert(ValuesBase):
         self._inline = True
         self.include_insert_from_select_defaults = include_defaults
         self.select = coercions.expect(roles.DMLSelectRole, select)
+        return self
+
+    if TYPE_CHECKING:
+
+        # START OVERLOADED FUNCTIONS self.returning ReturningInsert 1-8
+
+        # code within this block is **programmatically,
+        # statically generated** by tools/generate_tuple_map_overloads.py
+
+        @overload
+        def returning(self, __ent0: _TCCA[_T0]) -> ReturningInsert[Tuple[_T0]]:
+            ...
+
+        @overload
+        def returning(
+            self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1]
+        ) -> ReturningInsert[Tuple[_T0, _T1]]:
+            ...
+
+        @overload
+        def returning(
+            self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1], __ent2: _TCCA[_T2]
+        ) -> ReturningInsert[Tuple[_T0, _T1, _T2]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+        ) -> ReturningInsert[Tuple[_T0, _T1, _T2, _T3]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+        ) -> ReturningInsert[Tuple[_T0, _T1, _T2, _T3, _T4]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+        ) -> ReturningInsert[Tuple[_T0, _T1, _T2, _T3, _T4, _T5]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+            __ent6: _TCCA[_T6],
+        ) -> ReturningInsert[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+            __ent6: _TCCA[_T6],
+            __ent7: _TCCA[_T7],
+        ) -> ReturningInsert[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6, _T7]]:
+            ...
+
+        # END OVERLOADED FUNCTIONS self.returning
+
+        @overload
+        def returning(
+            self, *cols: _ColumnsClauseArgument[Any], **__kw: Any
+        ) -> ReturningInsert[Any]:
+            ...
+
+        def returning(
+            self, *cols: _ColumnsClauseArgument[Any], **__kw: Any
+        ) -> ReturningInsert[Any]:
+            ...
 
 
-class DMLWhereBase(object):
-    _where_criteria = ()
+class ReturningInsert(Insert, TypedReturnsRows[_TP]):
+    """Typing-only class that establishes a generic type form of
+    :class:`.Insert` which tracks returned column types.
+
+    This datatype is delivered when calling the
+    :meth:`.Insert.returning` method.
+
+    .. versionadded:: 2.0
+
+    """
+
+
+SelfDMLWhereBase = typing.TypeVar("SelfDMLWhereBase", bound="DMLWhereBase")
+
+
+class DMLWhereBase:
+    table: _DMLTableElement
+    _where_criteria: Tuple[ColumnElement[Any], ...] = ()
 
     @_generative
-    def where(self, *whereclause):
+    def where(
+        self: SelfDMLWhereBase, *whereclause: _ColumnExpressionArgument[bool]
+    ) -> SelfDMLWhereBase:
         """Return a new construct with the given expression(s) added to
         its WHERE clause, joined to the existing clause via AND, if any.
 
@@ -1040,16 +1264,6 @@ class DMLWhereBase(object):
 
         .. seealso::
 
-            **1.x Tutorial Examples**
-
-            :ref:`tutorial_1x_correlated_updates`
-
-            :ref:`multi_table_updates`
-
-            :ref:`multi_table_deletes`
-
-            **2.0 Tutorial Examples**
-
             :ref:`tutorial_correlated_updates`
 
             :ref:`tutorial_update_from`
@@ -1059,10 +1273,15 @@ class DMLWhereBase(object):
         """
 
         for criterion in whereclause:
-            where_criteria = coercions.expect(roles.WhereHavingRole, criterion)
+            where_criteria: ColumnElement[Any] = coercions.expect(
+                roles.WhereHavingRole, criterion
+            )
             self._where_criteria += (where_criteria,)
+        return self
 
-    def filter(self, *criteria):
+    def filter(
+        self: SelfDMLWhereBase, *criteria: roles.ExpressionElementRole[Any]
+    ) -> SelfDMLWhereBase:
         """A synonym for the :meth:`_dml.DMLWhereBase.where` method.
 
         .. versionadded:: 1.4
@@ -1071,10 +1290,10 @@ class DMLWhereBase(object):
 
         return self.where(*criteria)
 
-    def _filter_by_zero(self):
+    def _filter_by_zero(self) -> _DMLTableElement:
         return self.table
 
-    def filter_by(self, **kwargs):
+    def filter_by(self: SelfDMLWhereBase, **kwargs: Any) -> SelfDMLWhereBase:
         r"""apply the given filtering criterion as a WHERE clause
         to this select.
 
@@ -1088,7 +1307,7 @@ class DMLWhereBase(object):
         return self.filter(*clauses)
 
     @property
-    def whereclause(self):
+    def whereclause(self) -> Optional[ColumnElement[Any]]:
         """Return the completed WHERE clause for this :class:`.DMLWhereBase`
         statement.
 
@@ -1103,6 +1322,9 @@ class DMLWhereBase(object):
         return BooleanClauseList._construct_for_whereclause(
             self._where_criteria
         )
+
+
+SelfUpdate = typing.TypeVar("SelfUpdate", bound="Update")
 
 
 class Update(DMLWhereBase, ValuesBase):
@@ -1138,157 +1360,13 @@ class Update(DMLWhereBase, ValuesBase):
         + HasCTE._has_ctes_traverse_internals
     )
 
-    @ValuesBase._constructor_20_deprecations(
-        "update",
-        "Update",
-        [
-            "whereclause",
-            "values",
-            "inline",
-            "bind",
-            "prefixes",
-            "returning",
-            "return_defaults",
-            "preserve_parameter_order",
-        ],
-    )
-    def __init__(
-        self,
-        table,
-        whereclause=None,
-        values=None,
-        inline=False,
-        bind=None,
-        prefixes=None,
-        returning=None,
-        return_defaults=False,
-        preserve_parameter_order=False,
-        **dialect_kw
-    ):
-        r"""Construct an :class:`_expression.Update` object.
-
-        E.g.::
-
-            from sqlalchemy import update
-
-            stmt = (
-                update(user_table).
-                where(user_table.c.id == 5).
-                values(name='user #5')
-            )
-
-        Similar functionality is available via the
-        :meth:`_expression.TableClause.update` method on
-        :class:`_schema.Table`.
-
-        .. seealso::
-
-            :ref:`inserts_and_updates` - in the
-            :ref:`1.x tutorial <sqlexpression_toplevel>`
-
-            :ref:`tutorial_core_update_delete` - in the :ref:`unified_tutorial`
-
-
-
-        :param table: A :class:`_schema.Table`
-         object representing the database
-         table to be updated.
-
-        :param whereclause: Optional SQL expression describing the ``WHERE``
-         condition of the ``UPDATE`` statement; is equivalent to using the
-         more modern :meth:`~Update.where()` method to specify the ``WHERE``
-         clause.
-
-        :param values:
-          Optional dictionary which specifies the ``SET`` conditions of the
-          ``UPDATE``.  If left as ``None``, the ``SET``
-          conditions are determined from those parameters passed to the
-          statement during the execution and/or compilation of the
-          statement.   When compiled standalone without any parameters,
-          the ``SET`` clause generates for all columns.
-
-          Modern applications may prefer to use the generative
-          :meth:`_expression.Update.values` method to set the values of the
-          UPDATE statement.
-
-        :param inline:
-          if True, SQL defaults present on :class:`_schema.Column` objects via
-          the ``default`` keyword will be compiled 'inline' into the statement
-          and not pre-executed.  This means that their values will not
-          be available in the dictionary returned from
-          :meth:`_engine.CursorResult.last_updated_params`.
-
-        :param preserve_parameter_order: if True, the update statement is
-          expected to receive parameters **only** via the
-          :meth:`_expression.Update.values` method,
-          and they must be passed as a Python
-          ``list`` of 2-tuples. The rendered UPDATE statement will emit the SET
-          clause for each referenced column maintaining this order.
-
-          .. versionadded:: 1.0.10
-
-          .. seealso::
-
-            :ref:`updates_order_parameters` - illustrates the
-            :meth:`_expression.Update.ordered_values` method.
-
-        If both ``values`` and compile-time bind parameters are present, the
-        compile-time bind parameters override the information specified
-        within ``values`` on a per-key basis.
-
-        The keys within ``values`` can be either :class:`_schema.Column`
-        objects or their string identifiers (specifically the "key" of the
-        :class:`_schema.Column`, normally but not necessarily equivalent to
-        its "name").  Normally, the
-        :class:`_schema.Column` objects used here are expected to be
-        part of the target :class:`_schema.Table` that is the table
-        to be updated.  However when using MySQL, a multiple-table
-        UPDATE statement can refer to columns from any of
-        the tables referred to in the WHERE clause.
-
-        The values referred to in ``values`` are typically:
-
-        * a literal data value (i.e. string, number, etc.)
-        * a SQL expression, such as a related :class:`_schema.Column`,
-          a scalar-returning :func:`_expression.select` construct,
-          etc.
-
-        When combining :func:`_expression.select` constructs within the
-        values clause of an :func:`_expression.update`
-        construct, the subquery represented
-        by the :func:`_expression.select` should be *correlated* to the
-        parent table, that is, providing criterion which links the table inside
-        the subquery to the outer table being updated::
-
-            users.update().values(
-                    name=select(addresses.c.email_address).\
-                            where(addresses.c.user_id==users.c.id).\
-                            scalar_subquery()
-                )
-
-        .. seealso::
-
-            :ref:`inserts_and_updates` - SQL Expression
-            Language Tutorial
-
-
-        """
-        self._preserve_parameter_order = preserve_parameter_order
-        super(Update, self).__init__(table, values, prefixes)
-        self._bind = bind
-        if returning:
-            self._returning = returning
-        if whereclause is not None:
-            self._where_criteria += (
-                coercions.expect(roles.WhereHavingRole, whereclause),
-            )
-        self._inline = inline
-        if dialect_kw:
-            self._validate_dialect_kwargs_deprecated(dialect_kw)
-        self._return_defaults = return_defaults
+    def __init__(self, table: _DMLTableArgument):
+        super(Update, self).__init__(table)
 
     @_generative
-    def ordered_values(self, *args):
+    def ordered_values(
+        self: SelfUpdate, *args: Tuple[_DMLColumnArgument, Any]
+    ) -> SelfUpdate:
         """Specify the VALUES clause of this UPDATE statement with an explicit
         parameter ordering that will be maintained in the SET clause of the
         resulting UPDATE statement.
@@ -1301,7 +1379,7 @@ class Update(DMLWhereBase, ValuesBase):
 
         .. seealso::
 
-           :ref:`updates_order_parameters` - full example of the
+           :ref:`tutorial_parameter_ordered_updates` - full example of the
            :meth:`_expression.Update.ordered_values` method.
 
         .. versionchanged:: 1.4 The :meth:`_expression.Update.ordered_values`
@@ -1319,22 +1397,13 @@ class Update(DMLWhereBase, ValuesBase):
             raise exc.ArgumentError(
                 "This statement already has ordered values present"
             )
-        arg = [
-            (
-                coercions.expect(roles.DMLColumnRole, k),
-                coercions.expect(
-                    roles.ExpressionElementRole,
-                    v,
-                    type_=NullType(),
-                    is_crud=True,
-                ),
-            )
-            for k, v in args
-        ]
-        self._ordered_values = arg
+
+        kv_generator = DMLState.get_plugin_class(self)._get_crud_kv_pairs
+        self._ordered_values = kv_generator(self, args)
+        return self
 
     @_generative
-    def inline(self):
+    def inline(self: SelfUpdate) -> SelfUpdate:
         """Make this :class:`_expression.Update` construct "inline" .
 
         When set, SQL defaults present on :class:`_schema.Column`
@@ -1350,6 +1419,117 @@ class Update(DMLWhereBase, ValuesBase):
 
         """
         self._inline = True
+        return self
+
+    if TYPE_CHECKING:
+        # START OVERLOADED FUNCTIONS self.returning ReturningUpdate 1-8
+
+        # code within this block is **programmatically,
+        # statically generated** by tools/generate_tuple_map_overloads.py
+
+        @overload
+        def returning(self, __ent0: _TCCA[_T0]) -> ReturningUpdate[Tuple[_T0]]:
+            ...
+
+        @overload
+        def returning(
+            self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1]
+        ) -> ReturningUpdate[Tuple[_T0, _T1]]:
+            ...
+
+        @overload
+        def returning(
+            self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1], __ent2: _TCCA[_T2]
+        ) -> ReturningUpdate[Tuple[_T0, _T1, _T2]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+        ) -> ReturningUpdate[Tuple[_T0, _T1, _T2, _T3]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+        ) -> ReturningUpdate[Tuple[_T0, _T1, _T2, _T3, _T4]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+        ) -> ReturningUpdate[Tuple[_T0, _T1, _T2, _T3, _T4, _T5]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+            __ent6: _TCCA[_T6],
+        ) -> ReturningUpdate[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+            __ent6: _TCCA[_T6],
+            __ent7: _TCCA[_T7],
+        ) -> ReturningUpdate[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6, _T7]]:
+            ...
+
+        # END OVERLOADED FUNCTIONS self.returning
+
+        @overload
+        def returning(
+            self, *cols: _ColumnsClauseArgument[Any], **__kw: Any
+        ) -> ReturningUpdate[Any]:
+            ...
+
+        def returning(
+            self, *cols: _ColumnsClauseArgument[Any], **__kw: Any
+        ) -> ReturningUpdate[Any]:
+            ...
+
+
+class ReturningUpdate(Update, TypedReturnsRows[_TP]):
+    """Typing-only class that establishes a generic type form of
+    :class:`.Update` which tracks returned column types.
+
+    This datatype is delivered when calling the
+    :meth:`.Update.returning` method.
+
+    .. versionadded:: 2.0
+
+    """
+
+
+SelfDelete = typing.TypeVar("SelfDelete", bound="Delete")
 
 
 class Delete(DMLWhereBase, UpdateBase):
@@ -1377,69 +1557,115 @@ class Delete(DMLWhereBase, UpdateBase):
         + HasCTE._has_ctes_traverse_internals
     )
 
-    @ValuesBase._constructor_20_deprecations(
-        "delete",
-        "Delete",
-        ["whereclause", "values", "bind", "prefixes", "returning"],
-    )
-    def __init__(
-        self,
-        table,
-        whereclause=None,
-        bind=None,
-        returning=None,
-        prefixes=None,
-        **dialect_kw
-    ):
-        r"""Construct :class:`_expression.Delete` object.
-
-        E.g.::
-
-            from sqlalchemy import delete
-
-            stmt = (
-                delete(user_table).
-                where(user_table.c.id == 5)
-            )
-
-        Similar functionality is available via the
-        :meth:`_expression.TableClause.delete` method on
-        :class:`_schema.Table`.
-
-        .. seealso::
-
-            :ref:`inserts_and_updates` - in the
-            :ref:`1.x tutorial <sqlexpression_toplevel>`
-
-            :ref:`tutorial_core_update_delete` - in the :ref:`unified_tutorial`
-
-
-        :param table: The table to delete rows from.
-
-        :param whereclause: Optional SQL expression describing the ``WHERE``
-         condition of the ``DELETE`` statement; is equivalent to using the
-         more modern :meth:`~Delete.where()` method to specify the ``WHERE``
-         clause.
-
-        .. seealso::
-
-            :ref:`deletes` - SQL Expression Tutorial
-
-        """
-        self._bind = bind
+    def __init__(self, table: _DMLTableArgument):
         self.table = coercions.expect(
             roles.DMLTableRole, table, apply_propagate_attrs=self
         )
-        if returning:
-            self._returning = returning
 
-        if prefixes:
-            self._setup_prefixes(prefixes)
+    if TYPE_CHECKING:
 
-        if whereclause is not None:
-            self._where_criteria += (
-                coercions.expect(roles.WhereHavingRole, whereclause),
-            )
+        # START OVERLOADED FUNCTIONS self.returning ReturningDelete 1-8
 
-        if dialect_kw:
-            self._validate_dialect_kwargs_deprecated(dialect_kw)
+        # code within this block is **programmatically,
+        # statically generated** by tools/generate_tuple_map_overloads.py
+
+        @overload
+        def returning(self, __ent0: _TCCA[_T0]) -> ReturningDelete[Tuple[_T0]]:
+            ...
+
+        @overload
+        def returning(
+            self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1]
+        ) -> ReturningDelete[Tuple[_T0, _T1]]:
+            ...
+
+        @overload
+        def returning(
+            self, __ent0: _TCCA[_T0], __ent1: _TCCA[_T1], __ent2: _TCCA[_T2]
+        ) -> ReturningDelete[Tuple[_T0, _T1, _T2]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+        ) -> ReturningDelete[Tuple[_T0, _T1, _T2, _T3]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+        ) -> ReturningDelete[Tuple[_T0, _T1, _T2, _T3, _T4]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+        ) -> ReturningDelete[Tuple[_T0, _T1, _T2, _T3, _T4, _T5]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+            __ent6: _TCCA[_T6],
+        ) -> ReturningDelete[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6]]:
+            ...
+
+        @overload
+        def returning(
+            self,
+            __ent0: _TCCA[_T0],
+            __ent1: _TCCA[_T1],
+            __ent2: _TCCA[_T2],
+            __ent3: _TCCA[_T3],
+            __ent4: _TCCA[_T4],
+            __ent5: _TCCA[_T5],
+            __ent6: _TCCA[_T6],
+            __ent7: _TCCA[_T7],
+        ) -> ReturningDelete[Tuple[_T0, _T1, _T2, _T3, _T4, _T5, _T6, _T7]]:
+            ...
+
+        # END OVERLOADED FUNCTIONS self.returning
+
+        @overload
+        def returning(
+            self, *cols: _ColumnsClauseArgument[Any], **__kw: Any
+        ) -> ReturningDelete[Any]:
+            ...
+
+        def returning(
+            self, *cols: _ColumnsClauseArgument[Any], **__kw: Any
+        ) -> ReturningDelete[Any]:
+            ...
+
+
+class ReturningDelete(Update, TypedReturnsRows[_TP]):
+    """Typing-only class that establishes a generic type form of
+    :class:`.Delete` which tracks returned column types.
+
+    This datatype is delivered when calling the
+    :meth:`.Delete.returning` method.
+
+    .. versionadded:: 2.0
+
+    """

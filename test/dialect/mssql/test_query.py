@@ -1,4 +1,6 @@
 # -*- encoding: utf-8
+import decimal
+
 from sqlalchemy import and_
 from sqlalchemy import Column
 from sqlalchemy import DDL
@@ -9,13 +11,13 @@ from sqlalchemy import func
 from sqlalchemy import Identity
 from sqlalchemy import Integer
 from sqlalchemy import literal
+from sqlalchemy import Numeric
 from sqlalchemy import or_
 from sqlalchemy import PrimaryKeyConstraint
 from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy import testing
-from sqlalchemy import util
 from sqlalchemy.dialects.mssql import base as mssql
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import config
@@ -24,7 +26,6 @@ from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing.assertsql import CursorSQL
 from sqlalchemy.testing.assertsql import DialectSQL
-from sqlalchemy.util import ue
 
 
 class IdentityInsertTest(fixtures.TablesTest, AssertsCompiledSQL):
@@ -40,6 +41,13 @@ class IdentityInsertTest(fixtures.TablesTest, AssertsCompiledSQL):
             Column("id", Integer),
             Column("description", String(50)),
             PrimaryKeyConstraint("id", name="PK_cattable"),
+        )
+        Table(
+            "numeric_identity",
+            metadata,
+            Column("id", Numeric(18, 0), autoincrement=True),
+            Column("description", String(50)),
+            PrimaryKeyConstraint("id", name="PK_numeric_identity"),
         )
 
     def test_compiled(self):
@@ -62,6 +70,13 @@ class IdentityInsertTest(fixtures.TablesTest, AssertsCompiledSQL):
         eq_(result.inserted_primary_key, (10,))
         lastcat = conn.execute(cattable.select().order_by(desc(cattable.c.id)))
         eq_((10, "PHP"), lastcat.first())
+
+        numeric_identity = self.tables.numeric_identity
+        # for some reason, T-SQL does not like .values(), but this works
+        result = conn.execute(
+            numeric_identity.insert(), dict(description="T-SQL")
+        )
+        eq_(result.inserted_primary_key, (decimal.Decimal("1"),))
 
     def test_executemany(self, connection):
         conn = connection
@@ -138,39 +153,6 @@ class IdentityInsertTest(fixtures.TablesTest, AssertsCompiledSQL):
         conn.execute(t.insert().values({"id": 1, "description": "descrip"}))
 
         eq_(conn.execute(select(t)).first(), (1, "descrip"))
-
-
-class QueryUnicodeTest(fixtures.TestBase):
-
-    __only_on__ = "mssql"
-    __backend__ = True
-
-    @testing.requires.mssql_freetds
-    @testing.requires.python2
-    @testing.provide_metadata
-    def test_convert_unicode(self, connection):
-        meta = self.metadata
-        t1 = Table(
-            "unitest_table",
-            meta,
-            Column("id", Integer, primary_key=True),
-            Column("descr", mssql.MSText()),
-        )
-        meta.create_all(connection)
-        connection.execute(
-            ue("insert into unitest_table values ('abc \xc3\xa9 def')").encode(
-                "UTF-8"
-            )
-        )
-        r = connection.execute(t1.select()).first()
-        assert isinstance(
-            r[1], util.text_type
-        ), "%s is %s instead of unicode, working on %s" % (
-            r[1],
-            type(r[1]),
-            meta.bind,
-        )
-        eq_(r[1], util.ue("abc \xc3\xa9 def"))
 
 
 class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
@@ -254,6 +236,21 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
         eq_(r.inserted_primary_key, (200,))
         r = connection.execute(t1.insert(), dict(descr="hello"))
         eq_(r.inserted_primary_key, (100,))
+
+    def test_compiler_symbol_conflict(self, connection, metadata):
+        t = Table("t", metadata, Column("POSTCOMPILE_DATA", String(50)))
+
+        t.create(connection)
+
+        connection.execute(t.insert().values(POSTCOMPILE_DATA="some data"))
+        eq_(
+            connection.scalar(
+                select(t.c.POSTCOMPILE_DATA).where(
+                    t.c.POSTCOMPILE_DATA.in_(["some data", "some other data"])
+                )
+            ),
+            "some data",
+        )
 
     @testing.provide_metadata
     def _test_disable_scope_identity(self):
@@ -393,7 +390,7 @@ class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
         eq_(connection.scalar(table.select()), 7)
 
 
-class Foo(object):
+class Foo:
     def __init__(self, **kw):
         for k in kw:
             setattr(self, k, kw[k])

@@ -1,9 +1,10 @@
 # ext/mutable.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
 
 r"""Provide support for tracking of in-place changes to scalar values,
 which are propagated into ORM change events on owning parent objects.
@@ -113,7 +114,7 @@ mapping against the ``my_data`` table::
 
     from sqlalchemy import mapper
 
-    class MyDataClass(object):
+    class MyDataClass:
         pass
 
     # associates mutation listeners with MyDataClass.data
@@ -219,7 +220,7 @@ from within the mutable extension::
         data = Column(MutableDict.as_mutable(JSONEncodedDict))
 
     @event.listens_for(MyDataClass.data, "modified")
-    def modified_json(instance):
+    def modified_json(instance, initiator):
         print("json value modified:", instance.data)
 
 .. _mutable_composites:
@@ -235,19 +236,19 @@ a geometric "point", and is introduced in :ref:`mapper_composite`.
 As is the case with :class:`.Mutable`, the user-defined composite class
 subclasses :class:`.MutableComposite` as a mixin, and detects and delivers
 change events to its parents via the :meth:`.MutableComposite.changed` method.
-In the case of a composite class, the detection is usually via the usage of
-Python descriptors (i.e. ``@property``), or alternatively via the special
-Python method ``__setattr__()``. Below we expand upon the ``Point`` class
-introduced in :ref:`mapper_composite` to subclass :class:`.MutableComposite`
-and to also route attribute set events via ``__setattr__`` to the
-:meth:`.MutableComposite.changed` method::
+In the case of a composite class, the detection is usually via the usage of the
+special Python method ``__setattr__()``. In the example below, we expand upon the ``Point``
+class introduced in :ref:`mapper_composite` to include
+:class:`.MutableComposite` in its bases and to route attribute set events via
+``__setattr__`` to the :meth:`.MutableComposite.changed` method::
 
+    import dataclasses
     from sqlalchemy.ext.mutable import MutableComposite
 
+    @dataclasses.dataclass
     class Point(MutableComposite):
-        def __init__(self, x, y):
-            self.x = x
-            self.y = y
+        x: int
+        y: int
 
         def __setattr__(self, key, value):
             "Intercept set events"
@@ -258,55 +259,52 @@ and to also route attribute set events via ``__setattr__`` to the
             # alert all parents to the change
             self.changed()
 
-        def __composite_values__(self):
-            return self.x, self.y
 
-        def __eq__(self, other):
-            return isinstance(other, Point) and \
-                other.x == self.x and \
-                other.y == self.y
-
-        def __ne__(self, other):
-            return not self.__eq__(other)
-
-The :class:`.MutableComposite` class uses a Python metaclass to automatically
-establish listeners for any usage of :func:`_orm.composite` that specifies our
-``Point`` type. Below, when ``Point`` is mapped to the ``Vertex`` class,
-listeners are established which will route change events from ``Point``
+The :class:`.MutableComposite` class makes use of class mapping events to
+automatically establish listeners for any usage of :func:`_orm.composite` that
+specifies our ``Point`` type. Below, when ``Point`` is mapped to the ``Vertex``
+class, listeners are established which will route change events from ``Point``
 objects to each of the ``Vertex.start`` and ``Vertex.end`` attributes::
 
-    from sqlalchemy.orm import composite, mapper
-    from sqlalchemy import Table, Column
+    from sqlalchemy.orm import DeclarativeBase, Mapped
+    from sqlalchemy.orm import composite, mapped_column
 
-    vertices = Table('vertices', metadata,
-        Column('id', Integer, primary_key=True),
-        Column('x1', Integer),
-        Column('y1', Integer),
-        Column('x2', Integer),
-        Column('y2', Integer),
-        )
-
-    class Vertex(object):
+    class Base(DeclarativeBase):
         pass
 
-    mapper(Vertex, vertices, properties={
-        'start': composite(Point, vertices.c.x1, vertices.c.y1),
-        'end': composite(Point, vertices.c.x2, vertices.c.y2)
-    })
+
+    class Vertex(Base):
+        __tablename__ = "vertices"
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+
+        start: Mapped[Point] = composite(mapped_column("x1"), mapped_column("y1"))
+        end: Mapped[Point] = composite(mapped_column("x2"), mapped_column("y2"))
+
+        def __repr__(self):
+            return f"Vertex(start={self.start}, end={self.end})"
 
 Any in-place changes to the ``Vertex.start`` or ``Vertex.end`` members
-will flag the attribute as "dirty" on the parent object::
+will flag the attribute as "dirty" on the parent object:
+
+.. sourcecode:: python+sql
 
     >>> from sqlalchemy.orm import Session
-
-    >>> sess = Session()
+    >>> sess = Session(engine)
     >>> v1 = Vertex(start=Point(3, 4), end=Point(12, 15))
     >>> sess.add(v1)
-    >>> sess.commit()
+    {sql}>>> sess.flush()
+    BEGIN (implicit)
+    INSERT INTO vertices (x1, y1, x2, y2) VALUES (?, ?, ?, ?)
+    [...] (3, 4, 12, 15)
 
-    >>> v1.end.x = 8
+    {stop}>>> v1.end.x = 8
     >>> assert v1 in sess.dirty
     True
+    {sql}>>> sess.commit()
+    UPDATE vertices SET x2=? WHERE vertices.id = ?
+    [...] (8, 1)
+    COMMIT
 
 Coercing Mutable Composites
 ---------------------------
@@ -318,6 +316,7 @@ Overriding the :meth:`.MutableBase.coerce` method is essentially equivalent
 to using a :func:`.validates` validation routine for all attributes which
 make use of the custom composite type::
 
+    @dataclasses.dataclass
     class Point(MutableComposite):
         # other Point methods
         # ...
@@ -340,6 +339,7 @@ to define a ``__getstate__`` that doesn't include the ``_parents`` dictionary.
 Below we define both a ``__getstate__`` and a ``__setstate__`` that package up
 the minimal form of our ``Point`` class::
 
+    @dataclasses.dataclass
     class Point(MutableComposite):
         # ...
 
@@ -353,20 +353,21 @@ As with :class:`.Mutable`, the :class:`.MutableComposite` augments the
 pickling process of the parent's object-relational state so that the
 :meth:`MutableBase._parents` collection is restored to all ``Point`` objects.
 
-"""
+"""  # noqa: E501
+
+from collections import defaultdict
 import weakref
 
 from .. import event
 from .. import inspect
 from .. import types
 from ..orm import Mapper
-from ..orm import mapper
 from ..orm.attributes import flag_modified
 from ..sql.base import SchemaEventTarget
 from ..util import memoized_property
 
 
-class MutableBase(object):
+class MutableBase:
     """Common base class to :class:`.Mutable`
     and :class:`.MutableComposite`.
 
@@ -496,13 +497,19 @@ class MutableBase(object):
             val = state.dict.get(key, None)
             if val is not None:
                 if "ext.mutable.values" not in state_dict:
-                    state_dict["ext.mutable.values"] = []
-                state_dict["ext.mutable.values"].append(val)
+                    state_dict["ext.mutable.values"] = defaultdict(list)
+                state_dict["ext.mutable.values"][key].append(val)
 
         def unpickle(state, state_dict):
             if "ext.mutable.values" in state_dict:
-                for val in state_dict["ext.mutable.values"]:
-                    val._parents[state] = key
+                collection = state_dict["ext.mutable.values"]
+                if isinstance(collection, list):
+                    # legacy format
+                    for val in collection:
+                        val._parents[state] = key
+                else:
+                    for val in state_dict["ext.mutable.values"][key]:
+                        val._parents[state] = key
 
         event.listen(parent_cls, "load", load, raw=True, propagate=True)
         event.listen(
@@ -567,7 +574,7 @@ class Mutable(MutableBase):
                 if isinstance(prop.columns[0].type, sqltype):
                     cls.associate_with_attribute(getattr(class_, prop.key))
 
-        event.listen(mapper, "mapper_configured", listen_for_type)
+        event.listen(Mapper, "mapper_configured", listen_for_type)
 
     @classmethod
     def as_mutable(cls, sqltype):
@@ -629,7 +636,7 @@ class Mutable(MutableBase):
                 ) or (prop.columns[0].type is sqltype):
                     cls.associate_with_attribute(getattr(class_, prop.key))
 
-        event.listen(mapper, "mapper_configured", listen_for_type)
+        event.listen(Mapper, "mapper_configured", listen_for_type)
 
         return sqltype
 
@@ -654,7 +661,8 @@ class MutableComposite(MutableBase):
 
             prop = parent.mapper.get_property(key)
             for value, attr_name in zip(
-                self.__composite_values__(), prop._attribute_keys
+                prop._composite_values_from_instance(self),
+                prop._attribute_keys,
             ):
                 setattr(parent.obj(), attr_name, value)
 

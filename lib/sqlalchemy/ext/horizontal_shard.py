@@ -1,9 +1,10 @@
 # ext/horizontal_shard.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
 
 """Horizontal sharding support.
 
@@ -59,7 +60,7 @@ class ShardedSession(Session):
         execute_chooser=None,
         shards=None,
         query_cls=ShardedQuery,
-        **kwargs
+        **kwargs,
     ):
         """Construct a ShardedSession.
 
@@ -125,7 +126,7 @@ class ShardedSession(Session):
         primary_key_identity,
         identity_token=None,
         lazy_loaded_from=None,
-        **kw
+        **kw,
     ):
         """override the default :meth:`.Session._identity_lookup` method so
         that we search for a given non-token primary key identity across all
@@ -141,7 +142,7 @@ class ShardedSession(Session):
                 mapper,
                 primary_key_identity,
                 identity_token=identity_token,
-                **kw
+                **kw,
             )
         else:
             q = self.query(mapper)
@@ -153,7 +154,7 @@ class ShardedSession(Session):
                     primary_key_identity,
                     identity_token=shard_id,
                     lazy_loaded_from=lazy_loaded_from,
-                    **kw
+                    **kw,
                 )
                 if obj is not None:
                     return obj
@@ -252,5 +253,4 @@ def execute_and_instances(orm_context):
         for shard_id in session.execute_chooser(orm_context):
             result_ = iter_for_shard(shard_id, load_options, update_options)
             partial.append(result_)
-
         return partial[0].merge(*partial[1:])

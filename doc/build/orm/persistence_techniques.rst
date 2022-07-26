@@ -19,9 +19,9 @@ an attribute::
 
         # ...
 
-        value = Column(Integer)
+        value = mapped_column(Integer)
 
-    someobject = session.query(SomeClass).get(5)
+    someobject = session.get(SomeClass, 5)
 
     # set 'value' attribute to a SQL expression adding one
     someobject.value = SomeClass.value + 1
@@ -35,21 +35,20 @@ expired, so that when next accessed the newly generated value will be loaded
 from the database.
 
 The feature also has conditional support to work in conjunction with
-primary key columns.  A database that supports RETURNING, e.g. PostgreSQL,
-Oracle, or SQL Server, or as a special case when using SQLite with the pysqlite
-driver and a single auto-increment column, a SQL expression may be assigned
-to a primary key column as well.  This allows both the SQL expression to
-be evaluated, as well as allows any server side triggers that modify the
-primary key value on INSERT, to be successfully retrieved by the ORM as
-part of the object's primary key::
+primary key columns.  For backends that have RETURNING support
+(including Oracle, SQL Server, MariaDB 10.5, SQLite 3.35) a
+SQL expression may be assigned to a primary key column as well.  This allows
+both the SQL expression to be evaluated, as well as allows any server side
+triggers that modify the primary key value on INSERT, to be successfully
+retrieved by the ORM as part of the object's primary key::
 
 
     class Foo(Base):
         __tablename__ = 'foo'
-        pk = Column(Integer, primary_key=True)
-        bar = Column(Integer)
+        pk = mapped_column(Integer, primary_key=True)
+        bar = mapped_column(Integer)
 
-    e = create_engine("postgresql://scott:tiger@localhost/test", echo=True)
+    e = create_engine("postgresql+psycopg2://scott:tiger@localhost/test", echo=True)
     Base.metadata.create_all(e)
 
     session = Session(e)
@@ -145,8 +144,8 @@ The ORM considers any attribute that was never set on an object as a
 
     class MyObject(Base):
         __tablename__ = 'my_table'
-        id = Column(Integer, primary_key=True)
-        data = Column(String(50), nullable=True)
+        id = mapped_column(Integer, primary_key=True)
+        data = mapped_column(String(50), nullable=True)
 
     obj = MyObject(id=1)
     session.add(obj)
@@ -162,8 +161,8 @@ defaults::
 
     class MyObject(Base):
         __tablename__ = 'my_table'
-        id = Column(Integer, primary_key=True)
-        data = Column(String(50), nullable=True, server_default="default")
+        id = mapped_column(Integer, primary_key=True)
+        data = mapped_column(String(50), nullable=True, server_default="default")
 
     obj = MyObject(id=1)
     session.add(obj)
@@ -176,8 +175,8 @@ assigned::
 
     class MyObject(Base):
         __tablename__ = 'my_table'
-        id = Column(Integer, primary_key=True)
-        data = Column(String(50), nullable=True, server_default="default")
+        id = mapped_column(Integer, primary_key=True)
+        data = mapped_column(String(50), nullable=True, server_default="default")
 
     obj = MyObject(id=1, data=None)
     session.add(obj)
@@ -216,8 +215,8 @@ value and pass it through, rather than omitting it as a "missing" value::
 
     class MyObject(Base):
         __tablename__ = 'my_table'
-        id = Column(Integer, primary_key=True)
-        data = Column(
+        id = mapped_column(Integer, primary_key=True)
+        data = mapped_column(
           String(50).evaluates_none(),  # indicate that None should always be passed
           nullable=True, server_default="default")
 
@@ -271,28 +270,28 @@ so care must be taken to use the appropriate method. The two questions to be
 answered are, 1. is this column part of the primary key or not, and 2. does the
 database support RETURNING or an equivalent, such as "OUTPUT inserted"; these
 are SQL phrases which return a server-generated value at the same time as the
-INSERT or UPDATE statement is invoked. Databases that support RETURNING or
-equivalent include PostgreSQL, Oracle, and SQL Server.  Databases that do not
-include SQLite and MySQL.
+INSERT or UPDATE statement is invoked.   RETURNING is currently supported
+by PostgreSQL, Oracle, MariaDB 10.5, SQLite 3.35, and SQL Server.
 
 Case 1: non primary key, RETURNING or equivalent is supported
 -------------------------------------------------------------
 
 In this case, columns should be marked as :class:`.FetchedValue` or with an
 explicit :paramref:`_schema.Column.server_default`.   The
-:paramref:`.orm.mapper.eager_defaults` flag may be used to indicate that these
+:paramref:`_orm.Mapper.eager_defaults` parameter
+may be used to indicate that these
 columns should be fetched immediately upon INSERT and sometimes UPDATE::
 
 
     class MyModel(Base):
         __tablename__ = 'my_table'
 
-        id = Column(Integer, primary_key=True)
-        timestamp = Column(DateTime(), server_default=func.now())
+        id = mapped_column(Integer, primary_key=True)
+        timestamp = mapped_column(DateTime(), server_default=func.now())
 
         # assume a database trigger populates a value into this column
         # during INSERT
-        special_identifier = Column(String(50), server_default=FetchedValue())
+        special_identifier = mapped_column(String(50), server_default=FetchedValue())
 
         __mapper_args__ = {"eager_defaults": True}
 
@@ -306,6 +305,7 @@ above table will look like:
 
    INSERT INTO my_table DEFAULT VALUES RETURNING my_table.id, my_table.timestamp, my_table.special_identifier
 
+
 Case 2: non primary key, RETURNING or equivalent is not supported or not needed
 --------------------------------------------------------------------------------
 
@@ -315,12 +315,12 @@ This case is the same as case 1 above, except we don't specify
     class MyModel(Base):
         __tablename__ = 'my_table'
 
-        id = Column(Integer, primary_key=True)
-        timestamp = Column(DateTime(), server_default=func.now())
+        id = mapped_column(Integer, primary_key=True)
+        timestamp = mapped_column(DateTime(), server_default=func.now())
 
         # assume a database trigger populates a value into this column
         # during INSERT
-        special_identifier = Column(String(50), server_default=FetchedValue())
+        special_identifier = mapped_column(String(50), server_default=FetchedValue())
 
 After a record with the above mapping is INSERTed, the "timestamp" and
 "special_identifier" columns will remain empty, and will be fetched via
@@ -366,8 +366,8 @@ the :class:`.Sequence` construct::
     class MyOracleModel(Base):
         __tablename__ = 'my_table'
 
-        id = Column(Integer, Sequence("my_sequence"), primary_key=True)
-        data = Column(String(50))
+        id = mapped_column(Integer, Sequence("my_sequence"), primary_key=True)
+        data = mapped_column(String(50))
 
 The INSERT for a model as above on Oracle looks like:
 
@@ -385,7 +385,7 @@ SQL Server TIMESTAMP column as the primary key, which generates values automatic
     class MyModel(Base):
         __tablename__ = 'my_table'
 
-        timestamp = Column(TIMESTAMP(), server_default=FetchedValue(), primary_key=True)
+        timestamp = mapped_column(TIMESTAMP(), server_default=FetchedValue(), primary_key=True)
 
 An INSERT for the above table on SQL Server looks like:
 
@@ -419,7 +419,7 @@ pre-execute-supported default using the "NOW()" SQL function::
     class MyModel(Base):
         __tablename__ = 'my_table'
 
-        timestamp = Column(DateTime(), default=func.now(), primary_key=True)
+        timestamp = mapped_column(DateTime(), default=func.now(), primary_key=True)
 
 Where above, we select the "NOW()" function to deliver a datetime value
 to the column.  The SQL generated by the above is:
@@ -446,7 +446,7 @@ into the column::
     class MyModel(Base):
         __tablename__ = 'my_table'
 
-        timestamp = Column(
+        timestamp = mapped_column(
             TIMESTAMP(),
             default=cast(func.now(), Binary),
             primary_key=True)
@@ -478,7 +478,7 @@ by passing this as the ``type_`` parameter::
     class MyModel(Base):
         __tablename__ = 'my_table'
 
-        timestamp = Column(
+        timestamp = mapped_column(
             DateTime,
             default=func.datetime('now', 'localtime', type_=DateTime),
             primary_key=True)
@@ -497,8 +497,61 @@ The above mapping upon INSERT will look like:
 
     :ref:`metadata_defaults_toplevel`
 
+Notes on eagerly fetching client invoked SQL expressions used for INSERT or UPDATE
+-----------------------------------------------------------------------------------
+
+The preceding examples indicate the use of :paramref:`_schema.Column.server_default`
+to create tables that include default-generation functions within their
+DDL.
+
+SQLAlchemy also supports non-DDL server side defaults, as documented at
+:ref:`defaults_client_invoked_sql`; these "client invoked SQL expressions"
+are set up using the :paramref:`_schema.Column.default` and
+:paramref:`_schema.Column.onupdate` parameters.
+
+These SQL expressions currently are subject to the same limitations within the
+ORM as occurs for true server-side defaults; they won't be eagerly fetched with
+RETURNING when using :paramref:`_orm.Mapper.eager_defaults` unless the
+:class:`.FetchedValue` directive is associated with the
+:class:`_schema.Column`, even though these expressions are not DDL server
+defaults and are actively rendered by SQLAlchemy itself. This limitation may be
+addressed in future SQLAlchemy releases.
+
+The :class:`.FetchedValue` construct can be applied to
+:paramref:`_schema.Column.server_default` or
+:paramref:`_schema.Column.server_onupdate` at the same time that a SQL
+expression is used with :paramref:`_schema.Column.default` and
+:paramref:`_schema.Column.onupdate`, such as in the example below where the
+``func.now()`` construct is used as a client-invoked SQL expression
+for :paramref:`_schema.Column.default` and
+:paramref:`_schema.Column.onupdate`.  In order for the behavior of
+:paramref:`_orm.Mapper.eager_defaults` to include that it fetches these
+values using RETURNING when available, :paramref:`_schema.Column.server_default` and
+:paramref:`_schema.Column.server_onupdate` are used with :class:`.FetchedValue`
+to ensure that the fetch occurs::
+
+    class MyModel(Base):
+        __tablename__ = 'my_table'
+
+        id = mapped_column(Integer, primary_key=True)
+
+        created = mapped_column(DateTime(), default=func.now(), server_default=FetchedValue())
+        updated = mapped_column(DateTime(), onupdate=func.now(), server_default=FetchedValue(), server_onupdate=FetchedValue())
+
+        __mapper_args__ = {"eager_defaults": True}
+
+With a mapping similar to the above, the SQL rendered by the ORM for
+INSERT and UPDATE will include ``created`` and ``updated`` in the RETURNING
+clause::
+
+  INSERT INTO my_table (created) VALUES (now()) RETURNING my_table.id, my_table.created, my_table.updated
+
+  UPDATE my_table SET updated=now() WHERE my_table.id = %(my_table_id)s RETURNING my_table.updated
+
+
 
 .. _orm_dml_returning_objects:
+
 
 Using INSERT, UPDATE and ON CONFLICT (i.e. upsert) to return ORM Objects
 ==========================================================================
@@ -663,8 +716,8 @@ The dictionary is consulted whenever the :class:`.Session` needs to
 emit SQL on behalf of a particular kind of mapped class in order to locate
 the appropriate source of database connectivity::
 
-    engine1 = create_engine('postgresql://db1')
-    engine2 = create_engine('postgresql://db2')
+    engine1 = create_engine('postgresql+psycopg2://db1')
+    engine2 = create_engine('postgresql+psycopg2://db2')
 
     Session = sessionmaker()
 
@@ -689,9 +742,14 @@ arbitrary Python class as a key, which will be used if it is found to be in the
 Supposing two declarative bases are representing two different database
 connections::
 
-    BaseA = declarative_base()
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import Session
 
-    BaseB = declarative_base()
+    class BaseA(DeclarativeBase):
+        pass
+
+    class BaseB(DeclarativeBase):
+        pass
 
     class User(BaseA):
         # ...
@@ -933,7 +991,7 @@ Comparison to Core Insert / Update Constructs
 The bulk methods offer performance that under particular circumstances
 can be close to that of using the core :class:`_expression.Insert` and
 :class:`_expression.Update` constructs in an "executemany" context (for a description
-of "executemany", see :ref:`execute_multiple` in the Core tutorial).
+of "executemany", see :ref:`tutorial_multiple_parameters` in the Core tutorial).
 In order to achieve this, the
 :paramref:`.Session.bulk_insert_mappings.return_defaults`
 flag should be disabled so that rows can be batched together.   The example

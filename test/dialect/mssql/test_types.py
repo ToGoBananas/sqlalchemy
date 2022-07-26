@@ -31,10 +31,10 @@ from sqlalchemy import Time
 from sqlalchemy import types
 from sqlalchemy import Unicode
 from sqlalchemy import UnicodeText
-from sqlalchemy import util
 from sqlalchemy.dialects.mssql import base as mssql
 from sqlalchemy.dialects.mssql import ROWVERSION
 from sqlalchemy.dialects.mssql import TIMESTAMP
+from sqlalchemy.dialects.mssql import UNIQUEIDENTIFIER
 from sqlalchemy.dialects.mssql.base import _MSDate
 from sqlalchemy.dialects.mssql.base import BIT
 from sqlalchemy.dialects.mssql.base import DATETIMEOFFSET
@@ -47,13 +47,14 @@ from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import AssertsExecutionResults
 from sqlalchemy.testing import ComparesTables
-from sqlalchemy.testing import emits_warning_on
 from sqlalchemy.testing import engines
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_not
 from sqlalchemy.testing import pickleable
+from sqlalchemy.testing.suite import test_types
 from sqlalchemy.util import b
 
 
@@ -531,6 +532,12 @@ class TypeDDLTest(fixtures.TestBase):
             (mssql.MSVarBinary, [10], {}, "VARBINARY(10)"),
             (types.VARBINARY, [10], {}, "VARBINARY(10)"),
             (types.VARBINARY, [], {}, "VARBINARY(max)"),
+            (
+                mssql.MSVarBinary,
+                [],
+                {"filestream": True},
+                "VARBINARY(max) FILESTREAM",
+            ),
             (mssql.MSImage, [], {}, "IMAGE"),
             (mssql.IMAGE, [], {}, "IMAGE"),
             (types.LargeBinary, [], {}, "IMAGE"),
@@ -553,6 +560,17 @@ class TypeDDLTest(fixtures.TestBase):
                 "%s %s" % (col.name, columns[index][3]),
             )
             self.assert_(repr(col))
+
+    def test_VARBINARY_init(self):
+        d = mssql.dialect()
+        t = mssql.MSVarBinary(length=None, filestream=True)
+        eq_(str(t.compile(dialect=d)), "VARBINARY(max) FILESTREAM")
+        t = mssql.MSVarBinary(length="max", filestream=True)
+        eq_(str(t.compile(dialect=d)), "VARBINARY(max) FILESTREAM")
+        with expect_raises_message(
+            ValueError, "length must be None or 'max' when setting filestream"
+        ):
+            mssql.MSVarBinary(length=1000, filestream=True)
 
 
 class TypeRoundTripTest(
@@ -707,7 +725,6 @@ class TypeRoundTripTest(
             )
             eq_(value, returned)
 
-    @emits_warning_on("mssql+mxodbc", r".*does not have any indexes.*")
     def test_dates(self, metadata, connection):
         "Exercise type specification for date types."
 
@@ -792,7 +809,7 @@ class TypeRoundTripTest(
             2,
             32,
             123456,
-            util.timezone(datetime.timedelta(hours=-5)),
+            datetime.timezone(datetime.timedelta(hours=-5)),
         )
         return t, (d1, t1, d2, d3)
 
@@ -830,7 +847,7 @@ class TypeRoundTripTest(
                 11,
                 2,
                 32,
-                tzinfo=util.timezone(datetime.timedelta(hours=-5)),
+                tzinfo=datetime.timezone(datetime.timedelta(hours=-5)),
             ),
         ),
         (datetime.datetime(2007, 10, 30, 11, 2, 32)),
@@ -851,7 +868,7 @@ class TypeRoundTripTest(
         ).first()
 
         if not date.tzinfo:
-            eq_(row, (date, date.replace(tzinfo=util.timezone.utc)))
+            eq_(row, (date, date.replace(tzinfo=datetime.timezone.utc)))
         else:
             eq_(row, (date.replace(tzinfo=None), date))
 
@@ -877,7 +894,7 @@ class TypeRoundTripTest(
                 2,
                 32,
                 123456,
-                util.timezone(datetime.timedelta(hours=1)),
+                datetime.timezone(datetime.timedelta(hours=1)),
             ),
             1,
             False,
@@ -892,7 +909,7 @@ class TypeRoundTripTest(
                 2,
                 32,
                 123456,
-                util.timezone(datetime.timedelta(hours=-5)),
+                datetime.timezone(datetime.timedelta(hours=-5)),
             ),
             -5,
             False,
@@ -907,11 +924,10 @@ class TypeRoundTripTest(
                 2,
                 32,
                 123456,
-                util.timezone(datetime.timedelta(seconds=4000)),
+                datetime.timezone(datetime.timedelta(seconds=4000)),
             ),
             None,
             True,
-            testing.requires.python37,
         ),
         (
             "dto_param_datetime_naive",
@@ -976,13 +992,12 @@ class TypeRoundTripTest(
                     2,
                     32,
                     123456,
-                    util.timezone(
+                    datetime.timezone(
                         datetime.timedelta(hours=expected_offset_hours)
                     ),
                 ),
             )
 
-    @emits_warning_on("mssql+mxodbc", r".*does not have any indexes.*")
     @testing.combinations(
         ("legacy_large_types", False),
         ("sql2012_large_types", True, lambda: testing.only_on("mssql >= 11")),
@@ -1012,6 +1027,15 @@ class TypeRoundTripTest(
             ),
         ]
 
+        if testing.requires.mssql_filestream.enabled:
+            columns.append(
+                (
+                    mssql.MSVarBinary,
+                    [],
+                    {"filestream": True},
+                    "VARBINARY(max) FILESTREAM",
+                )
+            )
         engine = engines.testing_engine(
             options={"deprecate_large_types": deprecate_large_types}
         )
@@ -1050,43 +1074,49 @@ class TypeRoundTripTest(
                         col.type.length, binary_table.c[col.name].type.length
                     )
 
-    def test_autoincrement(self, metadata, connection):
+    @testing.combinations(True, False, argnames="implicit_returning")
+    def test_autoincrement(self, metadata, connection, implicit_returning):
         Table(
             "ai_1",
             metadata,
             Column("int_y", Integer, primary_key=True, autoincrement=True),
             Column("int_n", Integer, DefaultClause("0"), primary_key=True),
+            implicit_returning=implicit_returning,
         )
         Table(
             "ai_2",
             metadata,
             Column("int_y", Integer, primary_key=True, autoincrement=True),
             Column("int_n", Integer, DefaultClause("0"), primary_key=True),
+            implicit_returning=implicit_returning,
         )
         Table(
             "ai_3",
             metadata,
             Column("int_n", Integer, DefaultClause("0"), primary_key=True),
             Column("int_y", Integer, primary_key=True, autoincrement=True),
+            implicit_returning=implicit_returning,
         )
-
         Table(
             "ai_4",
             metadata,
             Column("int_n", Integer, DefaultClause("0"), primary_key=True),
             Column("int_n2", Integer, DefaultClause("0"), primary_key=True),
+            implicit_returning=implicit_returning,
         )
         Table(
             "ai_5",
             metadata,
             Column("int_y", Integer, primary_key=True, autoincrement=True),
             Column("int_n", Integer, DefaultClause("0"), primary_key=True),
+            implicit_returning=implicit_returning,
         )
         Table(
             "ai_6",
             metadata,
             Column("o1", String(1), DefaultClause("x"), primary_key=True),
             Column("int_y", Integer, primary_key=True, autoincrement=True),
+            implicit_returning=implicit_returning,
         )
         Table(
             "ai_7",
@@ -1094,12 +1124,14 @@ class TypeRoundTripTest(
             Column("o1", String(1), DefaultClause("x"), primary_key=True),
             Column("o2", String(1), DefaultClause("x"), primary_key=True),
             Column("int_y", Integer, autoincrement=True, primary_key=True),
+            implicit_returning=implicit_returning,
         )
         Table(
             "ai_8",
             metadata,
             Column("o1", String(1), DefaultClause("x"), primary_key=True),
             Column("o2", String(1), DefaultClause("x"), primary_key=True),
+            implicit_returning=implicit_returning,
         )
         metadata.create_all(connection)
 
@@ -1128,42 +1160,18 @@ class TypeRoundTripTest(
                     eq_(col.autoincrement, "auto")
                     is_not(tbl._autoincrement_column, col)
 
-            # mxodbc can't handle scope_identity() with DEFAULT VALUES
-
-            if testing.db.driver == "mxodbc":
-                eng = [
-                    engines.testing_engine(
-                        options={"implicit_returning": True}
-                    )
-                ]
+            connection.execute(tbl.insert())
+            if "int_y" in tbl.c:
+                eq_(
+                    connection.execute(select(tbl.c.int_y)).scalar(),
+                    1,
+                )
+                assert (
+                    list(connection.execute(tbl.select()).first()).count(1)
+                    == 1
+                )
             else:
-                eng = [
-                    engines.testing_engine(
-                        options={"implicit_returning": False}
-                    ),
-                    engines.testing_engine(
-                        options={"implicit_returning": True}
-                    ),
-                ]
-
-            for counter, engine in enumerate(eng):
-                connection.execute(tbl.insert())
-                if "int_y" in tbl.c:
-                    eq_(
-                        connection.execute(select(tbl.c.int_y)).scalar(),
-                        counter + 1,
-                    )
-                    assert (
-                        list(connection.execute(tbl.select()).first()).count(
-                            counter + 1
-                        )
-                        == 1
-                    )
-                else:
-                    assert 1 not in list(
-                        connection.execute(tbl.select()).first()
-                    )
-                connection.execute(tbl.delete())
+                assert 1 not in list(connection.execute(tbl.select()).first())
 
 
 class StringTest(fixtures.TestBase, AssertsCompiledSQL):
@@ -1188,25 +1196,50 @@ class StringTest(fixtures.TestBase, AssertsCompiledSQL):
 
     def test_string_text_literal_binds_explicit_unicode_right(self):
         self.assert_compile(
-            column("x", String()) == util.u("foo"),
+            column("x", String()) == "foo",
             "x = 'foo'",
             literal_binds=True,
         )
 
-    def test_string_text_explicit_literal_binds(self):
-        # the literal expression here coerces the right side to
-        # Unicode on Python 3 for plain string, test with unicode
-        # string just to confirm literal is doing this
-        self.assert_compile(
-            column("x", String()) == literal(util.u("foo")),
-            "x = N'foo'",
-            literal_binds=True,
-        )
+    @testing.combinations(None, String(), Unicode(), argnames="coltype")
+    @testing.combinations(None, String(), Unicode(), argnames="literaltype")
+    @testing.combinations("réve🐍 illé", "hello", "réveillé", argnames="value")
+    def test_string_text_explicit_literal_binds(
+        self, coltype, literaltype, value
+    ):
+        """test #7551, dynamic coercion for string literals"""
+
+        lhs = column("x", coltype)
+        rhs = literal(value, type_=literaltype)
+
+        rhs_force_unicode = isinstance(literaltype, Unicode)
+        rhs_tests_as_unicode = literaltype is None and value != "hello"
+
+        should_it_be_n = rhs_force_unicode or rhs_tests_as_unicode
+
+        if should_it_be_n:
+            self.assert_compile(
+                lhs == rhs,
+                f"x = N'{value}'",
+                literal_binds=True,
+            )
+        else:
+            self.assert_compile(
+                lhs == rhs,
+                f"x = '{value}'",
+                literal_binds=True,
+            )
 
     def test_text_text_literal_binds(self):
         self.assert_compile(
             column("x", Text()) == "foo", "x = 'foo'", literal_binds=True
         )
+
+
+class UniqueIdentifierTest(test_types.UuidTest):
+    __only_on__ = "mssql"
+    __backend__ = True
+    datatype = UNIQUEIDENTIFIER
 
 
 class MyPickleType(types.TypeDecorator):
@@ -1253,6 +1286,15 @@ class BinaryTest(fixtures.TestBase):
             True,
             None,
             False,
+        ),
+        (
+            mssql.VARBINARY(filestream=True),
+            "binary_data_one.dat",
+            None,
+            True,
+            None,
+            False,
+            testing.requires.mssql_filestream,
         ),
         (
             sqltypes.LargeBinary,

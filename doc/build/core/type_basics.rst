@@ -52,6 +52,9 @@ type is emitted in ``CREATE TABLE``, such as ``VARCHAR`` see
 .. autoclass:: Enum
   :members: __init__, create, drop
 
+.. autoclass:: Double
+   :members:
+
 .. autoclass:: Float
   :members:
 
@@ -95,6 +98,9 @@ type is emitted in ``CREATE TABLE``, such as ``VARCHAR`` see
 .. autoclass:: UnicodeText
    :members:
 
+.. autoclass:: Uuid
+  :members:
+
 .. _types_sqlstandard:
 
 SQL Standard and Multiple Vendor Types
@@ -137,6 +143,9 @@ its exact name in DDL with ``CREATE TABLE`` is issued.
 
 .. autoclass:: DECIMAL
 
+.. autoclass:: DOUBLE
+
+.. autoclass:: DOUBLE_PRECISION
 
 .. autoclass:: FLOAT
 
@@ -175,6 +184,8 @@ its exact name in DDL with ``CREATE TABLE`` is issued.
     :members:
 
 
+.. autoclass:: UUID
+
 .. autoclass:: VARBINARY
 
 
@@ -209,17 +220,17 @@ Or some PostgreSQL types::
         Column('elements', postgresql.ARRAY(String))
     )
 
-Each dialect provides the full set of typenames supported by
-that backend within its `__all__` collection, so that a simple
-`import *` or similar will import all supported types as
-implemented for that backend::
+Each dialect provides the full set of database types supported by
+that backend within its own module, so they may all be used
+against the module directly without the need to differentiate between
+which types are specific to that backend or not::
 
-    from sqlalchemy.dialects.postgresql import *
+    from sqlalchemy.dialects import postgresql
 
     t = Table('mytable', metadata,
-               Column('id', INTEGER, primary_key=True),
-               Column('name', VARCHAR(300)),
-               Column('inetaddr', INET)
+               Column('id', postgresql.INTEGER, primary_key=True),
+               Column('name', postgresql.VARCHAR(300)),
+               Column('inetaddr', postgresql.INET)
     )
 
 Where above, the INTEGER and VARCHAR types are ultimately from
@@ -232,7 +243,7 @@ such as `collation` and `charset`::
 
     from sqlalchemy.dialects.mysql import VARCHAR, TEXT
 
-    table = Table('foo', meta,
+    table = Table('foo', metadata_obj,
         Column('col1', VARCHAR(200, collation='binary')),
         Column('col2', TEXT(charset='latin1'))
     )

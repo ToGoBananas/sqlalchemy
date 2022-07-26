@@ -863,6 +863,8 @@ class ConstraintCompilationTest(fixtures.TestBase, AssertsCompiledSQL):
             x.append_constraint(idx)
             self.assert_compile(schema.CreateIndex(idx), ddl)
 
+            x.to_metadata(MetaData())
+
     def test_index_against_text_separate(self):
         metadata = MetaData()
         idx = Index("y", text("some_function(q)"))
@@ -1026,7 +1028,7 @@ class ConstraintCompilationTest(fixtures.TestBase, AssertsCompiledSQL):
             Column("a", Integer),
             Column("b", Integer),
             Column("c", Integer),
-            *fkcs
+            *fkcs,
         )
         Table("remote", m, Column("id", Integer, primary_key=True))
 

@@ -275,7 +275,7 @@ parent row is deleted all corresponding child rows are set to null or deleted.
 In data definition language these are specified using phrases like "ON UPDATE
 CASCADE", "ON DELETE CASCADE", and "ON DELETE SET NULL", corresponding to
 foreign key constraints. The phrase after "ON UPDATE" or "ON DELETE" may also
-other allow other phrases that are specific to the database in use. The
+allow other phrases that are specific to the database in use. The
 :class:`~sqlalchemy.schema.ForeignKey` and
 :class:`~sqlalchemy.schema.ForeignKeyConstraint` objects support the
 generation of this clause via the ``onupdate`` and ``ondelete`` keyword
@@ -768,8 +768,10 @@ The above schema will produce::
 
 Constraints API
 ---------------
+
 .. autoclass:: Constraint
     :members:
+    :inherited-members:
 
 .. autoclass:: ColumnCollectionMixin
     :members:
@@ -787,6 +789,10 @@ Constraints API
     :inherited-members:
 
 .. autoclass:: ForeignKeyConstraint
+    :members:
+    :inherited-members:
+
+.. autoclass:: HasConditionalDDL
     :members:
     :inherited-members:
 

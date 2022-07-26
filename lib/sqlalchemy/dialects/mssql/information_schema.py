@@ -1,15 +1,16 @@
 # mssql/information_schema.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
+
 
 from ... import cast
 from ... import Column
 from ... import MetaData
 from ... import Table
-from ... import util
 from ...ext.compiler import compiles
 from ...sql import expression
 from ...types import Boolean
@@ -26,11 +27,6 @@ ischema = MetaData()
 class CoerceUnicode(TypeDecorator):
     impl = Unicode
     cache_ok = True
-
-    def process_bind_param(self, value, dialect):
-        if util.py2k and isinstance(value, util.binary_type):
-            value = value.decode(dialect.encoding)
-        return value
 
     def bind_expression(self, bindvalue):
         return _cast_on_2005(bindvalue)

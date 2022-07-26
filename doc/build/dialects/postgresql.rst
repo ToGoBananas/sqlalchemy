@@ -22,6 +22,10 @@ they originate from :mod:`sqlalchemy.types` or from the local dialect::
 Types which are specific to PostgreSQL, or have PostgreSQL-specific
 construction arguments, are as follows:
 
+.. note: where :noindex: is used, indicates a type that is not redefined
+   in the dialect module, just imported from sqltypes.  this avoids warnings
+   in the sphinx build
+
 .. currentmodule:: sqlalchemy.dialects.postgresql
 
 .. autoclass:: aggregate_order_by
@@ -45,8 +49,12 @@ construction arguments, are as follows:
 .. autoclass:: CIDR
 
 
+.. autoclass:: DOMAIN
+    :members: __init__, create, drop
+
 .. autoclass:: DOUBLE_PRECISION
     :members: __init__
+    :noindex:
 
 
 .. autoclass:: ENUM
@@ -80,13 +88,21 @@ construction arguments, are as follows:
 
 .. autoclass:: REAL
     :members: __init__
+    :noindex:
 
 .. autoclass:: REGCLASS
+
+.. autoclass:: TIMESTAMP
+    :members: __init__
+
+.. autoclass:: TIME
+    :members: __init__
 
 .. autoclass:: TSVECTOR
 
 .. autoclass:: UUID
     :members: __init__
+    :noindex:
 
 
 Range Types
@@ -193,6 +209,13 @@ psycopg2
 
 .. automodule:: sqlalchemy.dialects.postgresql.psycopg2
 
+.. _postgresql_psycopg:
+
+psycopg
+--------
+
+.. automodule:: sqlalchemy.dialects.postgresql.psycopg
+
 pg8000
 ------
 
@@ -209,16 +232,3 @@ psycopg2cffi
 ------------
 
 .. automodule:: sqlalchemy.dialects.postgresql.psycopg2cffi
-
-py-postgresql
--------------
-
-.. automodule:: sqlalchemy.dialects.postgresql.pypostgresql
-
-.. _dialect-postgresql-pygresql:
-
-pygresql
---------
-
-.. automodule:: sqlalchemy.dialects.postgresql.pygresql
-

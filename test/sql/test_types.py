@@ -23,6 +23,7 @@ from sqlalchemy import DateTime
 from sqlalchemy import DECIMAL
 from sqlalchemy import dialects
 from sqlalchemy import distinct
+from sqlalchemy import Double
 from sqlalchemy import Enum
 from sqlalchemy import exc
 from sqlalchemy import FLOAT
@@ -71,7 +72,9 @@ from sqlalchemy.sql import null
 from sqlalchemy.sql import operators
 from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql import table
+from sqlalchemy.sql import type_api
 from sqlalchemy.sql import visitors
+from sqlalchemy.sql.compiler import TypeCompiler
 from sqlalchemy.sql.sqltypes import TypeEngine
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
@@ -79,20 +82,18 @@ from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import AssertsExecutionResults
 from sqlalchemy.testing import engines
 from sqlalchemy.testing import eq_
-from sqlalchemy.testing import expect_deprecated_20
 from sqlalchemy.testing import expect_raises
-from sqlalchemy.testing import expect_warnings
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_not
 from sqlalchemy.testing import mock
 from sqlalchemy.testing import pickleable
+from sqlalchemy.testing.assertions import expect_raises_message
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import pep435_enum
 from sqlalchemy.testing.schema import Table
 from sqlalchemy.testing.util import picklers
-from sqlalchemy.testing.util import round_decimal
-from sqlalchemy.util import u
+from sqlalchemy.types import UserDefinedType
 
 
 def _all_dialect_modules():
@@ -110,7 +111,11 @@ def _all_dialects():
 def _types_for_mod(mod):
     for key in dir(mod):
         typ = getattr(mod, key)
-        if not isinstance(typ, type) or not issubclass(typ, types.TypeEngine):
+        if (
+            not isinstance(typ, type)
+            or not issubclass(typ, types.TypeEngine)
+            or typ.__dict__.get("__abstract__")
+        ):
             continue
         yield typ
 
@@ -118,10 +123,15 @@ def _types_for_mod(mod):
 def _all_types(omit_special_types=False):
     seen = set()
     for typ in _types_for_mod(types):
-        if omit_special_types and typ in (
-            types.TypeDecorator,
-            types.TypeEngine,
-            types.Variant,
+        if omit_special_types and (
+            typ
+            in (
+                TypeEngine,
+                type_api.TypeEngineMixin,
+                types.Variant,
+                types.TypeDecorator,
+            )
+            or type_api.TypeEngineMixin in typ.__bases__
         ):
             continue
 
@@ -137,12 +147,23 @@ def _all_types(omit_special_types=False):
             yield typ
 
 
+def _get_instance(type_):
+    if issubclass(type_, ARRAY):
+        return type_(String)
+    elif hasattr(type_, "__test_init__"):
+        t1 = type_.__test_init__()
+        is_(isinstance(t1, type_), True)
+        return t1
+    else:
+        return type_()
+
+
 class AdaptTest(fixtures.TestBase):
     @testing.combinations(((t,) for t in _types_for_mod(types)), id_="n")
     def test_uppercase_importable(self, typ):
         if typ.__name__ == typ.__name__.upper():
             assert getattr(sa, typ.__name__) is typ
-            assert typ.__name__ in types.__all__
+            assert typ.__name__ in dir(types)
 
     @testing.combinations(
         ((d.name, d) for d in _all_dialects()), argnames="dialect", id_="ia"
@@ -234,11 +255,8 @@ class AdaptTest(fixtures.TestBase):
         adapt() beyond their defaults.
 
         """
+        t1 = _get_instance(typ)
 
-        if issubclass(typ, ARRAY):
-            t1 = typ(String)
-        else:
-            t1 = typ()
         for cls in target_adaptions:
             if (is_down_adaption and issubclass(typ, sqltypes.Emulated)) or (
                 not is_down_adaption and issubclass(cls, sqltypes.Emulated)
@@ -278,13 +296,14 @@ class AdaptTest(fixtures.TestBase):
         eq_(types.Integer().python_type, int)
         eq_(types.Numeric().python_type, decimal.Decimal)
         eq_(types.Numeric(asdecimal=False).python_type, float)
-        eq_(types.LargeBinary().python_type, util.binary_type)
+        eq_(types.LargeBinary().python_type, bytes)
         eq_(types.Float().python_type, float)
+        eq_(types.Double().python_type, float)
         eq_(types.Interval().python_type, datetime.timedelta)
         eq_(types.Date().python_type, datetime.date)
         eq_(types.DateTime().python_type, datetime.datetime)
         eq_(types.String().python_type, str)
-        eq_(types.Unicode().python_type, util.text_type)
+        eq_(types.Unicode().python_type, str)
         eq_(types.Enum("one", "two", "three").python_type, str)
 
         assert_raises(
@@ -294,19 +313,13 @@ class AdaptTest(fixtures.TestBase):
     @testing.uses_deprecated()
     @testing.combinations(*[(t,) for t in _all_types(omit_special_types=True)])
     def test_repr(self, typ):
-        if issubclass(typ, ARRAY):
-            t1 = typ(String)
-        else:
-            t1 = typ()
+        t1 = _get_instance(typ)
         repr(t1)
 
     @testing.uses_deprecated()
     @testing.combinations(*[(t,) for t in _all_types(omit_special_types=True)])
     def test_str(self, typ):
-        if issubclass(typ, ARRAY):
-            t1 = typ(String)
-        else:
-            t1 = typ()
+        t1 = _get_instance(typ)
         str(t1)
 
     def test_str_third_party(self):
@@ -337,12 +350,6 @@ class AdaptTest(fixtures.TestBase):
         t1 = String(length=50)
         t2 = t1.adapt(Text)
         eq_(t2.length, 50)
-
-    def test_convert_unicode_text_type(self):
-        with testing.expect_deprecated(
-            "The String.convert_unicode parameter is deprecated"
-        ):
-            eq_(types.String(convert_unicode=True).python_type, util.text_type)
 
 
 class TypeAffinityTest(fixtures.TestBase):
@@ -380,14 +387,14 @@ class TypeAffinityTest(fixtures.TestBase):
 
             def load_dialect_impl(self, dialect):
                 if dialect.name == "postgresql":
-                    return dialect.type_descriptor(postgresql.UUID())
+                    return dialect.type_descriptor(postgresql.INET())
                 else:
                     return dialect.type_descriptor(CHAR(32))
 
         t1 = MyType()
         d = postgresql.dialect()
         assert t1._type_affinity is String
-        assert t1.dialect_impl(d)._type_affinity is postgresql.UUID
+        assert t1.dialect_impl(d)._type_affinity is postgresql.INET
 
 
 class AsGenericTest(fixtures.TestBase):
@@ -399,7 +406,7 @@ class AsGenericTest(fixtures.TestBase):
         (pg.JSON(), sa.JSON()),
         (pg.ARRAY(sa.String), sa.ARRAY(sa.String)),
         (Enum("a", "b", "c"), Enum("a", "b", "c")),
-        (pg.ENUM("a", "b", "c"), Enum("a", "b", "c")),
+        (pg.ENUM("a", "b", "c", name="pgenum"), Enum("a", "b", "c")),
         (mysql.ENUM("a", "b", "c"), Enum("a", "b", "c")),
         (pg.INTERVAL(precision=5), Interval(native=True, second_precision=5)),
         (
@@ -418,11 +425,7 @@ class AsGenericTest(fixtures.TestBase):
         ]
     )
     def test_as_generic_all_types_heuristic(self, type_):
-        if issubclass(type_, ARRAY):
-            t1 = type_(String)
-        else:
-            t1 = type_()
-
+        t1 = _get_instance(type_)
         try:
             gentype = t1.as_generic()
         except NotImplementedError:
@@ -444,10 +447,7 @@ class AsGenericTest(fixtures.TestBase):
         ]
     )
     def test_as_generic_all_types_custom(self, type_):
-        if issubclass(type_, ARRAY):
-            t1 = type_(String)
-        else:
-            t1 = type_()
+        t1 = _get_instance(type_)
 
         gentype = t1.as_generic(allow_nulltype=False)
         assert isinstance(gentype, TypeEngine)
@@ -482,7 +482,7 @@ class PickleTypesTest(fixtures.TestBase):
             loads(dumps(meta))
 
 
-class _UserDefinedTypeFixture(object):
+class _UserDefinedTypeFixture:
     @classmethod
     def define_tables(cls, metadata):
         class MyType(types.UserDefinedType):
@@ -541,7 +541,7 @@ class _UserDefinedTypeFixture(object):
 
             def process_bind_param(self, value, dialect):
                 if value is None:
-                    value = u"<null value>"
+                    value = "<null value>"
                 return "BIND_IN" + value
 
             def process_result_value(self, value, dialect):
@@ -583,7 +583,7 @@ class _UserDefinedTypeFixture(object):
 
                 def process(value):
                     if value is None:
-                        value = u"<null value>"
+                        value = "<null value>"
 
                     return "BIND_IN" + impl_processor(value)
 
@@ -633,8 +633,8 @@ class UserDefinedRoundTripTest(_UserDefinedTypeFixture, fixtures.TablesTest):
                 user_id=2,
                 goofy="jack",
                 goofy2="jack",
-                goofy4=util.u("jack"),
-                goofy7=util.u("jack"),
+                goofy4="jack",
+                goofy7="jack",
                 goofy8=12,
                 goofy9=12,
                 goofy10=12,
@@ -646,8 +646,8 @@ class UserDefinedRoundTripTest(_UserDefinedTypeFixture, fixtures.TablesTest):
                 user_id=3,
                 goofy="lala",
                 goofy2="lala",
-                goofy4=util.u("lala"),
-                goofy7=util.u("lala"),
+                goofy4="lala",
+                goofy7="lala",
                 goofy8=15,
                 goofy9=15,
                 goofy10=15,
@@ -659,8 +659,8 @@ class UserDefinedRoundTripTest(_UserDefinedTypeFixture, fixtures.TablesTest):
                 user_id=4,
                 goofy="fred",
                 goofy2="fred",
-                goofy4=util.u("fred"),
-                goofy7=util.u("fred"),
+                goofy4="fred",
+                goofy7="fred",
                 goofy8=9,
                 goofy9=9,
                 goofy10=9,
@@ -782,6 +782,136 @@ class UserDefinedRoundTripTest(_UserDefinedTypeFixture, fixtures.TablesTest):
         eq_(result.fetchall(), [(3, 1500), (4, 900)])
 
 
+class TypeDecoratorSpecialCasesTest(AssertsCompiledSQL, fixtures.TestBase):
+    __backend__ = True
+
+    @testing.requires.array_type
+    def test_typedec_of_array_modified(self, metadata, connection):
+        """test #7249"""
+
+        class SkipsFirst(TypeDecorator):  # , Indexable):
+            impl = ARRAY(Integer, zero_indexes=True)
+
+            cache_ok = True
+
+            def process_bind_param(self, value, dialect):
+                return value[1:]
+
+            def copy(self, **kw):
+                return SkipsFirst(**kw)
+
+            def coerce_compared_value(self, op, value):
+                return self.impl.coerce_compared_value(op, value)
+
+        t = Table(
+            "t",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("data", SkipsFirst),
+        )
+        t.create(connection)
+
+        connection.execute(t.insert(), {"data": [1, 2, 3]})
+        val = connection.scalar(select(t.c.data))
+        eq_(val, [2, 3])
+
+        val = connection.scalar(select(t.c.data[0]))
+        eq_(val, 2)
+
+    def test_typedec_of_array_ops(self):
+        class ArrayDec(TypeDecorator):
+            impl = ARRAY(Integer, zero_indexes=True)
+
+            cache_ok = True
+
+            def coerce_compared_value(self, op, value):
+                return self.impl.coerce_compared_value(op, value)
+
+        expr1 = column("q", ArrayDec)[0]
+        expr2 = column("q", ARRAY(Integer, zero_indexes=True))[0]
+
+        eq_(expr1.right.type._type_affinity, Integer)
+        eq_(expr2.right.type._type_affinity, Integer)
+
+        self.assert_compile(
+            column("q", ArrayDec).any(7, operator=operators.lt),
+            "%(q_1)s < ANY (q)",
+            dialect="postgresql",
+        )
+
+        self.assert_compile(
+            column("q", ArrayDec)[5], "q[%(q_1)s]", dialect="postgresql"
+        )
+
+    def test_typedec_of_json_ops(self):
+        class JsonDec(TypeDecorator):
+            impl = JSON()
+
+            cache_ok = True
+
+        self.assert_compile(
+            column("q", JsonDec)["q"], "q -> %(q_1)s", dialect="postgresql"
+        )
+
+        self.assert_compile(
+            column("q", JsonDec)["q"].as_integer(),
+            "CAST(q ->> %(q_1)s AS INTEGER)",
+            dialect="postgresql",
+        )
+
+    @testing.requires.array_type
+    def test_typedec_of_array(self, metadata, connection):
+        """test #7249"""
+
+        class ArrayDec(TypeDecorator):
+            impl = ARRAY(Integer, zero_indexes=True)
+
+            cache_ok = True
+
+            def coerce_compared_value(self, op, value):
+                return self.impl.coerce_compared_value(op, value)
+
+        t = Table(
+            "t",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("data", ArrayDec),
+        )
+
+        t.create(connection)
+
+        connection.execute(t.insert(), {"data": [1, 2, 3]})
+        val = connection.scalar(select(t.c.data))
+        eq_(val, [1, 2, 3])
+
+        val = connection.scalar(select(t.c.data[0]))
+        eq_(val, 1)
+
+    @testing.requires.json_type
+    def test_typedec_of_json(self, metadata, connection):
+        """test #7249"""
+
+        class JsonDec(TypeDecorator):
+            impl = JSON()
+
+            cache_ok = True
+
+        t = Table(
+            "t",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            Column("data", JsonDec),
+        )
+        t.create(connection)
+
+        connection.execute(t.insert(), {"data": {"key": "value"}})
+        val = connection.scalar(select(t.c.data))
+        eq_(val, {"key": "value"})
+
+        val = connection.scalar(select(t.c.data["key"].as_string()))
+        eq_(val, "value")
+
+
 class BindProcessorInsertValuesTest(UserDefinedRoundTripTest):
     """related to #6770, test that insert().values() applies to
     bound parameter handlers including the None value."""
@@ -795,8 +925,8 @@ class BindProcessorInsertValuesTest(UserDefinedRoundTripTest):
                 user_id=2,
                 goofy="jack",
                 goofy2="jack",
-                goofy4=util.u("jack"),
-                goofy7=util.u("jack"),
+                goofy4="jack",
+                goofy7="jack",
                 goofy8=12,
                 goofy9=12,
                 goofy10=12,
@@ -807,8 +937,8 @@ class BindProcessorInsertValuesTest(UserDefinedRoundTripTest):
                 user_id=3,
                 goofy="lala",
                 goofy2="lala",
-                goofy4=util.u("lala"),
-                goofy7=util.u("lala"),
+                goofy4="lala",
+                goofy7="lala",
                 goofy8=15,
                 goofy9=15,
                 goofy10=15,
@@ -819,8 +949,8 @@ class BindProcessorInsertValuesTest(UserDefinedRoundTripTest):
                 user_id=4,
                 goofy="fred",
                 goofy2="fred",
-                goofy4=util.u("fred"),
-                goofy7=util.u("fred"),
+                goofy4="fred",
+                goofy7="fred",
                 goofy8=9,
                 goofy9=9,
                 goofy10=9,
@@ -1026,50 +1156,6 @@ class UserDefinedTest(
         eq_(a.dialect_specific_args["bar"], "bar")
 
 
-class StringConvertUnicodeTest(fixtures.TestBase):
-    @testing.combinations((Unicode,), (String,), argnames="datatype")
-    @testing.combinations((True,), (False,), argnames="convert_unicode")
-    @testing.combinations(
-        (String.RETURNS_CONDITIONAL,),
-        (String.RETURNS_BYTES,),
-        (String.RETURNS_UNICODE),
-        argnames="returns_unicode_strings",
-    )
-    def test_convert_unicode(
-        self, datatype, convert_unicode, returns_unicode_strings
-    ):
-        s1 = datatype()
-        dialect = mock.Mock(
-            returns_unicode_strings=returns_unicode_strings,
-            encoding="utf-8",
-            convert_unicode=convert_unicode,
-        )
-
-        proc = s1.result_processor(dialect, None)
-
-        string = u("méil")
-        bytestring = string.encode("utf-8")
-
-        if (
-            datatype is Unicode or convert_unicode
-        ) and returns_unicode_strings in (
-            String.RETURNS_CONDITIONAL,
-            String.RETURNS_BYTES,
-        ):
-            eq_(proc(bytestring), string)
-
-            if returns_unicode_strings is String.RETURNS_CONDITIONAL:
-                eq_(proc(string), string)
-            else:
-                if util.py3k:
-                    # trying to decode a unicode
-                    assert_raises(TypeError, proc, string)
-                else:
-                    assert_raises(UnicodeEncodeError, proc, string)
-        else:
-            is_(proc, None)
-
-
 class TypeCoerceCastTest(fixtures.TablesTest):
     __backend__ = True
 
@@ -1117,7 +1203,7 @@ class TypeCoerceCastTest(fixtures.TablesTest):
 
         # test coerce from nulltype - e.g. use an object that
         # doesn't match to a known type
-        class MyObj(object):
+        class MyObj:
             def __str__(self):
                 return "THISISMYOBJ"
 
@@ -1243,7 +1329,7 @@ class TypeCoerceCastTest(fixtures.TablesTest):
         t = self.tables.t
         conn.execute(t.insert().values(data=coerce_fn("d1", MyType)))
 
-        class MyFoob(object):
+        class MyFoob:
             def __clause_element__(self):
                 return t.c.data
 
@@ -1464,6 +1550,8 @@ class VariantBackendTest(fixtures.TestBase, AssertsCompiledSQL):
 
     def test_type_decorator_compile_variant_two(self):
         class UTypeOne(types.UserDefinedType):
+            cache_ok = True
+
             def get_col_spec(self):
                 return "UTYPEONE"
 
@@ -1474,6 +1562,8 @@ class VariantBackendTest(fixtures.TestBase, AssertsCompiledSQL):
                 return process
 
         class UTypeTwo(types.UserDefinedType):
+            cache_ok = True
+
             def get_col_spec(self):
                 return "UTYPETWO"
 
@@ -1522,6 +1612,8 @@ class VariantBackendTest(fixtures.TestBase, AssertsCompiledSQL):
 class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
     def setup_test(self):
         class UTypeOne(types.UserDefinedType):
+            cache_ok = True
+
             def get_col_spec(self):
                 return "UTYPEONE"
 
@@ -1532,6 +1624,8 @@ class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
                 return process
 
         class UTypeTwo(types.UserDefinedType):
+            cache_ok = True
+
             def get_col_spec(self):
                 return "UTYPETWO"
 
@@ -1542,6 +1636,8 @@ class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
                 return process
 
         class UTypeThree(types.UserDefinedType):
+            cache_ok = True
+
             def get_col_spec(self):
                 return "UTYPETHREE"
 
@@ -1549,26 +1645,46 @@ class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
         self.UTypeTwo = UTypeTwo
         self.UTypeThree = UTypeThree
         self.variant = self.UTypeOne().with_variant(
-            self.UTypeTwo(), "postgresql"
+            self.UTypeTwo(), "postgresql", "mssql"
         )
         self.composite = self.variant.with_variant(self.UTypeThree(), "mysql")
+
+    def test_one_dialect_is_req(self):
+        with expect_raises_message(
+            exc.ArgumentError, "At least one dialect name is required"
+        ):
+            String().with_variant(VARCHAR())
 
     def test_illegal_dupe(self):
         v = self.UTypeOne().with_variant(self.UTypeTwo(), "postgresql")
         assert_raises_message(
             exc.ArgumentError,
             "Dialect 'postgresql' is already present "
-            "in the mapping for this Variant",
+            "in the mapping for this UTypeOne()",
             lambda: v.with_variant(self.UTypeThree(), "postgresql"),
         )
+
+    def test_no_variants_of_variants(self):
+        t = Integer().with_variant(Float(), "postgresql")
+
+        with expect_raises_message(
+            exc.ArgumentError,
+            r"can't pass a type that already has variants as a "
+            r"dialect-level type to with_variant\(\)",
+        ):
+            String().with_variant(t, "mysql")
 
     def test_compile(self):
         self.assert_compile(self.variant, "UTYPEONE", use_default_dialect=True)
         self.assert_compile(
             self.variant, "UTYPEONE", dialect=dialects.mysql.dialect()
         )
+
         self.assert_compile(
             self.variant, "UTYPETWO", dialect=dialects.postgresql.dialect()
+        )
+        self.assert_compile(
+            self.variant, "UTYPETWO", dialect=dialects.mssql.dialect()
         )
 
     def test_to_instance(self):
@@ -1577,6 +1693,27 @@ class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
             "UTYPETWO",
             dialect=dialects.postgresql.dialect(),
         )
+
+    def test_typedec_gen_dialect_impl(self):
+        """test that gen_dialect_impl passes onto a TypeDecorator, as
+        TypeDecorator._gen_dialect_impl() itself has special behaviors.
+
+        """
+
+        class MyDialectString(String):
+            pass
+
+        class MyString(TypeDecorator):
+            impl = String
+            cache_ok = True
+
+            def load_dialect_impl(self, dialect):
+                return MyDialectString()
+
+        variant = String().with_variant(MyString(), "mysql")
+
+        dialect_impl = variant._gen_dialect_impl(mysql.dialect())
+        is_(dialect_impl.impl.__class__, MyDialectString)
 
     def test_compile_composite(self):
         self.assert_compile(
@@ -1666,59 +1803,6 @@ class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
             ),
             datetime.datetime(2015, 4, 18, 10, 15, 17),
         )
-
-
-class UnicodeTest(fixtures.TestBase):
-
-    """Exercise the Unicode and related types.
-
-    Note:  unicode round trip tests are now in
-    sqlalchemy/testing/suite/test_types.py.
-
-    """
-
-    __backend__ = True
-
-    data = util.u(
-        "Alors vous imaginez ma surprise, au lever du jour, quand "
-        "une drôle de petite voix m’a réveillé. "
-        "Elle disait: « S’il vous plaît… dessine-moi un mouton! »"
-    )
-
-    def test_unicode_warnings_typelevel_native_unicode(self):
-
-        unicodedata = self.data
-        u = Unicode()
-        dialect = default.DefaultDialect()
-        dialect.supports_unicode_binds = True
-        uni = u.dialect_impl(dialect).bind_processor(dialect)
-        if util.py3k:
-            assert_raises(exc.SAWarning, uni, b"x")
-            assert isinstance(uni(unicodedata), str)
-        else:
-            assert_raises(exc.SAWarning, uni, "x")
-            assert isinstance(uni(unicodedata), unicode)  # noqa
-
-    def test_unicode_warnings_typelevel_sqla_unicode(self):
-        unicodedata = self.data
-        u = Unicode()
-        dialect = default.DefaultDialect()
-        dialect.supports_unicode_binds = False
-        uni = u.dialect_impl(dialect).bind_processor(dialect)
-        assert_raises(exc.SAWarning, uni, util.b("x"))
-        assert isinstance(uni(unicodedata), util.binary_type)
-
-        eq_(uni(unicodedata), unicodedata.encode("utf-8"))
-
-    def test_unicode_warnings_totally_wrong_type(self):
-        u = Unicode()
-        dialect = default.DefaultDialect()
-        dialect.supports_unicode_binds = False
-        uni = u.dialect_impl(dialect).bind_processor(dialect)
-        with expect_warnings(
-            "Unicode type received non-unicode bind param value 5."
-        ):
-            eq_(uni(5), 5)
 
 
 class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
@@ -2080,12 +2164,60 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
         )
 
     @testing.requires.enforces_check_constraints
-    @testing.provide_metadata
-    def test_variant_we_are_default(self):
+    def test_variant_default_is_not_schematype(self, metadata):
+        t = Table(
+            "my_table",
+            metadata,
+            Column(
+                "data",
+                String(50).with_variant(
+                    Enum(
+                        "four",
+                        "five",
+                        "six",
+                        native_enum=False,
+                        name="e2",
+                        create_constraint=True,
+                    ),
+                    testing.db.dialect.name,
+                ),
+            ),
+        )
+
+        # the base String() didnt create a constraint or even do any
+        # events.  But Column looked for SchemaType in _variant_mapping
+        # and found our type anyway.
+        eq_(
+            len([c for c in t.constraints if isinstance(c, CheckConstraint)]),
+            1,
+        )
+
+        metadata.create_all(testing.db)
+
+        # not using the connection fixture because we need to rollback and
+        # start again in the middle
+        with testing.db.connect() as connection:
+            # postgresql needs this in order to continue after the exception
+            trans = connection.begin()
+            assert_raises(
+                (exc.DBAPIError,),
+                connection.exec_driver_sql,
+                "insert into my_table (data) values('two')",
+            )
+            trans.rollback()
+
+            with connection.begin():
+                connection.exec_driver_sql(
+                    "insert into my_table (data) values ('four')"
+                )
+                eq_(connection.execute(select(t.c.data)).scalar(), "four")
+
+    @testing.requires.enforces_check_constraints
+    def test_variant_we_are_default(self, metadata):
         # test that the "variant" does not create a constraint
         t = Table(
             "my_table",
-            self.metadata,
+            metadata,
             Column(
                 "data",
                 Enum(
@@ -2115,7 +2247,7 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
             2,
         )
 
-        self.metadata.create_all(testing.db)
+        metadata.create_all(testing.db)
 
         # not using the connection fixture because we need to rollback and
         # start again in the middle
@@ -2136,12 +2268,11 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
                 eq_(connection.execute(select(t.c.data)).scalar(), "two")
 
     @testing.requires.enforces_check_constraints
-    @testing.provide_metadata
-    def test_variant_we_are_not_default(self):
+    def test_variant_we_are_not_default(self, metadata):
         # test that the "variant" does not create a constraint
         t = Table(
             "my_table",
-            self.metadata,
+            metadata,
             Column(
                 "data",
                 Enum(
@@ -2171,7 +2302,7 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
             2,
         )
 
-        self.metadata.create_all(testing.db)
+        metadata.create_all(testing.db)
 
         # not using the connection fixture because we need to rollback and
         # start again in the middle
@@ -2401,17 +2532,25 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
         eq_(e1_vc.adapt(ENUM).name, "someotherenum")
         eq_(e1_vc.adapt(ENUM).enums, ["1", "2", "3", "a", "b"])
 
-    def test_adapt_length(self):
+    @testing.combinations(True, False, argnames="native_enum")
+    def test_adapt_length(self, native_enum):
         from sqlalchemy.dialects.postgresql import ENUM
 
-        e1 = Enum("one", "two", "three", length=50, native_enum=False)
-        eq_(e1.adapt(ENUM).length, 50)
+        e1 = Enum("one", "two", "three", length=50, native_enum=native_enum)
+
+        if not native_enum:
+            eq_(e1.adapt(ENUM).length, 50)
+
         eq_(e1.adapt(Enum).length, 50)
+
+        self.assert_compile(e1, "VARCHAR(50)", dialect="default")
 
         e1 = Enum("one", "two", "three")
         eq_(e1.length, 5)
         eq_(e1.adapt(ENUM).length, 5)
         eq_(e1.adapt(Enum).length, 5)
+
+        self.assert_compile(e1, "VARCHAR(5)", dialect="default")
 
     @testing.provide_metadata
     def test_create_metadata_bound_no_crash(self):
@@ -2421,7 +2560,7 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
         m1.create_all(testing.db)
 
     def test_non_native_constraint_custom_type(self):
-        class Foob(object):
+        class Foob:
             def __init__(self, name):
                 self.name = name
 
@@ -2433,7 +2572,7 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
                     *[v.name for v in values],
                     name="myenum",
                     native_enum=False,
-                    create_constraint=True
+                    create_constraint=True,
                 )
 
             # future method
@@ -2479,13 +2618,11 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
         # depending on backend.
         assert "('x'," in e.print_sql()
 
-    @testing.uses_deprecated(".*convert_unicode")
     def test_repr(self):
         e = Enum(
             "x",
             "y",
             name="somename",
-            convert_unicode=True,
             quote=True,
             inherit_schema=True,
             native_enum=False,
@@ -2496,16 +2633,35 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
             "inherit_schema=True, native_enum=False)",
         )
 
+    def test_repr_two(self):
+        e = Enum("x", "y", name="somename", create_constraint=True)
+        eq_(
+            repr(e),
+            "Enum('x', 'y', name='somename', create_constraint=True)",
+        )
+
+    def test_repr_three(self):
+        e = Enum("x", "y", native_enum=False, length=255)
+        eq_(
+            repr(e),
+            "Enum('x', 'y', native_enum=False, length=255)",
+        )
+
+    def test_repr_four(self):
+        e = Enum("x", "y", length=255)
+        eq_(
+            repr(e),
+            "Enum('x', 'y', length=255)",
+        )
+
     def test_length_native(self):
         e = Enum("x", "y", "long", length=42)
+        eq_(e.length, 42)
 
+        e = Enum("x", "y", "long")
         eq_(e.length, len("long"))
 
-        # no error is raised
-        e = Enum("x", "y", "long", length=1)
-        eq_(e.length, len("long"))
-
-    def test_length_raises(self):
+    def test_length_too_short_raises(self):
         assert_raises_message(
             ValueError,
             "When provided, length must be larger or equal.*",
@@ -2547,27 +2703,22 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
             [(1, self.SomeEnum.three), (2, self.SomeEnum.three)],
         )
 
-    def test_omit_warn(self):
-        with expect_deprecated_20(
-            r"The provided enum someenum contains the aliases \['four'\]"
-        ):
-            Enum(self.SomeEnum)
-
     @testing.combinations(
         (True, "native"), (False, "non_native"), id_="ai", argnames="native"
     )
     @testing.combinations(
         (True, "omit_alias"), (False, "with_alias"), id_="ai", argnames="omit"
     )
-    @testing.provide_metadata
     @testing.skip_if("mysql < 8")
-    def test_duplicate_values_accepted(self, native, omit):
+    def test_duplicate_values_accepted(
+        self, metadata, connection, native, omit
+    ):
         foo_enum = pep435_enum("foo_enum")
         foo_enum("one", 1, "two")
         foo_enum("three", 3, "four")
         tbl = sa.Table(
             "foo_table",
-            self.metadata,
+            metadata,
             sa.Column("id", sa.Integer),
             sa.Column(
                 "data",
@@ -2581,7 +2732,7 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
         )
         t = sa.table("foo_table", sa.column("id"), sa.column("data"))
 
-        self.metadata.create_all(testing.db)
+        metadata.create_all(connection)
         if omit:
             with expect_raises(
                 (
@@ -2591,29 +2742,27 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
                     exc.DBAPIError,
                 )
             ):
-                with testing.db.begin() as conn:
-                    conn.execute(
-                        t.insert(),
-                        [
-                            {"id": 1, "data": "four"},
-                            {"id": 2, "data": "three"},
-                        ],
-                    )
-        else:
-            with testing.db.begin() as conn:
-                conn.execute(
+                connection.execute(
                     t.insert(),
-                    [{"id": 1, "data": "four"}, {"id": 2, "data": "three"}],
+                    [
+                        {"id": 1, "data": "four"},
+                        {"id": 2, "data": "three"},
+                    ],
                 )
+        else:
+            connection.execute(
+                t.insert(),
+                [{"id": 1, "data": "four"}, {"id": 2, "data": "three"}],
+            )
 
-                eq_(
-                    conn.execute(t.select().order_by(t.c.id)).fetchall(),
-                    [(1, "four"), (2, "three")],
-                )
-                eq_(
-                    conn.execute(tbl.select().order_by(tbl.c.id)).fetchall(),
-                    [(1, foo_enum.three), (2, foo_enum.three)],
-                )
+            eq_(
+                connection.execute(t.select().order_by(t.c.id)).fetchall(),
+                [(1, "four"), (2, "three")],
+            )
+            eq_(
+                connection.execute(tbl.select().order_by(tbl.c.id)).fetchall(),
+                [(1, foo_enum.three), (2, foo_enum.three)],
+            )
 
 
 MyPickleType = None
@@ -2894,7 +3043,7 @@ class JSONTest(fixtures.TestBase):
         eq_(bindproc(expr.right.value), "'five'")
 
 
-class ArrayTest(fixtures.TestBase):
+class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
     def _myarray_fixture(self):
         class MyArray(ARRAY):
             pass
@@ -2947,6 +3096,44 @@ class ArrayTest(fixtures.TestBase):
         assert isinstance(arrtable.c.intarr[1:3].type, MyArray)
         assert isinstance(arrtable.c.strarr[1:3].type, MyArray)
 
+    def test_array_literal_simple(self):
+        self.assert_compile(
+            select(literal([1, 2, 3], ARRAY(Integer))),
+            "SELECT [1, 2, 3] AS anon_1",
+            literal_binds=True,
+            dialect="default",
+        )
+
+    def test_array_literal_complex(self):
+        self.assert_compile(
+            select(
+                literal(
+                    [["one", "two"], ["thr'ee", "réve🐍 illé"]],
+                    ARRAY(String, dimensions=2),
+                )
+            ),
+            "SELECT [['one', 'two'], ['thr''ee', 'réve🐍 illé']] AS anon_1",
+            literal_binds=True,
+            dialect="default",
+        )
+
+    def test_array_literal_render_no_inner_render(self):
+        class MyType(UserDefinedType):
+            cache_ok = True
+
+            def get_col_spec(self, **kw):
+                return "MYTYPE"
+
+        with expect_raises_message(
+            NotImplementedError,
+            r"Don't know how to literal-quote value \[1, 2, 3\]",
+        ):
+            self.assert_compile(
+                select(literal([1, 2, 3], ARRAY(MyType()))),
+                "nothing",
+                literal_binds=True,
+            )
+
 
 MyCustomType = MyTypeDec = None
 
@@ -2961,6 +3148,8 @@ class ExpressionTest(
         global MyCustomType, MyTypeDec
 
         class MyCustomType(types.UserDefinedType):
+            cache_ok = True
+
             def get_col_spec(self):
                 return "INT"
 
@@ -3300,7 +3489,7 @@ class ExpressionTest(
         class MyFoobarType(types.UserDefinedType):
             pass
 
-        class Foo(object):
+        class Foo:
             pass
 
         # unknown type + integer, right hand bind
@@ -3413,11 +3602,11 @@ class ExpressionTest(
 
     def test_detect_coercion_of_builtins(self):
         @inspection._self_inspects
-        class SomeSQLAThing(object):
+        class SomeSQLAThing:
             def __repr__(self):
                 return "some_sqla_thing()"
 
-        class SomeOtherThing(object):
+        class SomeOtherThing:
             pass
 
         assert_raises_message(
@@ -3436,6 +3625,23 @@ class ExpressionTest(
 
 class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
     __dialect__ = "default"
+
+    def test_compile_err_formatting(self):
+        with expect_raises_message(
+            exc.CompileError,
+            r"Don't know how to render literal SQL value: \(1, 2, 3\)",
+        ):
+            func.foo((1, 2, 3)).compile(compile_kwargs={"literal_binds": True})
+
+    def test_strict_bool_err_formatting(self):
+        typ = Boolean()
+
+        dialect = default.DefaultDialect()
+        with expect_raises_message(
+            TypeError,
+            r"Not a boolean value: \(5,\)",
+        ):
+            typ.bind_processor(dialect)((5,))
 
     @testing.requires.unbounded_varchar
     def test_string_plain(self):
@@ -3478,6 +3684,9 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         self.assert_compile(
             dialects.postgresql.FLOAT(), "FLOAT", allow_dialect_select=True
         )
+
+    def test_default_compile_double(self):
+        self.assert_compile(Double(), "DOUBLE")
 
     def test_default_compile_mysql_integer(self):
         self.assert_compile(
@@ -3523,7 +3732,7 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
                 return "MYINTEGER %s" % kw["type_expression"].name
 
         dialect = default.DefaultDialect()
-        dialect.type_compiler = SomeTypeCompiler(dialect)
+        dialect.type_compiler_instance = SomeTypeCompiler(dialect)
         self.assert_compile(
             ddl.CreateColumn(Column("bar", VARCHAR(50))),
             "bar MYVARCHAR",
@@ -3534,6 +3743,34 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "bar MYINTEGER bar",
             dialect=dialect,
         )
+
+    def test_legacy_typecompiler_attribute(self):
+        """the .type_compiler attribute was broken into
+        .type_compiler_cls and .type_compiler_instance for 2.0 so that it can
+        be properly typed.  However it is expected that the majority of
+        dialects make use of the .type_compiler attribute both at the class
+        level as well as the instance level, so make sure it still functions
+        in exactly the same way, both as the type compiler class to be
+        used as well as that it's present as an instance on an instance
+        of the dialect.
+
+        """
+
+        dialect = default.DefaultDialect()
+        assert isinstance(
+            dialect.type_compiler_instance, dialect.type_compiler_cls
+        )
+        is_(dialect.type_compiler_instance, dialect.type_compiler)
+
+        class MyTypeCompiler(TypeCompiler):
+            pass
+
+        class MyDialect(default.DefaultDialect):
+            type_compiler = MyTypeCompiler
+
+        dialect = MyDialect()
+        assert isinstance(dialect.type_compiler_instance, MyTypeCompiler)
+        is_(dialect.type_compiler_instance, dialect.type_compiler)
 
 
 class TestKWArgPassThru(AssertsCompiledSQL, fixtures.TestBase):
@@ -3565,7 +3802,7 @@ class NumericRawSQLTest(fixtures.TestBase):
         metadata.create_all(connection)
         connection.execute(t.insert(), dict(val=data))
 
-    @testing.fails_on("sqlite", "Doesn't provide Decimal results natively")
+    @testing.requires.numeric_received_as_decimal_untyped
     @testing.provide_metadata
     def test_decimal_fp(self, connection):
         metadata = self.metadata
@@ -3576,7 +3813,7 @@ class NumericRawSQLTest(fixtures.TestBase):
         assert isinstance(val, decimal.Decimal)
         eq_(val, decimal.Decimal("45.5"))
 
-    @testing.fails_on("sqlite", "Doesn't provide Decimal results natively")
+    @testing.requires.numeric_received_as_decimal_untyped
     @testing.provide_metadata
     def test_decimal_int(self, connection):
         metadata = self.metadata
@@ -3592,7 +3829,7 @@ class NumericRawSQLTest(fixtures.TestBase):
         metadata = self.metadata
         self._fixture(connection, metadata, Integer, 45)
         val = connection.exec_driver_sql("select val from t").scalar()
-        assert isinstance(val, util.int_types)
+        assert isinstance(val, int)
         eq_(val, 45)
 
     @testing.provide_metadata
@@ -3602,11 +3839,7 @@ class NumericRawSQLTest(fixtures.TestBase):
         val = connection.exec_driver_sql("select val from t").scalar()
         assert isinstance(val, float)
 
-        # some DBAPIs have unusual float handling
-        if testing.against("oracle+cx_oracle", "mysql+oursql", "firebird"):
-            eq_(round_decimal(val, 3), 46.583)
-        else:
-            eq_(val, 46.583)
+        eq_(val, 46.583)
 
 
 class IntervalTest(fixtures.TablesTest, AssertsExecutionResults):
@@ -3731,7 +3964,7 @@ class BooleanTest(
         )
 
     def test_non_native_constraint_custom_type(self):
-        class Foob(object):
+        class Foob:
             def __init__(self, value):
                 self.value = value
 
@@ -4044,3 +4277,30 @@ class LiteralTest(fixtures.TestBase):
             dialect=testing.db.dialect,
             compile_kwargs={"literal_binds": True},
         )
+
+
+class ResolveForLiteralTest(fixtures.TestBase):
+    """test suite for literal resolution, includes tests for
+    #7537 and #7551
+
+    """
+
+    @testing.combinations(
+        (
+            datetime.datetime(
+                2012, 10, 15, 12, 57, 18, tzinfo=datetime.timezone.utc
+            ),
+            sqltypes.DATETIME_TIMEZONE,
+        ),
+        (datetime.datetime(2012, 10, 15, 12, 57, 18, 396), sqltypes._DATETIME),
+        (
+            datetime.time(12, 57, 18, tzinfo=datetime.timezone.utc),
+            sqltypes.TIME_TIMEZONE,
+        ),
+        (datetime.time(12, 57, 18), sqltypes._TIME),
+        ("réve🐍 illé", sqltypes._UNICODE),
+        ("hello", sqltypes._STRING),
+        ("réveillé", sqltypes._UNICODE),
+    )
+    def test_resolve(self, value, expected):
+        is_(literal(value).type, expected)

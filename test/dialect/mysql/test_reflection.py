@@ -30,13 +30,12 @@ from sqlalchemy import types
 from sqlalchemy import Unicode
 from sqlalchemy import UnicodeText
 from sqlalchemy import UniqueConstraint
-from sqlalchemy import util
 from sqlalchemy.dialects.mysql import base as mysql
 from sqlalchemy.dialects.mysql import reflection as _reflection
 from sqlalchemy.schema import CreateIndex
-from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import expect_warnings
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
@@ -328,7 +327,7 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
             metadata,
             Column("c1", Integer()),
             comment=comment,
-            **kwargs
+            **kwargs,
         )
 
         conn = connection
@@ -559,6 +558,10 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
             )
 
     def test_skip_not_describable(self, metadata, connection):
+        """This test is the only one that test the _default_multi_reflect
+        behaviour with UnreflectableTableError
+        """
+
         @event.listens_for(metadata, "before_drop")
         def cleanup(*arg, **kw):
             with testing.db.begin() as conn:
@@ -580,14 +583,10 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
             m.reflect(views=True, bind=conn)
         eq_(m.tables["test_t2"].name, "test_t2")
 
-        assert_raises_message(
-            exc.UnreflectableTableError,
-            "references invalid table",
-            Table,
-            "test_v",
-            MetaData(),
-            autoload_with=conn,
-        )
+        with expect_raises_message(
+            exc.UnreflectableTableError, "references invalid table"
+        ):
+            Table("test_v", MetaData(), autoload_with=conn)
 
     @testing.exclude("mysql", "<", (5, 0, 0), "no information_schema support")
     def test_system_views(self):
@@ -848,8 +847,8 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
             },
         ]
         ischema_casing_1 = [
-            (util.u("Test"), util.u("Track"), "TrackID"),
-            (util.u("Test_Schema"), util.u("Track"), "TrackID"),
+            ("Test", "Track", "TrackID"),
+            ("Test_Schema", "Track", "TrackID"),
         ]
         return fkeys_casing_1, ischema_casing_1
 

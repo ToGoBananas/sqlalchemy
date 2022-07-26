@@ -1,13 +1,15 @@
 import copy
+import dataclasses
 import pickle
 
 from sqlalchemy import event
 from sqlalchemy import ForeignKey
 from sqlalchemy import func
+from sqlalchemy import inspect
 from sqlalchemy import Integer
+from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
-from sqlalchemy import util
 from sqlalchemy.ext.mutable import MutableComposite
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
@@ -16,6 +18,7 @@ from sqlalchemy.orm import attributes
 from sqlalchemy.orm import column_property
 from sqlalchemy.orm import composite
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import Session
 from sqlalchemy.orm.instrumentation import ClassManager
 from sqlalchemy.orm.mapper import Mapper
 from sqlalchemy.testing import assert_raises
@@ -41,7 +44,11 @@ class SubFoo(Foo):
     pass
 
 
-class FooWithEq(object):
+class Foo2(fixtures.BasicEntity):
+    pass
+
+
+class FooWithEq:
     def __init__(self, **kw):
         for k in kw:
             setattr(self, k, kw[k])
@@ -91,7 +98,45 @@ class MyPoint(Point):
         return value
 
 
-class _MutableDictTestFixture(object):
+@dataclasses.dataclass
+class DCPoint(MutableComposite):
+    x: int
+    y: int
+
+    def __setattr__(self, key, value):
+        object.__setattr__(self, key, value)
+        self.changed()
+
+    def __getstate__(self):
+        return self.x, self.y
+
+    def __setstate__(self, state):
+        self.x, self.y = state
+
+
+@dataclasses.dataclass
+class MyDCPoint(MutableComposite):
+    x: int
+    y: int
+
+    def __setattr__(self, key, value):
+        object.__setattr__(self, key, value)
+        self.changed()
+
+    def __getstate__(self):
+        return self.x, self.y
+
+    def __setstate__(self, state):
+        self.x, self.y = state
+
+    @classmethod
+    def coerce(cls, key, value):
+        if isinstance(value, tuple):
+            value = MyDCPoint(*value)
+        return value
+
+
+class _MutableDictTestFixture:
     @classmethod
     def _type_fixture(cls):
         return MutableDict
@@ -100,6 +145,58 @@ class _MutableDictTestFixture(object):
         # clear out mapper events
         Mapper.dispatch._clear()
         ClassManager.dispatch._clear()
+
+
+class MiscTest(fixtures.TestBase):
+    @testing.combinations(True, False, argnames="pickleit")
+    def test_pickle_parent_multi_attrs(self, registry, connection, pickleit):
+        """test #8133"""
+
+        local_foo = Table(
+            "lf",
+            registry.metadata,
+            Column("id", Integer, primary_key=True),
+            Column("j1", MutableDict.as_mutable(PickleType)),
+            Column("j2", MutableDict.as_mutable(PickleType)),
+            Column("j3", MutableDict.as_mutable(PickleType)),
+            Column("j4", MutableDict.as_mutable(PickleType)),
+        )
+
+        registry.map_imperatively(Foo2, local_foo)
+        registry.metadata.create_all(connection)
+
+        with Session(connection) as sess:
+
+            data = dict(
+                j1={"a": 1},
+                j2={"b": 2},
+                j3={"c": 3},
+                j4={"d": 4},
+            )
+            lf = Foo2(**data)
+            sess.add(lf)
+            sess.commit()
+
+        all_attrs = {"j1", "j2", "j3", "j4"}
+        for attr in all_attrs:
+            for loads, dumps in picklers():
+                with Session(connection) as sess:
+                    f1 = sess.scalars(select(Foo2)).first()
+                    if pickleit:
+                        f2 = loads(dumps(f1))
+                    else:
+                        f2 = f1
+
+                existing_dict = getattr(f2, attr)
+                existing_dict["q"] = "c"
+                eq_(
+                    inspect(f2).attrs[attr].history,
+                    ([existing_dict], (), ()),
+                )
+                for other_attr in all_attrs.difference([attr]):
+                    a = inspect(f2).attrs[other_attr].history
+                    b = ((), [data[other_attr]], ())
+                    eq_(a, b)
 
 
 class _MutableDictTestBase(_MutableDictTestFixture):
@@ -148,7 +245,10 @@ class _MutableDictTestBase(_MutableDictTestFixture):
             canary.mock_calls,
             [
                 mock.call(
-                    f1, attributes.Event(Foo.data.impl, attributes.OP_MODIFIED)
+                    f1,
+                    attributes.AttributeEventToken(
+                        Foo.data.impl, attributes.OP_MODIFIED
+                    ),
                 )
             ],
         )
@@ -312,7 +412,7 @@ class _MutableDictTestBase(_MutableDictTestFixture):
         eq_(f1.data, {"a": "b"})
 
 
-class _MutableListTestFixture(object):
+class _MutableListTestFixture:
     @classmethod
     def _type_fixture(cls):
         return MutableList
@@ -573,44 +673,24 @@ class _MutableListTestBase(_MutableListTestFixture):
         # print(repr(pickles))
         # return
 
-        if util.py3k:
-            pickles = [
-                b"\x80\x04\x95<\x00\x00\x00\x00\x00\x00\x00\x8c\x16"
-                b"sqlalchemy.ext.mutable\x94\x8c\x0bMutableList\x94\x93\x94)"
-                b"\x81\x94(K\x01K\x02e]\x94(K\x01K\x02eb.",
-                b"ccopy_reg\n_reconstructor\np0\n(csqlalchemy.ext.mutable\n"
-                b"MutableList\np1\nc__builtin__\nlist\np2\n(lp3\nI1\naI2\n"
-                b"atp4\nRp5\n(lp6\nI1\naI2\nab.",
-                b"ccopy_reg\n_reconstructor\nq\x00(csqlalchemy.ext.mutable\n"
-                b"MutableList\nq\x01c__builtin__\nlist\nq\x02]q\x03(K\x01K"
-                b"\x02etq\x04Rq\x05]q\x06(K\x01K\x02eb.",
-                b"\x80\x02csqlalchemy.ext.mutable\nMutableList\nq\x00)\x81q"
-                b"\x01(K\x01K\x02e]q\x02(K\x01K\x02eb.",
-                b"\x80\x03csqlalchemy.ext.mutable\nMutableList\nq\x00)\x81q"
-                b"\x01(K\x01K\x02e]q\x02(K\x01K\x02eb.",
-                b"\x80\x04\x95<\x00\x00\x00\x00\x00\x00\x00\x8c\x16"
-                b"sqlalchemy.ext.mutable\x94\x8c\x0bMutableList\x94\x93\x94)"
-                b"\x81\x94(K\x01K\x02e]\x94(K\x01K\x02eb.",
-            ]
-        else:
-            pickles = [
-                "\x80\x02csqlalchemy.ext.mutable\nMutableList\nq\x00]q\x01"
-                "(K\x01K\x02e\x85q\x02Rq\x03.",
-                "\x80\x02csqlalchemy.ext.mutable\nMutableList"
-                "\nq\x00]q\x01(K\x01K\x02e\x85q\x02Rq\x03.",
-                "csqlalchemy.ext.mutable\nMutableList\np0\n"
-                "((lp1\nI1\naI2\natp2\nRp3\n.",
-                "csqlalchemy.ext.mutable\nMutableList\nq\x00(]"
-                "q\x01(K\x01K\x02etq\x02Rq\x03.",
-                "\x80\x02csqlalchemy.ext.mutable\nMutableList"
-                "\nq\x01]q\x02(K\x01K\x02e\x85Rq\x03.",
-                "\x80\x02csqlalchemy.ext.mutable\nMutableList\n"
-                "q\x01]q\x02(K\x01K\x02e\x85Rq\x03.",
-                "csqlalchemy.ext.mutable\nMutableList\np1\n"
-                "((lp2\nI1\naI2\natRp3\n.",
-                "csqlalchemy.ext.mutable\nMutableList\nq\x01"
-                "(]q\x02(K\x01K\x02etRq\x03.",
-            ]
+        pickles = [
+            b"\x80\x04\x95<\x00\x00\x00\x00\x00\x00\x00\x8c\x16"
+            b"sqlalchemy.ext.mutable\x94\x8c\x0bMutableList\x94\x93\x94)"
+            b"\x81\x94(K\x01K\x02e]\x94(K\x01K\x02eb.",
+            b"ccopy_reg\n_reconstructor\np0\n(csqlalchemy.ext.mutable\n"
+            b"MutableList\np1\nc__builtin__\nlist\np2\n(lp3\nI1\naI2\n"
+            b"atp4\nRp5\n(lp6\nI1\naI2\nab.",
+            b"ccopy_reg\n_reconstructor\nq\x00(csqlalchemy.ext.mutable\n"
+            b"MutableList\nq\x01c__builtin__\nlist\nq\x02]q\x03(K\x01K"
+            b"\x02etq\x04Rq\x05]q\x06(K\x01K\x02eb.",
+            b"\x80\x02csqlalchemy.ext.mutable\nMutableList\nq\x00)\x81q"
+            b"\x01(K\x01K\x02e]q\x02(K\x01K\x02eb.",
+            b"\x80\x03csqlalchemy.ext.mutable\nMutableList\nq\x00)\x81q"
+            b"\x01(K\x01K\x02e]q\x02(K\x01K\x02eb.",
+            b"\x80\x04\x95<\x00\x00\x00\x00\x00\x00\x00\x8c\x16"
+            b"sqlalchemy.ext.mutable\x94\x8c\x0bMutableList\x94\x93\x94)"
+            b"\x81\x94(K\x01K\x02e]\x94(K\x01K\x02eb.",
+        ]
 
         for pickle_ in pickles:
             obj = pickle.loads(pickle_)
@@ -618,7 +698,7 @@ class _MutableListTestBase(_MutableListTestFixture):
             assert isinstance(obj, MutableList)
 
 
-class _MutableSetTestFixture(object):
+class _MutableSetTestFixture:
     @classmethod
     def _type_fixture(cls):
         return MutableSet
@@ -853,7 +933,7 @@ class _MutableSetTestBase(_MutableSetTestFixture):
         eq_(f1.data, set([1, 2]))
 
 
-class _MutableNoHashFixture(object):
+class _MutableNoHashFixture:
     @testing.fixture(autouse=True, scope="class")
     def set_class(self):
         global Foo
@@ -1057,7 +1137,7 @@ class MutableColumnCopyArrayTest(_MutableListTestBase, fixtures.MappedTest):
 
         Base = declarative_base(metadata=metadata)
 
-        class Mixin(object):
+        class Mixin:
             data = Column(MutableList.as_mutable(ARRAY(Integer)))
 
         class Foo(Mixin, Base):
@@ -1279,7 +1359,7 @@ class CustomMutableAssociationScalarJSONTest(
         eq_(type(f1.data), self._type_fixture())
 
 
-class _CompositeTestBase(object):
+class _CompositeTestBase:
     @classmethod
     def define_tables(cls, metadata):
         Table(
@@ -1351,6 +1431,13 @@ class MutableCompositeColumnDefaultTest(
         assert f1 in sess.dirty
 
 
+class MutableDCCompositeColumnDefaultTest(MutableCompositeColumnDefaultTest):
+    @classmethod
+    def _type_fixture(cls):
+
+        return DCPoint
+
+
 class MutableCompositesUnpickleTest(_CompositeTestBase, fixtures.MappedTest):
     @classmethod
     def setup_mappers(cls):
@@ -1370,20 +1457,29 @@ class MutableCompositesUnpickleTest(_CompositeTestBase, fixtures.MappedTest):
             loads(dumps(u1))
 
 
+class MutableDCCompositesUnpickleTest(MutableCompositesUnpickleTest):
+    @classmethod
+    def _type_fixture(cls):
+
+        return DCPoint
+
+
 class MutableCompositesTest(_CompositeTestBase, fixtures.MappedTest):
     @classmethod
     def setup_mappers(cls):
         foo = cls.tables.foo
 
-        Point = cls._type_fixture()
+        cls.Point = cls._type_fixture()
 
         cls.mapper_registry.map_imperatively(
-            Foo, foo, properties={"data": composite(Point, foo.c.x, foo.c.y)}
+            Foo,
+            foo,
+            properties={"data": composite(cls.Point, foo.c.x, foo.c.y)},
         )
 
     def test_in_place_mutation(self):
         sess = fixture_session()
-        d = Point(3, 4)
+        d = self.Point(3, 4)
         f1 = Foo(data=d)
         sess.add(f1)
         sess.commit()
@@ -1391,11 +1487,11 @@ class MutableCompositesTest(_CompositeTestBase, fixtures.MappedTest):
         f1.data.y = 5
         sess.commit()
 
-        eq_(f1.data, Point(3, 5))
+        eq_(f1.data, self.Point(3, 5))
 
     def test_pickle_of_parent(self):
         sess = fixture_session()
-        d = Point(3, 4)
+        d = self.Point(3, 4)
         f1 = Foo(data=d)
         sess.add(f1)
         sess.commit()
@@ -1416,11 +1512,11 @@ class MutableCompositesTest(_CompositeTestBase, fixtures.MappedTest):
         f1 = Foo(data=None)
         sess.add(f1)
         sess.commit()
-        eq_(f1.data, Point(None, None))
+        eq_(f1.data, self.Point(None, None))
 
         f1.data.y = 5
         sess.commit()
-        eq_(f1.data, Point(None, 5))
+        eq_(f1.data, self.Point(None, 5))
 
     def test_set_illegal(self):
         f1 = Foo()
@@ -1435,7 +1531,7 @@ class MutableCompositesTest(_CompositeTestBase, fixtures.MappedTest):
 
     def test_unrelated_flush(self):
         sess = fixture_session()
-        f1 = Foo(data=Point(3, 4), unrelated_data="unrelated")
+        f1 = Foo(data=self.Point(3, 4), unrelated_data="unrelated")
         sess.add(f1)
         sess.flush()
         f1.unrelated_data = "unrelated 2"
@@ -1447,7 +1543,7 @@ class MutableCompositesTest(_CompositeTestBase, fixtures.MappedTest):
 
     def test_dont_reset_on_attr_refresh(self):
         sess = fixture_session()
-        f1 = Foo(data=Point(3, 4), unrelated_data="unrelated")
+        f1 = Foo(data=self.Point(3, 4), unrelated_data="unrelated")
         sess.add(f1)
         sess.flush()
 
@@ -1477,6 +1573,13 @@ class MutableCompositesTest(_CompositeTestBase, fixtures.MappedTest):
 
         eq_(f1.data.x, 12)
         eq_(f1.data.y, 15)
+
+
+class MutableDCCompositesTest(MutableCompositesTest):
+    @classmethod
+    def _type_fixture(cls):
+
+        return DCPoint
 
 
 class MutableCompositeCallableTest(_CompositeTestBase, fixtures.MappedTest):
@@ -1520,16 +1623,18 @@ class MutableCompositeCustomCoerceTest(
     def setup_mappers(cls):
         foo = cls.tables.foo
 
-        Point = cls._type_fixture()
+        cls.Point = cls._type_fixture()
 
         cls.mapper_registry.map_imperatively(
-            Foo, foo, properties={"data": composite(Point, foo.c.x, foo.c.y)}
+            Foo,
+            foo,
+            properties={"data": composite(cls.Point, foo.c.x, foo.c.y)},
         )
 
     def test_custom_coerce(self):
         f = Foo()
         f.data = (3, 4)
-        eq_(f.data, Point(3, 4))
+        eq_(f.data, self.Point(3, 4))
 
     def test_round_trip_ok(self):
         sess = fixture_session()
@@ -1539,7 +1644,14 @@ class MutableCompositeCustomCoerceTest(
         sess.add(f)
         sess.commit()
 
-        eq_(f.data, Point(3, 4))
+        eq_(f.data, self.Point(3, 4))
+
+
+class MutableDCCompositeCustomCoerceTest(MutableCompositeCustomCoerceTest):
+    @classmethod
+    def _type_fixture(cls):
+
+        return MyDCPoint
 
 
 class MutableInheritedCompositesTest(_CompositeTestBase, fixtures.MappedTest):
@@ -1565,16 +1677,18 @@ class MutableInheritedCompositesTest(_CompositeTestBase, fixtures.MappedTest):
         foo = cls.tables.foo
         subfoo = cls.tables.subfoo
 
-        Point = cls._type_fixture()
+        cls.Point = cls._type_fixture()
 
         cls.mapper_registry.map_imperatively(
-            Foo, foo, properties={"data": composite(Point, foo.c.x, foo.c.y)}
+            Foo,
+            foo,
+            properties={"data": composite(cls.Point, foo.c.x, foo.c.y)},
         )
         cls.mapper_registry.map_imperatively(SubFoo, subfoo, inherits=Foo)
 
     def test_in_place_mutation_subclass(self):
         sess = fixture_session()
-        d = Point(3, 4)
+        d = self.Point(3, 4)
         f1 = SubFoo(data=d)
         sess.add(f1)
         sess.commit()
@@ -1582,11 +1696,11 @@ class MutableInheritedCompositesTest(_CompositeTestBase, fixtures.MappedTest):
         f1.data.y = 5
         sess.commit()
 
-        eq_(f1.data, Point(3, 5))
+        eq_(f1.data, self.Point(3, 5))
 
     def test_pickle_of_parent_subclass(self):
         sess = fixture_session()
-        d = Point(3, 4)
+        d = self.Point(3, 4)
         f1 = SubFoo(data=d)
         sess.add(f1)
         sess.commit()
@@ -1601,3 +1715,10 @@ class MutableInheritedCompositesTest(_CompositeTestBase, fixtures.MappedTest):
             sess.add(f2)
             f2.data.y = 12
             assert f2 in sess.dirty
+
+
+class MutableInheritedDCCompositesTest(MutableInheritedCompositesTest):
+    @classmethod
+    def _type_fixture(cls):
+
+        return DCPoint

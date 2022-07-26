@@ -1,9 +1,11 @@
-# coding: utf-8
+# mypy: ignore-errors
+
 
 import datetime
 import decimal
 import json
 import re
+import uuid
 
 from .. import config
 from .. import engines
@@ -15,6 +17,7 @@ from ..config import requirements
 from ..schema import Column
 from ..schema import Table
 from ... import and_
+from ... import ARRAY
 from ... import BigInteger
 from ... import bindparam
 from ... import Boolean
@@ -26,6 +29,7 @@ from ... import Float
 from ... import Integer
 from ... import JSON
 from ... import literal
+from ... import literal_column
 from ... import MetaData
 from ... import null
 from ... import Numeric
@@ -35,16 +39,19 @@ from ... import testing
 from ... import Text
 from ... import Time
 from ... import TIMESTAMP
+from ... import type_coerce
 from ... import TypeDecorator
 from ... import Unicode
 from ... import UnicodeText
-from ... import util
+from ... import UUID
+from ... import Uuid
 from ...orm import declarative_base
 from ...orm import Session
-from ...util import u
+from ...sql.sqltypes import LargeBinary
+from ...sql.sqltypes import PickleType
 
 
-class _LiteralRoundTripFixture(object):
+class _LiteralRoundTripFixture:
     supports_whereclause = True
 
     @testing.fixture
@@ -56,31 +63,54 @@ class _LiteralRoundTripFixture(object):
         # official type; ideally we'd be able to use CAST here
         # but MySQL in particular can't CAST fully
 
-        def run(type_, input_, output, filter_=None):
+        def run(
+            type_,
+            input_,
+            output,
+            filter_=None,
+            compare=None,
+            support_whereclause=True,
+        ):
             t = Table("t", metadata, Column("x", type_))
             t.create(connection)
 
             for value in input_:
-                ins = (
-                    t.insert()
-                    .values(x=literal(value, type_))
-                    .compile(
-                        dialect=testing.db.dialect,
-                        compile_kwargs=dict(literal_binds=True),
-                    )
+                ins = t.insert().values(
+                    x=literal(value, type_, literal_execute=True)
                 )
                 connection.execute(ins)
 
-            if self.supports_whereclause:
-                stmt = t.select().where(t.c.x == literal(value))
+            if support_whereclause and self.supports_whereclause:
+                if compare:
+                    stmt = t.select().where(
+                        t.c.x
+                        == literal(
+                            compare,
+                            type_,
+                            literal_execute=True,
+                        ),
+                        t.c.x
+                        == literal(
+                            input_[0],
+                            type_,
+                            literal_execute=True,
+                        ),
+                    )
+                else:
+                    stmt = t.select().where(
+                        t.c.x
+                        == literal(
+                            compare if compare is not None else input_[0],
+                            type_,
+                            literal_execute=True,
+                        )
+                    )
             else:
                 stmt = t.select()
 
-            stmt = stmt.compile(
-                dialect=testing.db.dialect,
-                compile_kwargs=dict(literal_binds=True),
-            )
-            for row in connection.execute(stmt):
+            rows = connection.execute(stmt).all()
+            assert rows, "No rows returned"
+            for row in rows:
                 value = row[0]
                 if filter_ is not None:
                     value = filter_(value)
@@ -92,7 +122,7 @@ class _LiteralRoundTripFixture(object):
 class _UnicodeFixture(_LiteralRoundTripFixture, fixtures.TestBase):
     __requires__ = ("unicode_data",)
 
-    data = u(
+    data = (
         "Alors vous imaginez ma 🐍 surprise, au lever du jour, "
         "quand une drôle de petite 🐍 voix m’a réveillé. Elle "
         "disait: « S’il vous plaît… dessine-moi 🐍 un mouton! »"
@@ -123,7 +153,7 @@ class _UnicodeFixture(_LiteralRoundTripFixture, fixtures.TestBase):
         row = connection.execute(select(unicode_table.c.unicode_data)).first()
 
         eq_(row, (self.data,))
-        assert isinstance(row[0], util.text_type)
+        assert isinstance(row[0], str)
 
     def test_round_trip_executemany(self, connection):
         unicode_table = self.tables.unicode_table
@@ -138,7 +168,7 @@ class _UnicodeFixture(_LiteralRoundTripFixture, fixtures.TestBase):
         ).fetchall()
         eq_(rows, [(self.data,) for i in range(1, 4)])
         for row in rows:
-            assert isinstance(row[0], util.text_type)
+            assert isinstance(row[0], str)
 
     def _test_null_strings(self, connection):
         unicode_table = self.tables.unicode_table
@@ -153,18 +183,16 @@ class _UnicodeFixture(_LiteralRoundTripFixture, fixtures.TestBase):
         unicode_table = self.tables.unicode_table
 
         connection.execute(
-            unicode_table.insert(), {"id": 1, "unicode_data": u("")}
+            unicode_table.insert(), {"id": 1, "unicode_data": ""}
         )
         row = connection.execute(select(unicode_table.c.unicode_data)).first()
-        eq_(row, (u(""),))
+        eq_(row, ("",))
 
     def test_literal(self, literal_round_trip):
         literal_round_trip(self.datatype, [self.data], [self.data])
 
     def test_literal_non_ascii(self, literal_round_trip):
-        literal_round_trip(
-            self.datatype, [util.u("réve🐍 illé")], [util.u("réve🐍 illé")]
-        )
+        literal_round_trip(self.datatype, ["réve🐍 illé"], ["réve🐍 illé"])
 
 
 class UnicodeVarcharTest(_UnicodeFixture, fixtures.TablesTest):
@@ -193,6 +221,97 @@ class UnicodeTextTest(_UnicodeFixture, fixtures.TablesTest):
 
     def test_null_strings_text(self, connection):
         self._test_null_strings(connection)
+
+
+class ArrayTest(_LiteralRoundTripFixture, fixtures.TablesTest):
+    """Add ARRAY test suite, #8138.
+
+    This only works on PostgreSQL right now.
+
+    """
+
+    __requires__ = ("array_type",)
+    __backend__ = True
+
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            "array_table",
+            metadata,
+            Column(
+                "id", Integer, primary_key=True, test_needs_autoincrement=True
+            ),
+            Column("single_dim", ARRAY(Integer)),
+            Column("multi_dim", ARRAY(String, dimensions=2)),
+        )
+
+    def test_array_roundtrip(self, connection):
+        array_table = self.tables.array_table
+
+        connection.execute(
+            array_table.insert(),
+            {
+                "id": 1,
+                "single_dim": [1, 2, 3],
+                "multi_dim": [["one", "two"], ["thr'ee", "réve🐍 illé"]],
+            },
+        )
+        row = connection.execute(
+            select(array_table.c.single_dim, array_table.c.multi_dim)
+        ).first()
+        eq_(row, ([1, 2, 3], [["one", "two"], ["thr'ee", "réve🐍 illé"]]))
+
+    def test_literal_simple(self, literal_round_trip):
+        literal_round_trip(
+            ARRAY(Integer),
+            ([1, 2, 3],),
+            ([1, 2, 3],),
+            support_whereclause=False,
+        )
+
+    def test_literal_complex(self, literal_round_trip):
+        literal_round_trip(
+            ARRAY(String, dimensions=2),
+            ([["one", "two"], ["thr'ee", "réve🐍 illé"]],),
+            ([["one", "two"], ["thr'ee", "réve🐍 illé"]],),
+            support_whereclause=False,
+        )
+
+
+class BinaryTest(_LiteralRoundTripFixture, fixtures.TablesTest):
+    __requires__ = ("binary_literals",)
+    __backend__ = True
+
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            "binary_table",
+            metadata,
+            Column(
+                "id", Integer, primary_key=True, test_needs_autoincrement=True
+            ),
+            Column("binary_data", LargeBinary),
+            Column("pickle_data", PickleType),
+        )
+
+    def test_binary_roundtrip(self, connection):
+        binary_table = self.tables.binary_table
+
+        connection.execute(
+            binary_table.insert(), {"id": 1, "binary_data": b"this is binary"}
+        )
+        row = connection.execute(select(binary_table.c.binary_data)).first()
+        eq_(row, (b"this is binary",))
+
+    def test_pickle_roundtrip(self, connection):
+        binary_table = self.tables.binary_table
+
+        connection.execute(
+            binary_table.insert(),
+            {"id": 1, "pickle_data": {"foo": [1, 2, 3], "bar": "bat"}},
+        )
+        row = connection.execute(select(binary_table.c.pickle_data)).first()
+        eq_(row, ({"foo": [1, 2, 3], "bar": "bat"},))
 
 
 class TextTest(_LiteralRoundTripFixture, fixtures.TablesTest):
@@ -241,10 +360,9 @@ class TextTest(_LiteralRoundTripFixture, fixtures.TablesTest):
     def test_literal(self, literal_round_trip):
         literal_round_trip(Text, ["some text"], ["some text"])
 
+    @requirements.unicode_data_no_special_types
     def test_literal_non_ascii(self, literal_round_trip):
-        literal_round_trip(
-            Text, [util.u("réve🐍 illé")], [util.u("réve🐍 illé")]
-        )
+        literal_round_trip(Text, ["réve🐍 illé"], ["réve🐍 illé"])
 
     def test_literal_quoting(self, literal_round_trip):
         data = """some 'text' hey "hi there" that's text"""
@@ -275,10 +393,9 @@ class StringTest(_LiteralRoundTripFixture, fixtures.TestBase):
         # datatype for the literal part because all strings are unicode
         literal_round_trip(String(40), ["some text"], ["some text"])
 
+    @requirements.unicode_data_no_special_types
     def test_literal_non_ascii(self, literal_round_trip):
-        literal_round_trip(
-            String(40), [util.u("réve🐍 illé")], [util.u("réve🐍 illé")]
-        )
+        literal_round_trip(String(40), ["réve🐍 illé"], ["réve🐍 illé"])
 
     def test_literal_quoting(self, literal_round_trip):
         data = """some 'text' hey "hi there" that's text"""
@@ -287,6 +404,31 @@ class StringTest(_LiteralRoundTripFixture, fixtures.TestBase):
     def test_literal_backslashes(self, literal_round_trip):
         data = r"backslash one \ backslash two \\ end"
         literal_round_trip(String(40), [data], [data])
+
+    def test_concatenate_binary(self, connection):
+        """dialects with special string concatenation operators should
+        implement visit_concat_op_binary() and visit_concat_op_clauselist()
+        in their compiler.
+
+        .. versionchanged:: 2.0  visit_concat_op_clauselist() is also needed
+           for dialects to override the string concatenation operator.
+
+        """
+        eq_(connection.scalar(select(literal("a") + "b")), "ab")
+
+    def test_concatenate_clauselist(self, connection):
+        """dialects with special string concatenation operators should
+        implement visit_concat_op_binary() and visit_concat_op_clauselist()
+        in their compiler.
+
+        .. versionchanged:: 2.0  visit_concat_op_clauselist() is also needed
+           for dialects to override the string concatenation operator.
+
+        """
+        eq_(
+            connection.scalar(select(literal("a") + "b" + "c" + "d" + "e")),
+            "abcde",
+        )
 
 
 class _DateFixture(_LiteralRoundTripFixture, fixtures.TestBase):
@@ -307,6 +449,11 @@ class _DateFixture(_LiteralRoundTripFixture, fixtures.TestBase):
             Column("date_data", cls.datatype),
             Column("decorated_date_data", Decorated),
         )
+
+    @testing.requires.datetime_implicit_bound
+    def test_select_direct(self, connection):
+        result = connection.scalar(select(literal(self.data)))
+        eq_(result, self.data)
 
     def test_round_trip(self, connection):
         date_table = self.tables.date_table
@@ -347,7 +494,10 @@ class _DateFixture(_LiteralRoundTripFixture, fixtures.TestBase):
     @testing.requires.datetime_literals
     def test_literal(self, literal_round_trip):
         compare = self.compare or self.data
-        literal_round_trip(self.datatype, [self.data], [compare])
+
+        literal_round_trip(
+            self.datatype, [self.data], [compare], compare=compare
+        )
 
     @testing.requires.standalone_null_binds_whereclause
     def test_null_bound_comparison(self):
@@ -382,11 +532,20 @@ class DateTimeTest(_DateFixture, fixtures.TablesTest):
     data = datetime.datetime(2012, 10, 15, 12, 57, 18)
 
 
+class DateTimeTZTest(_DateFixture, fixtures.TablesTest):
+    __requires__ = ("datetime_timezone",)
+    __backend__ = True
+    datatype = DateTime(timezone=True)
+    data = datetime.datetime(
+        2012, 10, 15, 12, 57, 18, tzinfo=datetime.timezone.utc
+    )
+
+
 class DateTimeMicrosecondsTest(_DateFixture, fixtures.TablesTest):
     __requires__ = ("datetime_microseconds",)
     __backend__ = True
     datatype = DateTime
-    data = datetime.datetime(2012, 10, 15, 12, 57, 18, 396)
+    data = datetime.datetime(2012, 10, 15, 12, 57, 18, 39642)
 
 
 class TimestampMicrosecondsTest(_DateFixture, fixtures.TablesTest):
@@ -395,12 +554,24 @@ class TimestampMicrosecondsTest(_DateFixture, fixtures.TablesTest):
     datatype = TIMESTAMP
     data = datetime.datetime(2012, 10, 15, 12, 57, 18, 396)
 
+    @testing.requires.timestamp_microseconds_implicit_bound
+    def test_select_direct(self, connection):
+        result = connection.scalar(select(literal(self.data)))
+        eq_(result, self.data)
+
 
 class TimeTest(_DateFixture, fixtures.TablesTest):
     __requires__ = ("time",)
     __backend__ = True
     datatype = Time
     data = datetime.time(12, 57, 18)
+
+
+class TimeTZTest(_DateFixture, fixtures.TablesTest):
+    __requires__ = ("time_timezone",)
+    __backend__ = True
+    datatype = Time(timezone=True)
+    data = datetime.time(12, 57, 18, tzinfo=datetime.timezone.utc)
 
 
 class TimeMicrosecondsTest(_DateFixture, fixtures.TablesTest):
@@ -418,6 +589,11 @@ class DateTest(_DateFixture, fixtures.TablesTest):
 
 
 class DateTimeCoercedToDateTimeTest(_DateFixture, fixtures.TablesTest):
+    """this particular suite is testing that datetime parameters get
+    coerced to dates, which tends to be something DBAPIs do.
+
+    """
+
     __requires__ = "date", "date_coerces_from_datetime"
     __backend__ = True
     datatype = Date
@@ -445,8 +621,37 @@ class IntegerTest(_LiteralRoundTripFixture, fixtures.TestBase):
     def test_literal(self, literal_round_trip):
         literal_round_trip(Integer, [5], [5])
 
-    def test_huge_int(self, integer_round_trip):
-        integer_round_trip(BigInteger, 1376537018368127)
+    def _huge_ints():
+
+        return testing.combinations(
+            2147483649,  # 32 bits
+            2147483648,  # 32 bits
+            2147483647,  # 31 bits
+            2147483646,  # 31 bits
+            -2147483649,  # 32 bits
+            -2147483648,  # 32 interestingly, asyncpg accepts this one as int32
+            -2147483647,  # 31
+            -2147483646,  # 31
+            0,
+            1376537018368127,
+            -1376537018368127,
+            argnames="intvalue",
+        )
+
+    @_huge_ints()
+    def test_huge_int_auto_accommodation(self, connection, intvalue):
+        """test #7909"""
+
+        eq_(
+            connection.scalar(
+                select(intvalue).where(literal(intvalue) == intvalue)
+            ),
+            intvalue,
+        )
+
+    @_huge_ints()
+    def test_huge_int(self, integer_round_trip, intvalue):
+        integer_round_trip(BigInteger, intvalue)
 
     @testing.fixture
     def integer_round_trip(self, metadata, connection):
@@ -473,10 +678,7 @@ class IntegerTest(_LiteralRoundTripFixture, fixtures.TestBase):
 
             eq_(row, (data,))
 
-            if util.py3k:
-                assert isinstance(row[0], int)
-            else:
-                assert isinstance(row[0], (long, int))  # noqa
+            assert isinstance(row[0], int)
 
         return run
 
@@ -490,19 +692,15 @@ class CastTypeDecoratorTest(_LiteralRoundTripFixture, fixtures.TestBase):
             impl = String(50)
             cache_ok = True
 
-            def get_dbapi_type(self, dbapi):
-                return dbapi.NUMBER
-
             def column_expression(self, col):
                 return cast(col, Integer)
 
             def bind_expression(self, col):
-                return cast(col, String(50))
+                return cast(type_coerce(col, Integer), String(50))
 
         return StringAsInt()
 
     def test_special_type(self, metadata, connection, string_as_int):
-
         type_ = string_as_int
 
         t = Table("t", metadata, Column("x", type_))
@@ -519,14 +717,113 @@ class CastTypeDecoratorTest(_LiteralRoundTripFixture, fixtures.TestBase):
         eq_(result, {2})
 
 
+class TrueDivTest(fixtures.TestBase):
+    __backend__ = True
+
+    @testing.combinations(
+        ("15", "10", 1.5),
+        ("-15", "10", -1.5),
+        argnames="left, right, expected",
+    )
+    def test_truediv_integer(self, connection, left, right, expected):
+        """test #4926"""
+
+        eq_(
+            connection.scalar(
+                select(
+                    literal_column(left, type_=Integer())
+                    / literal_column(right, type_=Integer())
+                )
+            ),
+            expected,
+        )
+
+    @testing.combinations(
+        ("15", "10", 1), ("-15", "5", -3), argnames="left, right, expected"
+    )
+    def test_floordiv_integer(self, connection, left, right, expected):
+        """test #4926"""
+
+        eq_(
+            connection.scalar(
+                select(
+                    literal_column(left, type_=Integer())
+                    // literal_column(right, type_=Integer())
+                )
+            ),
+            expected,
+        )
+
+    @testing.combinations(
+        ("5.52", "2.4", "2.3"), argnames="left, right, expected"
+    )
+    def test_truediv_numeric(self, connection, left, right, expected):
+        """test #4926"""
+
+        eq_(
+            connection.scalar(
+                select(
+                    literal_column(left, type_=Numeric(10, 2))
+                    / literal_column(right, type_=Numeric(10, 2))
+                )
+            ),
+            decimal.Decimal(expected),
+        )
+
+    @testing.combinations(
+        ("5.52", "2.4", 2.3), argnames="left, right, expected"
+    )
+    def test_truediv_float(self, connection, left, right, expected):
+        """test #4926"""
+
+        eq_(
+            connection.scalar(
+                select(
+                    literal_column(left, type_=Float())
+                    / literal_column(right, type_=Float())
+                )
+            ),
+            expected,
+        )
+
+    @testing.combinations(
+        ("5.52", "2.4", "2.0"), argnames="left, right, expected"
+    )
+    def test_floordiv_numeric(self, connection, left, right, expected):
+        """test #4926"""
+
+        eq_(
+            connection.scalar(
+                select(
+                    literal_column(left, type_=Numeric())
+                    // literal_column(right, type_=Numeric())
+                )
+            ),
+            decimal.Decimal(expected),
+        )
+
+    def test_truediv_integer_bound(self, connection):
+        """test #4926"""
+
+        eq_(
+            connection.scalar(select(literal(15) / literal(10))),
+            1.5,
+        )
+
+    def test_floordiv_integer_bound(self, connection):
+        """test #4926"""
+
+        eq_(
+            connection.scalar(select(literal(15) // literal(10))),
+            1,
+        )
+
+
 class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
     __backend__ = True
 
     @testing.fixture
     def do_numeric_test(self, metadata, connection):
-        @testing.emits_warning(
-            r".*does \*not\* support Decimal objects natively"
-        )
         def run(type_, input_, output, filter_=None, check_scale=False):
             t = Table("t", metadata, Column("x", type_))
             t.create(connection)
@@ -541,9 +838,30 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
             if check_scale:
                 eq_([str(x) for x in result], [str(x) for x in output])
 
+            connection.execute(t.delete())
+
+            # test that this is actually a number!
+            # note we have tiny scale here as we have tests with very
+            # small scale Numeric types.  PostgreSQL will raise an error
+            # if you use values outside the available scale.
+            if type_.asdecimal:
+                test_value = decimal.Decimal("2.9")
+                add_value = decimal.Decimal("37.12")
+            else:
+                test_value = 2.9
+                add_value = 37.12
+
+            connection.execute(t.insert(), {"x": test_value})
+            assert_we_are_a_number = connection.scalar(
+                select(type_coerce(t.c.x + add_value, type_))
+            )
+            eq_(
+                round(assert_we_are_a_number, 3),
+                round(test_value + add_value, 3),
+            )
+
         return run
 
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
     def test_render_literal_numeric(self, literal_round_trip):
         literal_round_trip(
             Numeric(precision=8, scale=4),
@@ -551,7 +869,6 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
             [decimal.Decimal("15.7563")],
         )
 
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
     def test_render_literal_numeric_asfloat(self, literal_round_trip):
         literal_round_trip(
             Numeric(precision=8, scale=4, asdecimal=False),
@@ -561,10 +878,11 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
 
     def test_render_literal_float(self, literal_round_trip):
         literal_round_trip(
-            Float(4),
+            Float(),
             [15.7563, decimal.Decimal("15.7563")],
             [15.7563],
             filter_=lambda n: n is not None and round(n, 5) or None,
+            support_whereclause=False,
         )
 
     @testing.requires.precision_generic_float_type
@@ -590,6 +908,16 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
             [15.7563],
         )
 
+    @testing.requires.infinity_floats
+    def test_infinity_floats(self, do_numeric_test):
+        """test for #977, #7283"""
+
+        do_numeric_test(
+            Float(None),
+            [float("inf")],
+            [float("inf")],
+        )
+
     @testing.requires.fetch_null_from_numeric
     def test_numeric_null_as_decimal(self, do_numeric_test):
         do_numeric_test(Numeric(precision=8, scale=4), [None], [None])
@@ -603,17 +931,17 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
     @testing.requires.floats_to_four_decimals
     def test_float_as_decimal(self, do_numeric_test):
         do_numeric_test(
-            Float(precision=8, asdecimal=True),
-            [15.7563, decimal.Decimal("15.7563"), None],
-            [decimal.Decimal("15.7563"), None],
+            Float(asdecimal=True),
+            [15.756, decimal.Decimal("15.756"), None],
+            [decimal.Decimal("15.756"), None],
             filter_=lambda n: n is not None and round(n, 4) or None,
         )
 
     def test_float_as_float(self, do_numeric_test):
         do_numeric_test(
-            Float(precision=8),
-            [15.7563, decimal.Decimal("15.7563")],
-            [15.7563],
+            Float(),
+            [15.756, decimal.Decimal("15.756")],
+            [15.756],
             filter_=lambda n: n is not None and round(n, 5) or None,
         )
 
@@ -627,14 +955,12 @@ class NumericTest(_LiteralRoundTripFixture, fixtures.TestBase):
     # to render CAST unconditionally since this is kind of an edge case.
 
     @testing.requires.implicit_decimal_binds
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
     def test_decimal_coerce_round_trip(self, connection):
         expr = decimal.Decimal("15.7563")
 
         val = connection.scalar(select(literal(expr)))
         eq_(val, expr)
 
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
     def test_decimal_coerce_round_trip_w_cast(self, connection):
         expr = decimal.Decimal("15.7563")
 
@@ -854,10 +1180,10 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
             ("boolean", None),
             ("string", "some string"),
             ("string", None),
-            ("string", util.u("réve illé")),
+            ("string", "réve illé"),
             (
                 "string",
-                util.u("réve🐍 illé"),
+                "réve🐍 illé",
                 testing.requires.json_index_supplementary_unicode_element,
             ),
             ("integer", 15),
@@ -873,8 +1199,11 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
             ("numeric", 1234567.89),
             # this one "works" because the float value you see here is
             # lost immediately to floating point stuff
-            ("numeric", 99998969694839.983485848, requirements.python3),
-            ("numeric", 99939.983485848, requirements.python3),
+            (
+                "numeric",
+                99998969694839.983485848,
+            ),
+            ("numeric", 99939.983485848),
             ("_decimal", decimal.Decimal("1234567.89")),
             (
                 "_decimal",
@@ -971,7 +1300,6 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
         return datatype, compare_value, p_s
 
     @_index_fixtures(False)
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
     def test_index_typed_access(self, datatype, value):
         data_table = self.tables.data_table
         data_element = {"key1": value}
@@ -991,11 +1319,9 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
 
             roundtrip = conn.scalar(select(expr))
             eq_(roundtrip, compare_value)
-            if util.py3k:  # skip py2k to avoid comparing unicode to str etc.
-                is_(type(roundtrip), type(compare_value))
+            is_(type(roundtrip), type(compare_value))
 
     @_index_fixtures(True)
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
     def test_index_typed_comparison(self, datatype, value):
         data_table = self.tables.data_table
         data_element = {"key1": value}
@@ -1020,7 +1346,6 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
             eq_(row, (compare_value,))
 
     @_index_fixtures(True)
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
     def test_path_typed_comparison(self, datatype, value):
         data_table = self.tables.data_table
         data_element = {"key1": {"subkey1": value}}
@@ -1055,8 +1380,8 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
         (-1.0,),
         (15.052,),
         ("a string",),
-        (util.u("réve illé"),),
-        (util.u("réve🐍 illé"),),
+        ("réve illé",),
+        ("réve🐍 illé",),
     )
     def test_single_element_round_trip(self, element):
         data_table = self.tables.data_table
@@ -1097,7 +1422,13 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
 
             eq_(row, (data_element,))
             eq_(js.mock_calls, [mock.call(data_element)])
-            eq_(jd.mock_calls, [mock.call(json.dumps(data_element))])
+            if testing.requires.json_deserializer_binary.enabled:
+                eq_(
+                    jd.mock_calls,
+                    [mock.call(json.dumps(data_element).encode())],
+                )
+            else:
+                eq_(jd.mock_calls, [mock.call(json.dumps(data_element))])
 
     @testing.combinations(
         ("parameters",),
@@ -1218,8 +1549,8 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
                 {
                     "name": "r1",
                     "data": {
-                        util.u("réve🐍 illé"): util.u("réve🐍 illé"),
-                        "data": {"k1": util.u("drôl🐍e")},
+                        "réve🐍 illé": "réve🐍 illé",
+                        "data": {"k1": "drôl🐍e"},
                     },
                 },
             )
@@ -1227,8 +1558,8 @@ class JSONTest(_LiteralRoundTripFixture, fixtures.TablesTest):
             eq_(
                 conn.scalar(select(self.tables.data_table.c.data)),
                 {
-                    util.u("réve🐍 illé"): util.u("réve🐍 illé"),
-                    "data": {"k1": util.u("drôl🐍e")},
+                    "réve🐍 illé": "réve🐍 illé",
+                    "data": {"k1": "drôl🐍e"},
                 },
             )
 
@@ -1407,13 +1738,112 @@ class JSONLegacyStringCastIndexTest(
         )
 
 
+class UuidTest(_LiteralRoundTripFixture, fixtures.TablesTest):
+    __backend__ = True
+
+    datatype = Uuid
+
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            "uuid_table",
+            metadata,
+            Column(
+                "id", Integer, primary_key=True, test_needs_autoincrement=True
+            ),
+            Column("uuid_data", cls.datatype),
+            Column("uuid_text_data", cls.datatype(as_uuid=False)),
+            Column("uuid_data_nonnative", Uuid(native_uuid=False)),
+            Column(
+                "uuid_text_data_nonnative",
+                Uuid(as_uuid=False, native_uuid=False),
+            ),
+        )
+
+    def test_uuid_round_trip(self, connection):
+        data = uuid.uuid4()
+        uuid_table = self.tables.uuid_table
+
+        connection.execute(
+            uuid_table.insert(),
+            {"id": 1, "uuid_data": data, "uuid_data_nonnative": data},
+        )
+        row = connection.execute(
+            select(
+                uuid_table.c.uuid_data, uuid_table.c.uuid_data_nonnative
+            ).where(
+                uuid_table.c.uuid_data == data,
+                uuid_table.c.uuid_data_nonnative == data,
+            )
+        ).first()
+        eq_(row, (data, data))
+
+    def test_uuid_text_round_trip(self, connection):
+        data = str(uuid.uuid4())
+        uuid_table = self.tables.uuid_table
+
+        connection.execute(
+            uuid_table.insert(),
+            {
+                "id": 1,
+                "uuid_text_data": data,
+                "uuid_text_data_nonnative": data,
+            },
+        )
+        row = connection.execute(
+            select(
+                uuid_table.c.uuid_text_data,
+                uuid_table.c.uuid_text_data_nonnative,
+            ).where(
+                uuid_table.c.uuid_text_data == data,
+                uuid_table.c.uuid_text_data_nonnative == data,
+            )
+        ).first()
+        eq_((row[0].lower(), row[1].lower()), (data, data))
+
+    def test_literal_uuid(self, literal_round_trip):
+        data = uuid.uuid4()
+        literal_round_trip(self.datatype, [data], [data])
+
+    def test_literal_text(self, literal_round_trip):
+        data = str(uuid.uuid4())
+        literal_round_trip(
+            self.datatype(as_uuid=False),
+            [data],
+            [data],
+            filter_=lambda x: x.lower(),
+        )
+
+    def test_literal_nonnative_uuid(self, literal_round_trip):
+        data = uuid.uuid4()
+        literal_round_trip(Uuid(native_uuid=False), [data], [data])
+
+    def test_literal_nonnative_text(self, literal_round_trip):
+        data = str(uuid.uuid4())
+        literal_round_trip(
+            Uuid(as_uuid=False, native_uuid=False),
+            [data],
+            [data],
+            filter_=lambda x: x.lower(),
+        )
+
+
+class NativeUUIDTest(UuidTest):
+    __requires__ = ("uuid_data_type",)
+
+    datatype = UUID
+
+
 __all__ = (
+    "ArrayTest",
+    "BinaryTest",
     "UnicodeVarcharTest",
     "UnicodeTextTest",
     "JSONTest",
     "JSONLegacyStringCastIndexTest",
     "DateTest",
     "DateTimeTest",
+    "DateTimeTZTest",
     "TextTest",
     "NumericTest",
     "IntegerTest",
@@ -1423,8 +1853,12 @@ __all__ = (
     "TimeMicrosecondsTest",
     "TimestampMicrosecondsTest",
     "TimeTest",
+    "TimeTZTest",
+    "TrueDivTest",
     "DateTimeMicrosecondsTest",
     "DateHistoricTest",
     "StringTest",
     "BooleanTest",
+    "UuidTest",
+    "NativeUUIDTest",
 )

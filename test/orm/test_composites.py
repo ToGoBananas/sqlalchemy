@@ -1,3 +1,6 @@
+import dataclasses
+import operator
+
 import sqlalchemy as sa
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
@@ -6,14 +9,16 @@ from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import update
 from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Composite
 from sqlalchemy.orm import composite
-from sqlalchemy.orm import CompositeProperty
 from sqlalchemy.orm import configure_mappers
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
+from sqlalchemy.testing import is_
 from sqlalchemy.testing.fixtures import fixture_session
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
@@ -90,14 +95,14 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
             },
         )
 
-    def _fixture(self, future=False):
+    def _fixture(self):
         Graph, Edge, Point = (
             self.classes.Graph,
             self.classes.Edge,
             self.classes.Point,
         )
 
-        sess = Session(testing.db, future=future)
+        sess = Session(testing.db)
         g = Graph(
             id=1,
             edges=[
@@ -123,7 +128,7 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
         g1 = sess.query(Graph).first()
         sess.close()
 
-        g = sess.query(Graph).get(g1.id)
+        g = sess.get(Graph, g1.id)
         eq_(
             [(e.start, e.end) for e in g.edges],
             [(Point(3, 4), Point(5, 6)), (Point(14, 5), Point(2, 7))],
@@ -142,7 +147,7 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
         g.edges[1].end = Point(18, 4)
         sess.commit()
 
-        e = sess.query(Edge).get(g.edges[1].id)
+        e = sess.get(Edge, g.edges[1].id)
         eq_(e.end, Point(18, 4))
 
     def test_not_none(self):
@@ -178,8 +183,8 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
         sess.close()
 
         def go():
-            g2 = (
-                sess.query(Graph).options(sa.orm.joinedload("edges")).get(g.id)
+            g2 = sess.get(
+                Graph, g.id, options=[sa.orm.joinedload(Graph.edges)]
             )
 
             eq_(
@@ -231,7 +236,7 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
     def test_bulk_update_sql(self):
         Edge, Point = (self.classes.Edge, self.classes.Point)
 
-        sess = self._fixture(future=True)
+        sess = self._fixture()
 
         e1 = sess.execute(
             select(Edge).filter(Edge.start == Point(14, 5))
@@ -256,7 +261,7 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
     def test_bulk_update_evaluate(self):
         Edge, Point = (self.classes.Edge, self.classes.Point)
 
-        sess = self._fixture(future=True)
+        sess = self._fixture()
 
         e1 = sess.execute(
             select(Edge).filter(Edge.start == Point(14, 5))
@@ -273,6 +278,15 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
 
         eq_(e1.end, Point(16, 10))
 
+        stmt = (
+            update(Edge)
+            .filter(Edge.start == Point(14, 5))
+            .values({Edge.end: Point(17, 8)})
+        )
+        sess.execute(stmt)
+
+        eq_(e1.end, Point(17, 8))
+
     def test_bulk_update_fetch(self):
         Edge, Point = (self.classes.Edge, self.classes.Point)
 
@@ -286,6 +300,10 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
         q.update({Edge.end: Point(16, 10)}, synchronize_session="fetch")
 
         eq_(e1.end, Point(16, 10))
+
+        q.update({Edge.end: Point(17, 8)}, synchronize_session="fetch")
+
+        eq_(e1.end, Point(17, 8))
 
     def test_get_history(self):
         Edge = self.classes.Edge
@@ -392,7 +410,7 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
         sess.add(g)
         sess.commit()
 
-        g2 = sess.query(Graph).get(1)
+        g2 = sess.get(Graph, 1)
         assert g2.edges[-1].start.x is None
         assert g2.edges[-1].start.y is None
 
@@ -412,6 +430,131 @@ class PointTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
         e = Edge()
         eq_(e.start, None)
 
+    def test_no_name_declarative(self, decl_base, connection):
+        """test #7751"""
+
+        class Point:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+            def __composite_values__(self):
+                return self.x, self.y
+
+            def __repr__(self):
+                return "Point(x=%r, y=%r)" % (self.x, self.y)
+
+            def __eq__(self, other):
+                return (
+                    isinstance(other, Point)
+                    and other.x == self.x
+                    and other.y == self.y
+                )
+
+            def __ne__(self, other):
+                return not self.__eq__(other)
+
+        class Vertex(decl_base):
+            __tablename__ = "vertices"
+
+            id = Column(Integer, primary_key=True)
+            x1 = Column(Integer)
+            y1 = Column(Integer)
+            x2 = Column(Integer)
+            y2 = Column(Integer)
+
+            start = composite(Point, x1, y1)
+            end = composite(Point, x2, y2)
+
+        self.assert_compile(
+            select(Vertex),
+            "SELECT vertices.id, vertices.x1, vertices.y1, vertices.x2, "
+            "vertices.y2 FROM vertices",
+        )
+
+        decl_base.metadata.create_all(connection)
+        s = Session(connection)
+        hv = Vertex(start=Point(1, 2), end=Point(3, 4))
+        s.add(hv)
+        s.commit()
+
+        is_(
+            hv,
+            s.scalars(
+                select(Vertex).where(Vertex.start == Point(1, 2))
+            ).first(),
+        )
+
+    def test_no_name_declarative_two(self, decl_base, connection):
+        """test #7752"""
+
+        class Point:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+            def __composite_values__(self):
+                return self.x, self.y
+
+            def __repr__(self):
+                return "Point(x=%r, y=%r)" % (self.x, self.y)
+
+            def __eq__(self, other):
+                return (
+                    isinstance(other, Point)
+                    and other.x == self.x
+                    and other.y == self.y
+                )
+
+            def __ne__(self, other):
+                return not self.__eq__(other)
+
+        class Vertex:
+            def __init__(self, start, end):
+                self.start = start
+                self.end = end
+
+            @classmethod
+            def _generate(self, x1, y1, x2, y2):
+                """generate a Vertex from a row"""
+                return Vertex(Point(x1, y1), Point(x2, y2))
+
+            def __composite_values__(self):
+                return (
+                    self.start.__composite_values__()
+                    + self.end.__composite_values__()
+                )
+
+        class HasVertex(decl_base):
+            __tablename__ = "has_vertex"
+            id = Column(Integer, primary_key=True)
+            x1 = Column(Integer)
+            y1 = Column(Integer)
+            x2 = Column(Integer)
+            y2 = Column(Integer)
+
+            vertex = composite(Vertex._generate, x1, y1, x2, y2)
+
+        self.assert_compile(
+            select(HasVertex),
+            "SELECT has_vertex.id, has_vertex.x1, has_vertex.y1, "
+            "has_vertex.x2, has_vertex.y2 FROM has_vertex",
+        )
+
+        decl_base.metadata.create_all(connection)
+        s = Session(connection)
+        hv = HasVertex(vertex=Vertex(Point(1, 2), Point(3, 4)))
+        s.add(hv)
+        s.commit()
+        is_(
+            hv,
+            s.scalars(
+                select(HasVertex).where(
+                    HasVertex.vertex == Vertex(Point(1, 2), Point(3, 4))
+                )
+            ).first(),
+        )
+
 
 class NestedTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
     @classmethod
@@ -429,7 +572,7 @@ class NestedTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
         )
 
     def _fixture(self):
-        class AB(object):
+        class AB:
             def __init__(self, a, b, cd):
                 self.a = a
                 self.b = b
@@ -453,7 +596,7 @@ class NestedTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
             def __ne__(self, other):
                 return not self.__eq__(other)
 
-        class CD(object):
+        class CD:
             def __init__(self, c, d):
                 self.c = c
                 self.d = d
@@ -471,7 +614,7 @@ class NestedTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
             def __ne__(self, other):
                 return not self.__eq__(other)
 
-        class Thing(object):
+        class Thing:
             def __init__(self, ab):
                 self.ab = ab
 
@@ -567,7 +710,7 @@ class PrimaryKeyTest(fixtures.MappedTest):
         sess = self._fixture()
         g = sess.query(Graph).first()
 
-        g2 = sess.query(Graph).get([g.id, g.version_id])
+        g2 = sess.get(Graph, [g.id, g.version_id])
         eq_(g.version, g2.version)
 
     def test_get_by_composite(self):
@@ -576,7 +719,7 @@ class PrimaryKeyTest(fixtures.MappedTest):
         sess = self._fixture()
         g = sess.query(Graph).first()
 
-        g2 = sess.query(Graph).get(Version(g.id, g.version_id))
+        g2 = sess.get(Graph, Version(g.id, g.version_id))
         eq_(g.version, g2.version)
 
     def test_pk_mutation(self):
@@ -588,7 +731,7 @@ class PrimaryKeyTest(fixtures.MappedTest):
 
         g.version = Version(2, 1)
         sess.commit()
-        g2 = sess.query(Graph).get(Version(2, 1))
+        g2 = sess.get(Graph, Version(2, 1))
         eq_(g.version, g2.version)
 
     @testing.fails_on_everything_except("sqlite")
@@ -604,6 +747,33 @@ class PrimaryKeyTest(fixtures.MappedTest):
         sess.commit()
         g2 = sess.query(Graph).filter_by(version=Version(2, None)).one()
         eq_(g.version, g2.version)
+
+
+class PrimaryKeyTestDataclasses(PrimaryKeyTest):
+    @classmethod
+    def setup_mappers(cls):
+        graphs = cls.tables.graphs
+
+        @dataclasses.dataclass
+        class Version:
+            id: int
+            version: int
+
+        cls.classes.Version = Version
+
+        class Graph(cls.Comparable):
+            def __init__(self, version):
+                self.version = version
+
+        cls.mapper_registry.map_imperatively(
+            Graph,
+            graphs,
+            properties={
+                "version": sa.orm.composite(
+                    Version, graphs.c.id, graphs.c.version_id
+                )
+            },
+        )
 
 
 class DefaultsTest(fixtures.MappedTest):
@@ -1092,7 +1262,7 @@ class ComparatorTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
 
         if custom:
 
-            class CustomComparator(sa.orm.CompositeProperty.Comparator):
+            class CustomComparator(sa.orm.Composite.Comparator):
                 def near(self, other, d):
                     clauses = self.__clause_element__().clauses
                     diff_x = clauses[0] - other.x
@@ -1122,35 +1292,76 @@ class ComparatorTest(fixtures.MappedTest, testing.AssertsCompiledSQL):
                 },
             )
 
-    def test_comparator_behavior_default(self):
-        self._fixture(False)
-        self._test_comparator_behavior()
+    @testing.combinations(True, False, argnames="custom")
+    @testing.combinations(
+        (operator.lt, "<", ">"),
+        (operator.gt, ">", "<"),
+        (operator.eq, "=", "="),
+        (operator.ne, "!=", "!="),
+        (operator.le, "<=", ">="),
+        (operator.ge, ">=", "<="),
+        argnames="operator, fwd_op, rev_op",
+    )
+    def test_comparator_behavior(self, custom, operator, fwd_op, rev_op):
+        self._fixture(custom)
+        Edge, Point = self.classes("Edge", "Point")
 
-    def test_comparator_behavior_custom(self):
-        self._fixture(True)
-        self._test_comparator_behavior()
+        self.assert_compile(
+            select(Edge).filter(operator(Edge.start, Point(3, 4))),
+            "SELECT edge.id, edge.x1, edge.y1, edge.x2, edge.y2 FROM edge "
+            f"WHERE edge.x1 {fwd_op} :x1_1 AND edge.y1 {fwd_op} :y1_1",
+            checkparams={"x1_1": 3, "y1_1": 4},
+        )
 
-    def _test_comparator_behavior(self):
-        Edge, Point = (self.classes.Edge, self.classes.Point)
+        self.assert_compile(
+            select(Edge).filter(~operator(Edge.start, Point(3, 4))),
+            "SELECT edge.id, edge.x1, edge.y1, edge.x2, edge.y2 FROM edge "
+            f"WHERE NOT (edge.x1 {fwd_op} :x1_1 AND edge.y1 {fwd_op} :y1_1)",
+            checkparams={"x1_1": 3, "y1_1": 4},
+        )
 
-        sess = fixture_session()
-        e1 = Edge(Point(3, 4), Point(5, 6))
-        e2 = Edge(Point(14, 5), Point(2, 7))
-        sess.add_all([e1, e2])
-        sess.commit()
+    @testing.combinations(True, False, argnames="custom")
+    @testing.combinations(
+        (operator.lt, "<", ">"),
+        (operator.gt, ">", "<"),
+        (operator.eq, "=", "="),
+        (operator.ne, "!=", "!="),
+        (operator.le, "<=", ">="),
+        (operator.ge, ">=", "<="),
+        argnames="op, fwd_op, rev_op",
+    )
+    def test_comparator_null(self, custom, op, fwd_op, rev_op):
+        self._fixture(custom)
+        Edge, Point = self.classes("Edge", "Point")
 
-        assert sess.query(Edge).filter(Edge.start == Point(3, 4)).one() is e1
-
-        assert sess.query(Edge).filter(Edge.start != Point(3, 4)).first() is e2
-
-        eq_(sess.query(Edge).filter(Edge.start == None).all(), [])  # noqa
+        if op is operator.eq:
+            self.assert_compile(
+                select(Edge).filter(op(Edge.start, None)),
+                "SELECT edge.id, edge.x1, edge.y1, edge.x2, edge.y2 FROM edge "
+                "WHERE edge.x1 IS NULL AND edge.y1 IS NULL",
+                checkparams={},
+            )
+        elif op is operator.ne:
+            self.assert_compile(
+                select(Edge).filter(op(Edge.start, None)),
+                "SELECT edge.id, edge.x1, edge.y1, edge.x2, edge.y2 FROM edge "
+                "WHERE edge.x1 IS NOT NULL AND edge.y1 IS NOT NULL",
+                checkparams={},
+            )
+        else:
+            with expect_raises_message(
+                sa.exc.ArgumentError,
+                r"Only '=', '!=', .* operators can be used "
+                r"with None/True/False",
+            ):
+                select(Edge).filter(op(Edge.start, None))
 
     def test_default_comparator_factory(self):
         self._fixture(False)
         Edge = self.classes.Edge
         start_prop = Edge.start.property
 
-        assert start_prop.comparator_factory is CompositeProperty.Comparator
+        assert start_prop.comparator_factory is Composite.Comparator
 
     def test_custom_comparator_factory(self):
         self._fixture(True)

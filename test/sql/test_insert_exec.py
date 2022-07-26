@@ -5,19 +5,26 @@ from sqlalchemy import func
 from sqlalchemy import INT
 from sqlalchemy import Integer
 from sqlalchemy import literal
-from sqlalchemy import MetaData
 from sqlalchemy import Sequence
 from sqlalchemy import sql
 from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import VARCHAR
 from sqlalchemy.testing import assert_raises_message
-from sqlalchemy.testing import engines
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
+from sqlalchemy.testing import mock
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
+
+
+class ExpectExpr:
+    def __init__(self, element):
+        self.element = element
+
+    def __clause_element__(self):
+        return self.element
 
 
 class InsertExecTest(fixtures.TablesTest):
@@ -36,13 +43,27 @@ class InsertExecTest(fixtures.TablesTest):
         )
 
     @testing.requires.multivalues_inserts
-    def test_multivalues_insert(self, connection):
+    @testing.combinations("string", "column", "expect", argnames="keytype")
+    def test_multivalues_insert(self, connection, keytype):
+
         users = self.tables.users
+
+        if keytype == "string":
+            user_id, user_name = "user_id", "user_name"
+        elif keytype == "column":
+            user_id, user_name = users.c.user_id, users.c.user_name
+        elif keytype == "expect":
+            user_id, user_name = ExpectExpr(users.c.user_id), ExpectExpr(
+                users.c.user_name
+            )
+        else:
+            assert False
+
         connection.execute(
             users.insert().values(
                 [
-                    {"user_id": 7, "user_name": "jack"},
-                    {"user_id": 8, "user_name": "ed"},
+                    {user_id: 7, user_name: "jack"},
+                    {user_id: 8, user_name: "ed"},
                 ]
             )
         )
@@ -89,10 +110,10 @@ class InsertExecTest(fixtures.TablesTest):
             ],
         )
 
-    def _test_lastrow_accessor(self, table_, values, assertvalues):
+    def _test_lastrow_accessor(self, connection, table_, values, assertvalues):
         """Tests the inserted_primary_key and lastrow_has_id() functions."""
 
-        def insert_values(engine, table_, values):
+        def insert_values(table_, values):
             """
             Inserts a row into a table, returns the full list of values
             INSERTed including defaults that fired off on the DB side and
@@ -100,71 +121,63 @@ class InsertExecTest(fixtures.TablesTest):
             """
 
             # verify implicit_returning is working
-            if engine.dialect.implicit_returning:
+            if (
+                connection.dialect.insert_returning
+                and table_.implicit_returning
+                and not connection.dialect.postfetch_lastrowid
+            ):
                 ins = table_.insert()
-                comp = ins.compile(engine, column_keys=list(values))
+                comp = ins.compile(connection, column_keys=list(values))
                 if not set(values).issuperset(
                     c.key for c in table_.primary_key
                 ):
                     is_(bool(comp.returning), True)
 
-            with engine.begin() as connection:
-                result = connection.execute(table_.insert(), values)
-                ret = values.copy()
+            result = connection.execute(table_.insert(), values)
+            ret = values.copy()
 
-                ipk = result.inserted_primary_key
-                for col, id_ in zip(table_.primary_key, ipk):
-                    ret[col.key] = id_
+            ipk = result.inserted_primary_key
+            for col, id_ in zip(table_.primary_key, ipk):
+                ret[col.key] = id_
 
-                if result.lastrow_has_defaults():
-                    criterion = and_(
-                        *[
-                            col == id_
-                            for col, id_ in zip(
-                                table_.primary_key, result.inserted_primary_key
-                            )
-                        ]
-                    )
-                    row = connection.execute(
-                        table_.select().where(criterion)
-                    ).first()
-                    for c in table_.c:
-                        ret[c.key] = row._mapping[c]
+            if result.lastrow_has_defaults():
+                criterion = and_(
+                    *[
+                        col == id_
+                        for col, id_ in zip(
+                            table_.primary_key, result.inserted_primary_key
+                        )
+                    ]
+                )
+                row = connection.execute(
+                    table_.select().where(criterion)
+                ).first()
+                for c in table_.c:
+                    ret[c.key] = row._mapping[c]
             return ret, ipk
 
-        if testing.against("firebird", "postgresql", "oracle", "mssql"):
-            assert testing.db.dialect.implicit_returning
+        table_.create(connection, checkfirst=True)
+        i, ipk = insert_values(table_, values)
+        eq_(i, assertvalues)
 
-        if testing.db.dialect.implicit_returning:
-            test_engines = [
-                engines.testing_engine(options={"implicit_returning": False}),
-                engines.testing_engine(options={"implicit_returning": True}),
-            ]
-        else:
-            test_engines = [testing.db]
+        # named tuple tests
+        for col in table_.primary_key:
+            eq_(getattr(ipk, col.key), assertvalues[col.key])
+            eq_(ipk._mapping[col.key], assertvalues[col.key])
 
-        for engine in test_engines:
-            try:
-                table_.create(bind=engine, checkfirst=True)
-                i, ipk = insert_values(engine, table_, values)
-                eq_(i, assertvalues)
+        eq_(ipk._fields, tuple([col.key for col in table_.primary_key]))
 
-                # named tuple tests
-                for col in table_.primary_key:
-                    eq_(getattr(ipk, col.key), assertvalues[col.key])
-                    eq_(ipk._mapping[col.key], assertvalues[col.key])
-
-                eq_(
-                    ipk._fields, tuple([col.key for col in table_.primary_key])
-                )
-
-            finally:
-                table_.drop(bind=engine)
-
-    @testing.skip_if("sqlite")
-    def test_lastrow_accessor_one(self):
-        metadata = MetaData()
+    @testing.requires.supports_autoincrement_w_composite_pk
+    @testing.combinations(
+        (True, testing.requires.insert_returning),
+        (False,),
+        argnames="implicit_returning",
+    )
+    def test_lastrow_accessor_one(
+        self, metadata, connection, implicit_returning
+    ):
         self._test_lastrow_accessor(
+            connection,
             Table(
                 "t1",
                 metadata,
@@ -175,15 +188,23 @@ class InsertExecTest(fixtures.TablesTest):
                     test_needs_autoincrement=True,
                 ),
                 Column("foo", String(30), primary_key=True),
+                implicit_returning=implicit_returning,
             ),
             {"foo": "hi"},
             {"id": 1, "foo": "hi"},
         )
 
-    @testing.skip_if("sqlite")
-    def test_lastrow_accessor_two(self):
-        metadata = MetaData()
+    @testing.requires.supports_autoincrement_w_composite_pk
+    @testing.combinations(
+        (True, testing.requires.insert_returning),
+        (False,),
+        argnames="implicit_returning",
+    )
+    def test_lastrow_accessor_two(
+        self, metadata, connection, implicit_returning
+    ):
         self._test_lastrow_accessor(
+            connection,
             Table(
                 "t2",
                 metadata,
@@ -195,29 +216,45 @@ class InsertExecTest(fixtures.TablesTest):
                 ),
                 Column("foo", String(30), primary_key=True),
                 Column("bar", String(30), server_default="hi"),
+                implicit_returning=implicit_returning,
             ),
             {"foo": "hi"},
             {"id": 1, "foo": "hi", "bar": "hi"},
         )
 
-    def test_lastrow_accessor_three(self):
-        metadata = MetaData()
+    @testing.combinations(
+        (True, testing.requires.insert_returning),
+        (False,),
+        argnames="implicit_returning",
+    )
+    def test_lastrow_accessor_three(
+        self, metadata, connection, implicit_returning
+    ):
         self._test_lastrow_accessor(
+            connection,
             Table(
                 "t3",
                 metadata,
                 Column("id", String(40), primary_key=True),
                 Column("foo", String(30), primary_key=True),
                 Column("bar", String(30)),
+                implicit_returning=implicit_returning,
             ),
             {"id": "hi", "foo": "thisisfoo", "bar": "thisisbar"},
             {"id": "hi", "foo": "thisisfoo", "bar": "thisisbar"},
         )
 
     @testing.requires.sequences
-    def test_lastrow_accessor_four(self):
-        metadata = MetaData()
+    @testing.combinations(
+        (True, testing.requires.insert_returning),
+        (False,),
+        argnames="implicit_returning",
+    )
+    def test_lastrow_accessor_four(
+        self, metadata, connection, implicit_returning
+    ):
         self._test_lastrow_accessor(
+            connection,
             Table(
                 "t4",
                 metadata,
@@ -229,15 +266,23 @@ class InsertExecTest(fixtures.TablesTest):
                 ),
                 Column("foo", String(30), primary_key=True),
                 Column("bar", String(30), server_default="hi"),
+                implicit_returning=implicit_returning,
             ),
             {"foo": "hi", "id": 1},
             {"id": 1, "foo": "hi", "bar": "hi"},
         )
 
     @testing.requires.sequences
-    def test_lastrow_accessor_four_a(self):
-        metadata = MetaData()
+    @testing.combinations(
+        (True, testing.requires.insert_returning),
+        (False,),
+        argnames="implicit_returning",
+    )
+    def test_lastrow_accessor_four_a(
+        self, metadata, connection, implicit_returning
+    ):
         self._test_lastrow_accessor(
+            connection,
             Table(
                 "t4",
                 metadata,
@@ -248,28 +293,44 @@ class InsertExecTest(fixtures.TablesTest):
                     primary_key=True,
                 ),
                 Column("foo", String(30)),
+                implicit_returning=implicit_returning,
             ),
             {"foo": "hi"},
             {"id": 1, "foo": "hi"},
         )
 
-    def test_lastrow_accessor_five(self):
-        metadata = MetaData()
+    @testing.combinations(
+        (True, testing.requires.insert_returning),
+        (False,),
+        argnames="implicit_returning",
+    )
+    def test_lastrow_accessor_five(
+        self, metadata, connection, implicit_returning
+    ):
         self._test_lastrow_accessor(
+            connection,
             Table(
                 "t5",
                 metadata,
                 Column("id", String(10), primary_key=True),
                 Column("bar", String(30), server_default="hi"),
+                implicit_returning=implicit_returning,
             ),
             {"id": "id1"},
             {"id": "id1", "bar": "hi"},
         )
 
-    @testing.skip_if("sqlite")
-    def test_lastrow_accessor_six(self):
-        metadata = MetaData()
+    @testing.requires.supports_autoincrement_w_composite_pk
+    @testing.combinations(
+        (True, testing.requires.insert_returning),
+        (False,),
+        argnames="implicit_returning",
+    )
+    def test_lastrow_accessor_six(
+        self, metadata, connection, implicit_returning
+    ):
         self._test_lastrow_accessor(
+            connection,
             Table(
                 "t6",
                 metadata,
@@ -280,6 +341,7 @@ class InsertExecTest(fixtures.TablesTest):
                     test_needs_autoincrement=True,
                 ),
                 Column("bar", Integer, primary_key=True),
+                implicit_returning=implicit_returning,
             ),
             {"bar": 0},
             {"id": 1, "bar": 0},
@@ -287,35 +349,29 @@ class InsertExecTest(fixtures.TablesTest):
 
     # TODO: why not in the sqlite suite?
     @testing.only_on("sqlite+pysqlite")
-    @testing.provide_metadata
-    def test_lastrowid_zero(self):
+    def test_lastrowid_zero(self, metadata, connection):
         from sqlalchemy.dialects import sqlite
-
-        eng = engines.testing_engine()
 
         class ExcCtx(sqlite.base.SQLiteExecutionContext):
             def get_lastrowid(self):
                 return 0
 
-        eng.dialect.execution_ctx_cls = ExcCtx
         t = Table(
             "t",
             self.metadata,
             Column("x", Integer, primary_key=True),
             Column("y", Integer),
+            implicit_returning=False,
         )
-        with eng.begin() as conn:
-            t.create(conn)
-            r = conn.execute(t.insert().values(y=5))
+        t.create(connection)
+        with mock.patch.object(
+            connection.dialect, "execution_ctx_cls", ExcCtx
+        ):
+            r = connection.execute(t.insert().values(y=5))
             eq_(r.inserted_primary_key, (0,))
 
-    @testing.fails_on(
-        "sqlite", "sqlite autoincrement doesn't work with composite pks"
-    )
-    @testing.provide_metadata
-    def test_misordered_lastrow(self, connection):
-        metadata = self.metadata
-
+    @testing.requires.supports_autoincrement_w_composite_pk
+    def test_misordered_lastrow(self, connection, metadata):
         related = Table(
             "related",
             metadata,
@@ -371,12 +427,16 @@ class InsertExecTest(fixtures.TablesTest):
         eq_(r.inserted_primary_key, (None,))
 
     @testing.requires.empty_inserts
-    @testing.requires.returning
-    def test_no_inserted_pk_on_returning(self, connection):
+    @testing.requires.insert_returning
+    def test_no_inserted_pk_on_returning(
+        self, connection, close_result_when_finished
+    ):
         users = self.tables.users
         result = connection.execute(
             users.insert().returning(users.c.user_id, users.c.user_name)
         )
+        close_result_when_finished(result)
+
         assert_raises_message(
             exc.InvalidRequestError,
             r"Can't call inserted_primary_key when returning\(\) is used.",
@@ -389,7 +449,7 @@ class InsertExecTest(fixtures.TablesTest):
 class TableInsertTest(fixtures.TablesTest):
 
     """test for consistent insert behavior across dialects
-    regarding the inline() method, lower-case 't' tables.
+    regarding the inline() method, values() method, lower-case 't' tables.
 
     """
 
@@ -447,8 +507,12 @@ class TableInsertTest(fixtures.TablesTest):
         returning=None,
         inserted_primary_key=False,
         table=None,
+        parameters=None,
     ):
-        r = connection.execute(stmt)
+        if parameters is not None:
+            r = connection.execute(stmt, parameters)
+        else:
+            r = connection.execute(stmt)
 
         if returning:
             returned = r.first()
@@ -530,7 +594,7 @@ class TableInsertTest(fixtures.TablesTest):
             inserted_primary_key=(1,),
         )
 
-    @testing.requires.returning
+    @testing.requires.insert_returning
     def test_uppercase_direct_params_returning(self, connection):
         t = self.tables.foo
         self._test(
@@ -563,7 +627,7 @@ class TableInsertTest(fixtures.TablesTest):
             inserted_primary_key=(),
         )
 
-    @testing.requires.returning
+    @testing.requires.insert_returning
     def test_direct_params_returning(self, connection):
         t = self._fixture()
         self._test(
@@ -612,4 +676,39 @@ class TableInsertTest(fixtures.TablesTest):
             t.insert().inline().values(data="data", x=5),
             (testing.db.dialect.default_sequence_base, "data", 5),
             inserted_primary_key=(),
+        )
+
+    @testing.requires.database_discards_null_for_autoincrement
+    def test_explicit_null_pk_values_db_ignores_it(self, connection):
+        """test new use case in #7998"""
+
+        # NOTE: this use case uses cursor.lastrowid on SQLite, MySQL, MariaDB,
+        # however when SQLAlchemy 2.0 adds support for RETURNING to SQLite
+        # and MariaDB, it should work there as well.
+
+        t = self.tables.foo_no_seq
+        self._test(
+            connection,
+            t.insert().values(id=None, data="data", x=5),
+            (testing.db.dialect.default_sequence_base, "data", 5),
+            inserted_primary_key=(testing.db.dialect.default_sequence_base,),
+            table=t,
+        )
+
+    @testing.requires.database_discards_null_for_autoincrement
+    def test_explicit_null_pk_params_db_ignores_it(self, connection):
+        """test new use case in #7998"""
+
+        # NOTE: this use case uses cursor.lastrowid on SQLite, MySQL, MariaDB,
+        # however when SQLAlchemy 2.0 adds support for RETURNING to SQLite
+        # and MariaDB, it should work there as well.
+
+        t = self.tables.foo_no_seq
+        self._test(
+            connection,
+            t.insert(),
+            (testing.db.dialect.default_sequence_base, "data", 5),
+            inserted_primary_key=(testing.db.dialect.default_sequence_base,),
+            table=t,
+            parameters=dict(id=None, data="data", x=5),
         )

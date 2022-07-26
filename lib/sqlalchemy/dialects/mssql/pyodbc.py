@@ -1,9 +1,11 @@
 # mssql/pyodbc.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
+
 r"""
 .. dialect:: mssql+pyodbc
     :name: PyODBC
@@ -179,6 +181,33 @@ at both the pyodbc and engine levels::
         isolation_level="AUTOCOMMIT"
     )
 
+Avoiding sending large string parameters as TEXT/NTEXT
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+By default, for historical reasons, Microsoft's ODBC drivers for SQL Server
+send long string parameters (greater than 4000 SBCS characters or 2000 Unicode
+characters) as TEXT/NTEXT values. TEXT and NTEXT have been deprecated for many
+years and are starting to cause compatibility issues with newer versions of
+SQL_Server/Azure. For example, see `this
+issue <https://github.com/mkleehammer/pyodbc/issues/835>`_.
+
+Starting with ODBC Driver 18 for SQL Server we can override the legacy
+behavior and pass long strings as varchar(max)/nvarchar(max) using the
+``LongAsMax=Yes`` connection string parameter::
+
+    connection_url = sa.engine.URL.create(
+        "mssql+pyodbc",
+        username="scott",
+        password="tiger",
+        host="mssqlserver.example.com",
+        database="mydb",
+        query={
+            "driver": "ODBC Driver 18 for SQL Server",
+            "LongAsMax": "Yes",
+        },
+    )
+
+
 Pyodbc Pooling / connection close behavior
 ------------------------------------------
 
@@ -262,18 +291,19 @@ driver in order to use this flag::
 Setinputsizes Support
 -----------------------
 
-The pyodbc ``cursor.setinputsizes()`` method can be used if necessary.  To
-enable this hook, pass ``use_setinputsizes=True`` to :func:`_sa.create_engine`::
+As of version 2.0, the pyodbc ``cursor.setinputsizes()`` method is used by
+default except for .executemany() calls when fast_executemany=True.
 
-    engine = create_engine("mssql+pyodbc://...", use_setinputsizes=True)
-
-The behavior of the hook can then be customized, as may be necessary
+The behavior of setinputsizes can be customized, as may be necessary
 particularly if fast_executemany is in use, via the
 :meth:`.DialectEvents.do_setinputsizes` hook. See that method for usage
 examples.
 
 .. versionchanged:: 1.4.1  The pyodbc dialects will not use setinputsizes
    unless ``use_setinputsizes=True`` is passed.
+
+.. versionchanged:: 2.0  The mssql+pyodbc dialect now defaults to using
+   setinputsizes except for .executemany() calls when fast_executemany=True.
 
 """  # noqa
 
@@ -283,18 +313,24 @@ import decimal
 import re
 import struct
 
+from .base import _MSDateTime
+from .base import _MSUnicode
+from .base import _MSUnicodeText
 from .base import BINARY
 from .base import DATETIMEOFFSET
 from .base import MSDialect
 from .base import MSExecutionContext
 from .base import VARBINARY
+from .json import JSON as _MSJson
+from .json import JSONIndexType as _MSJsonIndexType
+from .json import JSONPathType as _MSJsonPathType
 from ... import exc
 from ... import types as sqltypes
 from ... import util
 from ...connectors.pyodbc import PyODBCConnector
 
 
-class _ms_numeric_pyodbc(object):
+class _ms_numeric_pyodbc:
 
     """Turns Decimals with adjusted() < 0 or > 7 into strings.
 
@@ -366,7 +402,7 @@ class _MSFloat_pyodbc(_ms_numeric_pyodbc, sqltypes.Float):
     pass
 
 
-class _ms_binary_pyodbc(object):
+class _ms_binary_pyodbc:
     """Wraps binary values in dialect-specific Binary wrapper.
     If the value is null, return a pyodbc-specific BinaryNull
     object to prevent pyODBC [and FreeTDS] from defaulting binary
@@ -389,7 +425,7 @@ class _ms_binary_pyodbc(object):
         return process
 
 
-class _ODBCDateTimeBindProcessor(object):
+class _ODBCDateTimeBindProcessor:
     """Add bind processors to handle datetimeoffset behaviors"""
 
     has_tz = False
@@ -398,7 +434,7 @@ class _ODBCDateTimeBindProcessor(object):
         def process(value):
             if value is None:
                 return None
-            elif isinstance(value, util.string_types):
+            elif isinstance(value, str):
                 # if a string was passed directly, allow it through
                 return value
             elif not value.tzinfo or (not self.timezone and not self.has_tz):
@@ -420,7 +456,7 @@ class _ODBCDateTimeBindProcessor(object):
         return process
 
 
-class _ODBCDateTime(_ODBCDateTimeBindProcessor, sqltypes.DateTime):
+class _ODBCDateTime(_ODBCDateTimeBindProcessor, _MSDateTime):
     pass
 
 
@@ -434,6 +470,36 @@ class _VARBINARY_pyodbc(_ms_binary_pyodbc, VARBINARY):
 
 class _BINARY_pyodbc(_ms_binary_pyodbc, BINARY):
     pass
+
+
+class _String_pyodbc(sqltypes.String):
+    def get_dbapi_type(self, dbapi):
+        return dbapi.SQL_VARCHAR
+
+
+class _Unicode_pyodbc(_MSUnicode):
+    def get_dbapi_type(self, dbapi):
+        return dbapi.SQL_WVARCHAR
+
+
+class _UnicodeText_pyodbc(_MSUnicodeText):
+    def get_dbapi_type(self, dbapi):
+        return dbapi.SQL_WVARCHAR
+
+
+class _JSON_pyodbc(_MSJson):
+    def get_dbapi_type(self, dbapi):
+        return dbapi.SQL_WVARCHAR
+
+
+class _JSONIndexType_pyodbc(_MSJsonIndexType):
+    def get_dbapi_type(self, dbapi):
+        return dbapi.SQL_WVARCHAR
+
+
+class _JSONPathType_pyodbc(_MSJsonPathType):
+    def get_dbapi_type(self, dbapi):
+        return dbapi.SQL_WVARCHAR
 
 
 class MSExecutionContext_pyodbc(MSExecutionContext):
@@ -492,6 +558,8 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
     # mssql still has problems with this on Linux
     supports_sane_rowcount_returning = False
 
+    favor_returning_over_lastrowid = True
+
     execution_ctx_cls = MSExecutionContext_pyodbc
 
     colspecs = util.update_copy(
@@ -509,15 +577,25 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
             VARBINARY: _VARBINARY_pyodbc,
             sqltypes.VARBINARY: _VARBINARY_pyodbc,
             sqltypes.LargeBinary: _VARBINARY_pyodbc,
+            sqltypes.String: _String_pyodbc,
+            sqltypes.Unicode: _Unicode_pyodbc,
+            sqltypes.UnicodeText: _UnicodeText_pyodbc,
+            sqltypes.JSON: _JSON_pyodbc,
+            sqltypes.JSON.JSONIndexType: _JSONIndexType_pyodbc,
+            sqltypes.JSON.JSONPathType: _JSONPathType_pyodbc,
+            # this excludes Enum from the string/VARCHAR thing for now
+            # it looks like Enum's adaptation doesn't really support the
+            # String type itself having a dialect-level impl
+            sqltypes.Enum: sqltypes.Enum,
         },
     )
 
     def __init__(
-        self, description_encoding=None, fast_executemany=False, **params
+        self, fast_executemany=False, use_setinputsizes=True, **params
     ):
-        if "description_encoding" in params:
-            self.description_encoding = params.pop("description_encoding")
-        super(MSDialect_pyodbc, self).__init__(**params)
+        super(MSDialect_pyodbc, self).__init__(
+            use_setinputsizes=use_setinputsizes, **params
+        )
         self.use_scope_identity = (
             self.use_scope_identity
             and self.dbapi
@@ -542,7 +620,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
             # 2008.  Before we had the VARCHAR cast above, pyodbc would also
             # fail on this query.
             return super(MSDialect_pyodbc, self)._get_server_version_info(
-                connection, allow_chars=False
+                connection
             )
         else:
             version = []
@@ -577,7 +655,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
                 tup[4],
                 tup[5],
                 tup[6] // 1000,
-                util.timezone(
+                datetime.timezone(
                     datetime.timedelta(hours=tup[7], minutes=tup[8])
                 ),
             )

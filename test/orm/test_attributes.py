@@ -1,4 +1,6 @@
 import pickle
+from unittest.mock import call
+from unittest.mock import Mock
 
 from sqlalchemy import event
 from sqlalchemy import exc as sa_exc
@@ -17,8 +19,7 @@ from sqlalchemy.testing import is_false
 from sqlalchemy.testing import is_not
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import not_in
-from sqlalchemy.testing.mock import call
-from sqlalchemy.testing.mock import Mock
+from sqlalchemy.testing.assertions import assert_warns
 from sqlalchemy.testing.util import all_partial_orderings
 from sqlalchemy.testing.util import gc_collect
 
@@ -35,29 +36,36 @@ def _set_callable(state, dict_, key, callable_):
     fn(state, dict_, None)
 
 
+def _register_attribute(class_, key, **kw):
+    kw.setdefault("comparator", object())
+    kw.setdefault("parententity", object())
+
+    attributes.register_attribute(class_, key, **kw)
+
+
 class AttributeImplAPITest(fixtures.MappedTest):
     def _scalar_obj_fixture(self):
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
         instrumentation.register_class(A)
         instrumentation.register_class(B)
-        attributes.register_attribute(A, "b", uselist=False, useobject=True)
+        _register_attribute(A, "b", uselist=False, useobject=True)
         return A, B
 
     def _collection_obj_fixture(self):
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
         instrumentation.register_class(A)
         instrumentation.register_class(B)
-        attributes.register_attribute(A, "b", uselist=True, useobject=True)
+        _register_attribute(A, "b", uselist=True, useobject=True)
         return A, B
 
     def test_scalar_obj_remove_invalid(self):
@@ -212,10 +220,10 @@ class AttributesTest(fixtures.ORMTest):
     def setup_test(self):
         global MyTest, MyTest2
 
-        class MyTest(object):
+        class MyTest:
             pass
 
-        class MyTest2(object):
+        class MyTest2:
             pass
 
     def teardown_test(self):
@@ -223,17 +231,13 @@ class AttributesTest(fixtures.ORMTest):
         MyTest, MyTest2 = None, None
 
     def test_basic(self):
-        class User(object):
+        class User:
             pass
 
         instrumentation.register_class(User)
-        attributes.register_attribute(
-            User, "user_id", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            User, "user_name", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
+        _register_attribute(User, "user_id", uselist=False, useobject=False)
+        _register_attribute(User, "user_name", uselist=False, useobject=False)
+        _register_attribute(
             User, "email_address", uselist=False, useobject=False
         )
         u = User()
@@ -262,28 +266,22 @@ class AttributesTest(fixtures.ORMTest):
     def test_pickleness(self):
         instrumentation.register_class(MyTest)
         instrumentation.register_class(MyTest2)
-        attributes.register_attribute(
-            MyTest, "user_id", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
+        _register_attribute(MyTest, "user_id", uselist=False, useobject=False)
+        _register_attribute(
             MyTest, "user_name", uselist=False, useobject=False
         )
-        attributes.register_attribute(
+        _register_attribute(
             MyTest, "email_address", uselist=False, useobject=False
         )
-        attributes.register_attribute(
-            MyTest2, "a", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            MyTest2, "b", uselist=False, useobject=False
-        )
+        _register_attribute(MyTest2, "a", uselist=False, useobject=False)
+        _register_attribute(MyTest2, "b", uselist=False, useobject=False)
 
         # shouldn't be pickling callables at the class level
 
         def somecallable(state, passive):
             return None
 
-        attributes.register_attribute(
+        _register_attribute(
             MyTest,
             "mt2",
             uselist=True,
@@ -325,7 +323,7 @@ class AttributesTest(fixtures.ORMTest):
         """test that InstanceState always has a dict, even after host
         object gc'ed."""
 
-        class Foo(object):
+        class Foo:
             pass
 
         instrumentation.register_class(Foo)
@@ -340,18 +338,16 @@ class AttributesTest(fixtures.ORMTest):
 
     @testing.requires.predictable_gc
     def test_object_dereferenced_error(self):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             def __init__(self):
                 gc_collect()
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "bars", uselist=True, useobject=True
-        )
+        _register_attribute(Foo, "bars", uselist=True, useobject=True)
 
         assert_raises_message(
             orm_exc.ObjectDereferencedError,
@@ -362,15 +358,13 @@ class AttributesTest(fixtures.ORMTest):
         )
 
     def test_unmapped_instance_raises(self):
-        class User(object):
+        class User:
             pass
 
         instrumentation.register_class(User)
-        attributes.register_attribute(
-            User, "user_name", uselist=False, useobject=False
-        )
+        _register_attribute(User, "user_name", uselist=False, useobject=False)
 
-        class Blog(object):
+        class Blog:
             name = User.user_name
 
         def go():
@@ -383,11 +377,11 @@ class AttributesTest(fixtures.ORMTest):
         )
 
     def test_del_scalar_nonobject(self):
-        class Foo(object):
+        class Foo:
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(Foo, "b", uselist=False, useobject=False)
+        _register_attribute(Foo, "b", uselist=False, useobject=False)
 
         f1 = Foo()
 
@@ -408,15 +402,15 @@ class AttributesTest(fixtures.ORMTest):
         )
 
     def test_del_scalar_object(self):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(Foo, "b", uselist=False, useobject=True)
+        _register_attribute(Foo, "b", uselist=False, useobject=True)
 
         f1 = Foo()
 
@@ -435,15 +429,15 @@ class AttributesTest(fixtures.ORMTest):
         )
 
     def test_del_collection_object(self):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(Foo, "b", uselist=True, useobject=True)
+        _register_attribute(Foo, "b", uselist=True, useobject=True)
 
         f1 = Foo()
 
@@ -458,7 +452,7 @@ class AttributesTest(fixtures.ORMTest):
         eq_(f1.b, [])
 
     def test_deferred(self):
-        class Foo(object):
+        class Foo:
             pass
 
         data = {"a": "this is a", "b": 12}
@@ -471,8 +465,8 @@ class AttributesTest(fixtures.ORMTest):
         instrumentation.register_class(Foo)
         manager = attributes.manager_of_class(Foo)
         manager.expired_attribute_loader = loader
-        attributes.register_attribute(Foo, "a", uselist=False, useobject=False)
-        attributes.register_attribute(Foo, "b", uselist=False, useobject=False)
+        _register_attribute(Foo, "a", uselist=False, useobject=False)
+        _register_attribute(Foo, "b", uselist=False, useobject=False)
 
         f = Foo()
         attributes.instance_state(f)._expire(
@@ -517,12 +511,8 @@ class AttributesTest(fixtures.ORMTest):
         instrumentation.register_class(MyTest)
         manager = attributes.manager_of_class(MyTest)
         manager.expired_attribute_loader = loader
-        attributes.register_attribute(
-            MyTest, "a", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            MyTest, "b", uselist=False, useobject=False
-        )
+        _register_attribute(MyTest, "a", uselist=False, useobject=False)
+        _register_attribute(MyTest, "b", uselist=False, useobject=False)
 
         m = MyTest()
         attributes.instance_state(m)._expire(
@@ -535,27 +525,21 @@ class AttributesTest(fixtures.ORMTest):
         eq_(m2.b, 12)
 
     def test_list(self):
-        class User(object):
+        class User:
             pass
 
-        class Address(object):
+        class Address:
             pass
 
         instrumentation.register_class(User)
         instrumentation.register_class(Address)
-        attributes.register_attribute(
-            User, "user_id", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            User, "user_name", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            User, "addresses", uselist=True, useobject=True
-        )
-        attributes.register_attribute(
+        _register_attribute(User, "user_id", uselist=False, useobject=False)
+        _register_attribute(User, "user_name", uselist=False, useobject=False)
+        _register_attribute(User, "addresses", uselist=True, useobject=True)
+        _register_attribute(
             Address, "address_id", uselist=False, useobject=False
         )
-        attributes.register_attribute(
+        _register_attribute(
             Address, "email_address", uselist=False, useobject=False
         )
 
@@ -602,17 +586,17 @@ class AttributesTest(fixtures.ORMTest):
 
         """
 
-        class Post(object):
+        class Post:
             pass
 
-        class Blog(object):
+        class Blog:
             pass
 
         instrumentation.register_class(Post)
         instrumentation.register_class(Blog)
 
         # set up instrumented attributes with backrefs
-        attributes.register_attribute(
+        _register_attribute(
             Post,
             "blog",
             uselist=False,
@@ -620,7 +604,7 @@ class AttributesTest(fixtures.ORMTest):
             trackparent=True,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Blog,
             "posts",
             uselist=True,
@@ -665,16 +649,16 @@ class AttributesTest(fixtures.ORMTest):
         assert attributes.has_parent(Post, b2, "blog")
 
     def test_illegal_trackparent(self):
-        class Post(object):
+        class Post:
             pass
 
-        class Blog(object):
+        class Blog:
             pass
 
         instrumentation.register_class(Post)
         instrumentation.register_class(Blog)
 
-        attributes.register_attribute(Post, "blog", useobject=True)
+        _register_attribute(Post, "blog", useobject=True)
         assert_raises_message(
             AssertionError,
             "This AttributeImpl is not configured to track parents.",
@@ -695,7 +679,7 @@ class AttributesTest(fixtures.ORMTest):
     def test_inheritance(self):
         """tests that attributes are polymorphic"""
 
-        class Foo(object):
+        class Foo:
             pass
 
         class Bar(Foo):
@@ -713,13 +697,13 @@ class AttributesTest(fixtures.ORMTest):
         def func3(state, passive):
             return "this is the shared attr"
 
-        attributes.register_attribute(
+        _register_attribute(
             Foo, "element", uselist=False, callable_=func1, useobject=True
         )
-        attributes.register_attribute(
+        _register_attribute(
             Foo, "element2", uselist=False, callable_=func3, useobject=True
         )
-        attributes.register_attribute(
+        _register_attribute(
             Bar, "element", uselist=False, callable_=func2, useobject=True
         )
 
@@ -733,7 +717,7 @@ class AttributesTest(fixtures.ORMTest):
     def test_no_double_state(self):
         states = set()
 
-        class Foo(object):
+        class Foo:
             def __init__(self):
                 states.add(attributes.instance_state(self))
 
@@ -754,20 +738,18 @@ class AttributesTest(fixtures.ORMTest):
         managed attributes of an object, if the object is of a
         descendant class with managed attributes in the parent class"""
 
-        class Foo(object):
+        class Foo:
             pass
 
         class Bar(Foo):
             pass
 
-        class Element(object):
+        class Element:
             _state = True
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "element", uselist=False, useobject=True
-        )
+        _register_attribute(Foo, "element", uselist=False, useobject=True)
         el = Element()
         x = Bar()
         x.element = el
@@ -803,13 +785,13 @@ class AttributesTest(fixtures.ORMTest):
         def func2(state, passive):
             return [bar1, bar2, bar3]
 
-        attributes.register_attribute(
+        _register_attribute(
             Foo, "col1", uselist=False, callable_=func1, useobject=True
         )
-        attributes.register_attribute(
+        _register_attribute(
             Foo, "col2", uselist=True, callable_=func2, useobject=True
         )
-        attributes.register_attribute(Bar, "id", uselist=False, useobject=True)
+        _register_attribute(Bar, "id", uselist=False, useobject=True)
         x = Foo()
         attributes.instance_state(x)._commit_all(attributes.instance_dict(x))
         x.col2.append(bar4)
@@ -819,18 +801,18 @@ class AttributesTest(fixtures.ORMTest):
         )
 
     def test_parenttrack(self):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
+        _register_attribute(
             Foo, "element", uselist=False, trackparent=True, useobject=True
         )
-        attributes.register_attribute(
+        _register_attribute(
             Bar, "element", uselist=False, trackparent=True, useobject=True
         )
         f1 = Foo()
@@ -862,22 +844,22 @@ class AttributesTest(fixtures.ORMTest):
         from ones implementing zope.interface.Interface). This is a
         simple regression test to prevent that defect."""
 
-        class des(object):
+        class des:
             def __get__(self, instance, owner):
                 raise AttributeError("fake attribute")
 
-        class Foo(object):
+        class Foo:
             A = des()
 
         instrumentation.register_class(Foo)
         instrumentation.unregister_class(Foo)
 
     def test_collectionclasses(self):
-        class Foo(object):
+        class Foo:
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(
+        _register_attribute(
             Foo, "collection", uselist=True, typecallable=set, useobject=True
         )
         assert attributes.manager_of_class(Foo).is_instrumented("collection")
@@ -887,7 +869,7 @@ class AttributesTest(fixtures.ORMTest):
             "collection"
         )
         try:
-            attributes.register_attribute(
+            _register_attribute(
                 Foo,
                 "collection",
                 uselist=True,
@@ -910,7 +892,7 @@ class AttributesTest(fixtures.ORMTest):
             def remove(self, item):
                 del self[item.foo]
 
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "collection",
             uselist=True,
@@ -920,11 +902,11 @@ class AttributesTest(fixtures.ORMTest):
         assert isinstance(Foo().collection, MyDict)
         attributes.unregister_attribute(Foo, "collection")
 
-        class MyColl(object):
+        class MyColl:
             pass
 
         try:
-            attributes.register_attribute(
+            _register_attribute(
                 Foo,
                 "collection",
                 uselist=True,
@@ -938,7 +920,7 @@ class AttributesTest(fixtures.ORMTest):
                 "collection class"
             )
 
-        class MyColl(object):
+        class MyColl:
             @collection.iterator
             def __iter__(self):
                 return iter([])
@@ -951,7 +933,7 @@ class AttributesTest(fixtures.ORMTest):
             def remove(self, item):
                 pass
 
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "collection",
             uselist=True,
@@ -965,13 +947,13 @@ class AttributesTest(fixtures.ORMTest):
             assert False
 
     def test_last_known_tracking(self):
-        class Foo(object):
+        class Foo:
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(Foo, "a", useobject=False)
-        attributes.register_attribute(Foo, "b", useobject=False)
-        attributes.register_attribute(Foo, "c", useobject=False)
+        _register_attribute(Foo, "a", useobject=False)
+        _register_attribute(Foo, "b", useobject=False)
+        _register_attribute(Foo, "c", useobject=False)
 
         f1 = Foo()
         state = attributes.instance_state(f1)
@@ -1013,10 +995,10 @@ class AttributesTest(fixtures.ORMTest):
 
 class GetNoValueTest(fixtures.ORMTest):
     def _fixture(self, expected):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         def lazy_callable(state, passive):
@@ -1025,7 +1007,7 @@ class GetNoValueTest(fixtures.ORMTest):
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
         if expected is not None:
-            attributes.register_attribute(
+            _register_attribute(
                 Foo,
                 "attr",
                 useobject=True,
@@ -1033,9 +1015,7 @@ class GetNoValueTest(fixtures.ORMTest):
                 callable_=lazy_callable,
             )
         else:
-            attributes.register_attribute(
-                Foo, "attr", useobject=True, uselist=False
-            )
+            _register_attribute(Foo, "attr", useobject=True, uselist=False)
 
         f1 = self.f1 = Foo()
         return (
@@ -1083,17 +1063,15 @@ class GetNoValueTest(fixtures.ORMTest):
 
 class UtilTest(fixtures.ORMTest):
     def test_helpers(self):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "coll", uselist=True, useobject=True
-        )
+        _register_attribute(Foo, "coll", uselist=True, useobject=True)
 
         f1 = Foo()
         b1 = Bar()
@@ -1114,18 +1092,16 @@ class UtilTest(fixtures.ORMTest):
         """test that set_committed_value->None to a uselist generates an
         empty list"""
 
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "col_list", uselist=True, useobject=True
-        )
-        attributes.register_attribute(
+        _register_attribute(Foo, "col_list", uselist=True, useobject=True)
+        _register_attribute(
             Foo, "col_set", uselist=True, useobject=True, typecallable=set
         )
 
@@ -1137,16 +1113,16 @@ class UtilTest(fixtures.ORMTest):
         eq_(f1.col_set, set())
 
     def test_initiator_arg(self):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(Foo, "a", uselist=False, useobject=False)
-        attributes.register_attribute(Bar, "b", uselist=False, useobject=False)
+        _register_attribute(Foo, "a", uselist=False, useobject=False)
+        _register_attribute(Bar, "b", uselist=False, useobject=False)
 
         @event.listens_for(Foo.a, "set")
         def sync_a(target, value, oldvalue, initiator):
@@ -1173,22 +1149,22 @@ class UtilTest(fixtures.ORMTest):
 
 class BackrefTest(fixtures.ORMTest):
     def test_m2m(self):
-        class Student(object):
+        class Student:
             pass
 
-        class Course(object):
+        class Course:
             pass
 
         instrumentation.register_class(Student)
         instrumentation.register_class(Course)
-        attributes.register_attribute(
+        _register_attribute(
             Student,
             "courses",
             uselist=True,
             backref="students",
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Course, "students", uselist=True, backref="courses", useobject=True
         )
 
@@ -1208,15 +1184,15 @@ class BackrefTest(fixtures.ORMTest):
         self.assert_(c.students == [s2, s3])
 
     def test_o2m(self):
-        class Post(object):
+        class Post:
             pass
 
-        class Blog(object):
+        class Blog:
             pass
 
         instrumentation.register_class(Post)
         instrumentation.register_class(Blog)
-        attributes.register_attribute(
+        _register_attribute(
             Post,
             "blog",
             uselist=False,
@@ -1224,7 +1200,7 @@ class BackrefTest(fixtures.ORMTest):
             trackparent=True,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Blog,
             "posts",
             uselist=True,
@@ -1256,20 +1232,20 @@ class BackrefTest(fixtures.ORMTest):
         del p5.blog
 
     def test_o2o(self):
-        class Port(object):
+        class Port:
             pass
 
-        class Jack(object):
+        class Jack:
             pass
 
         instrumentation.register_class(Port)
         instrumentation.register_class(Jack)
 
-        attributes.register_attribute(
+        _register_attribute(
             Port, "jack", uselist=False, useobject=True, backref="port"
         )
 
-        attributes.register_attribute(
+        _register_attribute(
             Jack, "port", uselist=False, useobject=True, backref="jack"
         )
 
@@ -1290,10 +1266,10 @@ class BackrefTest(fixtures.ORMTest):
 
         """
 
-        class Parent(object):
+        class Parent:
             pass
 
-        class Child(object):
+        class Child:
             pass
 
         class SubChild(Child):
@@ -1305,7 +1281,7 @@ class BackrefTest(fixtures.ORMTest):
         instrumentation.register_class(Parent)
         instrumentation.register_class(Child)
         instrumentation.register_class(SubChild)
-        attributes.register_attribute(
+        _register_attribute(
             Parent,
             "child",
             uselist=False,
@@ -1313,7 +1289,7 @@ class BackrefTest(fixtures.ORMTest):
             parent_token=p_token,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Child,
             "parent",
             uselist=False,
@@ -1321,7 +1297,7 @@ class BackrefTest(fixtures.ORMTest):
             parent_token=c_token,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             SubChild,
             "parent",
             uselist=False,
@@ -1338,13 +1314,13 @@ class BackrefTest(fixtures.ORMTest):
         c2.parent = p1
 
     def test_symmetric_o2m_inheritance(self):
-        class Parent(object):
+        class Parent:
             pass
 
         class SubParent(Parent):
             pass
 
-        class Child(object):
+        class Child:
             pass
 
         p_token = object()
@@ -1353,7 +1329,7 @@ class BackrefTest(fixtures.ORMTest):
         instrumentation.register_class(Parent)
         instrumentation.register_class(SubParent)
         instrumentation.register_class(Child)
-        attributes.register_attribute(
+        _register_attribute(
             Parent,
             "children",
             uselist=True,
@@ -1361,7 +1337,7 @@ class BackrefTest(fixtures.ORMTest):
             parent_token=p_token,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             SubParent,
             "children",
             uselist=True,
@@ -1369,7 +1345,7 @@ class BackrefTest(fixtures.ORMTest):
             parent_token=p_token,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Child,
             "parent",
             uselist=False,
@@ -1431,74 +1407,62 @@ class CyclicBackrefAssertionTest(fixtures.TestBase):
         )
 
     def _scalar_fixture(self):
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
-        class C(object):
+        class C:
             pass
 
         instrumentation.register_class(A)
         instrumentation.register_class(B)
         instrumentation.register_class(C)
-        attributes.register_attribute(C, "a", backref="c", useobject=True)
-        attributes.register_attribute(C, "b", backref="c", useobject=True)
+        _register_attribute(C, "a", backref="c", useobject=True)
+        _register_attribute(C, "b", backref="c", useobject=True)
 
-        attributes.register_attribute(
-            A, "c", backref="a", useobject=True, uselist=True
-        )
-        attributes.register_attribute(
-            B, "c", backref="b", useobject=True, uselist=True
-        )
+        _register_attribute(A, "c", backref="a", useobject=True, uselist=True)
+        _register_attribute(B, "c", backref="b", useobject=True, uselist=True)
 
         return A, B, C
 
     def _collection_fixture(self):
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
-        class C(object):
+        class C:
             pass
 
         instrumentation.register_class(A)
         instrumentation.register_class(B)
         instrumentation.register_class(C)
 
-        attributes.register_attribute(
-            C, "a", backref="c", useobject=True, uselist=True
-        )
-        attributes.register_attribute(
-            C, "b", backref="c", useobject=True, uselist=True
-        )
+        _register_attribute(C, "a", backref="c", useobject=True, uselist=True)
+        _register_attribute(C, "b", backref="c", useobject=True, uselist=True)
 
-        attributes.register_attribute(A, "c", backref="a", useobject=True)
-        attributes.register_attribute(B, "c", backref="b", useobject=True)
+        _register_attribute(A, "c", backref="a", useobject=True)
+        _register_attribute(B, "c", backref="b", useobject=True)
 
         return A, B, C
 
     def _broken_collection_fixture(self):
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
         instrumentation.register_class(A)
         instrumentation.register_class(B)
 
-        attributes.register_attribute(A, "b", backref="a1", useobject=True)
-        attributes.register_attribute(
-            B, "a1", backref="b", useobject=True, uselist=True
-        )
+        _register_attribute(A, "b", backref="a1", useobject=True)
+        _register_attribute(B, "a1", backref="b", useobject=True, uselist=True)
 
-        attributes.register_attribute(
-            B, "a2", backref="b", useobject=True, uselist=True
-        )
+        _register_attribute(B, "a2", backref="b", useobject=True, uselist=True)
 
         return A, B
 
@@ -1519,7 +1483,7 @@ class CyclicBackrefAssertionTest(fixtures.TestBase):
 
 class PendingBackrefTest(fixtures.ORMTest):
     def _fixture(self):
-        class Post(object):
+        class Post:
             def __init__(self, name):
                 self.name = name
 
@@ -1528,7 +1492,7 @@ class PendingBackrefTest(fixtures.ORMTest):
             def __eq__(self, other):
                 return other is not None and other.name == self.name
 
-        class Blog(object):
+        class Blog:
             def __init__(self, name):
                 self.name = name
 
@@ -1541,7 +1505,7 @@ class PendingBackrefTest(fixtures.ORMTest):
 
         instrumentation.register_class(Post)
         instrumentation.register_class(Blog)
-        attributes.register_attribute(
+        _register_attribute(
             Post,
             "blog",
             uselist=False,
@@ -1549,7 +1513,7 @@ class PendingBackrefTest(fixtures.ORMTest):
             trackparent=True,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Blog,
             "posts",
             uselist=True,
@@ -1776,13 +1740,13 @@ class HistoryTest(fixtures.TestBase):
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "someattr",
             uselist=uselist,
             useobject=useobject,
             active_history=active_history,
-            **kw
+            **kw,
         )
         return Foo
 
@@ -1796,7 +1760,7 @@ class HistoryTest(fixtures.TestBase):
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "someattr",
             uselist=uselist,
@@ -2130,19 +2094,19 @@ class HistoryTest(fixtures.TestBase):
     def test_collection_no_value(self):
         Foo = self._fixture(uselist=True, useobject=True, active_history=True)
         f = Foo()
-        eq_(self._someattr_history(f, passive=True), (None, None, None))
+        eq_(self._someattr_history(f, passive=True), ((), (), ()))
 
     def test_scalar_obj_no_value(self):
         Foo = self._fixture(uselist=False, useobject=True, active_history=True)
         f = Foo()
-        eq_(self._someattr_history(f, passive=True), (None, None, None))
+        eq_(self._someattr_history(f, passive=True), ((), (), ()))
 
     def test_scalar_no_value(self):
         Foo = self._fixture(
             uselist=False, useobject=False, active_history=True
         )
         f = Foo()
-        eq_(self._someattr_history(f, passive=True), (None, None, None))
+        eq_(self._someattr_history(f, passive=True), ((), (), ()))
 
     def test_scalar_active_set(self):
         Foo = self._fixture(
@@ -2616,7 +2580,7 @@ class HistoryTest(fixtures.TestBase):
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "someattr",
             uselist=True,
@@ -2674,12 +2638,8 @@ class HistoryTest(fixtures.TestBase):
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(
-            Foo, "someattr", uselist=True, useobject=True
-        )
-        attributes.register_attribute(
-            Foo, "id", uselist=False, useobject=False
-        )
+        _register_attribute(Foo, "someattr", uselist=True, useobject=True)
+        _register_attribute(Foo, "id", uselist=False, useobject=False)
         instrumentation.register_class(Bar)
         hi = Bar(name="hi")
         there = Bar(name="there")
@@ -2867,7 +2827,7 @@ class HistoryTest(fixtures.TestBase):
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "bars",
             uselist=True,
@@ -2875,7 +2835,7 @@ class HistoryTest(fixtures.TestBase):
             trackparent=True,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Bar,
             "foo",
             uselist=False,
@@ -2944,7 +2904,7 @@ class LazyloadHistoryTest(fixtures.TestBase):
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "bars",
             uselist=True,
@@ -2953,7 +2913,7 @@ class LazyloadHistoryTest(fixtures.TestBase):
             callable_=lazyload,
             useobject=True,
         )
-        attributes.register_attribute(
+        _register_attribute(
             Bar,
             "foo",
             uselist=False,
@@ -3003,7 +2963,7 @@ class LazyloadHistoryTest(fixtures.TestBase):
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "bars",
             uselist=True,
@@ -3062,7 +3022,7 @@ class LazyloadHistoryTest(fixtures.TestBase):
             return lazy_load
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(
+        _register_attribute(
             Foo, "bar", uselist=False, callable_=lazyload, useobject=False
         )
         lazy_load = "hi"
@@ -3118,7 +3078,7 @@ class LazyloadHistoryTest(fixtures.TestBase):
             return lazy_load
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "bar",
             uselist=False,
@@ -3183,7 +3143,7 @@ class LazyloadHistoryTest(fixtures.TestBase):
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
+        _register_attribute(
             Foo,
             "bar",
             uselist=False,
@@ -3237,10 +3197,10 @@ class ListenerTest(fixtures.ORMTest):
     def test_receive_changes(self):
         """test that Listeners can mutate the given value."""
 
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         def append(state, child, initiator):
@@ -3253,18 +3213,12 @@ class ListenerTest(fixtures.ORMTest):
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "data", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            Foo, "barlist", uselist=True, useobject=True
-        )
-        attributes.register_attribute(
+        _register_attribute(Foo, "data", uselist=False, useobject=False)
+        _register_attribute(Foo, "barlist", uselist=True, useobject=True)
+        _register_attribute(
             Foo, "barset", typecallable=set, uselist=True, useobject=True
         )
-        attributes.register_attribute(
-            Bar, "data", uselist=False, useobject=False
-        )
+        _register_attribute(Bar, "data", uselist=False, useobject=False)
         event.listen(Foo.data, "set", on_set, retval=True)
         event.listen(Foo.barlist, "append", append, retval=True)
         event.listen(Foo.barset, "append", append, retval=True)
@@ -3282,20 +3236,16 @@ class ListenerTest(fixtures.ORMTest):
     def test_named(self):
         canary = Mock()
 
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "data", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            Foo, "barlist", uselist=True, useobject=True
-        )
+        _register_attribute(Foo, "data", uselist=False, useobject=False)
+        _register_attribute(Foo, "barlist", uselist=True, useobject=True)
 
         event.listen(Foo.data, "set", canary.set, named=True)
         event.listen(Foo.barlist, "append", canary.append, named=True)
@@ -3311,21 +3261,21 @@ class ListenerTest(fixtures.ORMTest):
             [
                 call.set(
                     oldvalue=attributes.NO_VALUE,
-                    initiator=attributes.Event(
+                    initiator=attributes.AttributeEventToken(
                         Foo.data.impl, attributes.OP_REPLACE
                     ),
                     target=f1,
                     value=5,
                 ),
                 call.append(
-                    initiator=attributes.Event(
+                    initiator=attributes.AttributeEventToken(
                         Foo.barlist.impl, attributes.OP_APPEND
                     ),
                     target=f1,
                     value=b1,
                 ),
                 call.remove(
-                    initiator=attributes.Event(
+                    initiator=attributes.AttributeEventToken(
                         Foo.barlist.impl, attributes.OP_REMOVE
                     ),
                     target=f1,
@@ -3335,17 +3285,15 @@ class ListenerTest(fixtures.ORMTest):
         )
 
     def test_collection_link_events(self):
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "barlist", uselist=True, useobject=True
-        )
+        _register_attribute(Foo, "barlist", uselist=True, useobject=True)
 
         canary = Mock()
         event.listen(Foo.barlist, "init_collection", canary.init)
@@ -3380,17 +3328,15 @@ class ListenerTest(fixtures.ORMTest):
 
         """
 
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(
-            Foo, "barlist", uselist=True, useobject=True
-        )
+        _register_attribute(Foo, "barlist", uselist=True, useobject=True)
         canary = []
 
         def append(state, child, initiator):
@@ -3423,11 +3369,11 @@ class ListenerTest(fixtures.ORMTest):
     def test_flag_modified(self):
         canary = Mock()
 
-        class Foo(object):
+        class Foo:
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(Foo, "bar")
+        _register_attribute(Foo, "bar")
 
         event.listen(Foo.bar, "modified", canary)
         f1 = Foo()
@@ -3435,17 +3381,24 @@ class ListenerTest(fixtures.ORMTest):
         attributes.flag_modified(f1, "bar")
         eq_(
             canary.mock_calls,
-            [call(f1, attributes.Event(Foo.bar.impl, attributes.OP_MODIFIED))],
+            [
+                call(
+                    f1,
+                    attributes.AttributeEventToken(
+                        Foo.bar.impl, attributes.OP_MODIFIED
+                    ),
+                )
+            ],
         )
 
     def test_none_init_scalar(self):
         canary = Mock()
 
-        class Foo(object):
+        class Foo:
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(Foo, "bar")
+        _register_attribute(Foo, "bar")
 
         event.listen(Foo.bar, "set", canary)
 
@@ -3457,11 +3410,11 @@ class ListenerTest(fixtures.ORMTest):
     def test_none_init_object(self):
         canary = Mock()
 
-        class Foo(object):
+        class Foo:
             pass
 
         instrumentation.register_class(Foo)
-        attributes.register_attribute(Foo, "bar", useobject=True)
+        _register_attribute(Foo, "bar", useobject=True)
 
         event.listen(Foo.bar, "set", canary)
 
@@ -3473,15 +3426,15 @@ class ListenerTest(fixtures.ORMTest):
     def test_none_init_collection(self):
         canary = Mock()
 
-        class Foo(object):
+        class Foo:
             pass
 
-        class Bar(object):
+        class Bar:
             pass
 
         instrumentation.register_class(Foo)
         instrumentation.register_class(Bar)
-        attributes.register_attribute(Foo, "bar", useobject=True, uselist=True)
+        _register_attribute(Foo, "bar", useobject=True, uselist=True)
 
         event.listen(Foo.bar, "set", canary)
 
@@ -3584,7 +3537,7 @@ class EventPropagateTest(fixtures.TestBase):
         canary = []
 
         def make_a():
-            class A(object):
+            class A:
                 pass
 
             classes[0] = A
@@ -3602,7 +3555,7 @@ class EventPropagateTest(fixtures.TestBase):
             classes[2] = C
 
         def make_d():
-            class D(object):
+            class D:
                 pass
 
             classes[3] = D
@@ -3621,17 +3574,17 @@ class EventPropagateTest(fixtures.TestBase):
             instrumentation.register_class(classes[3])
 
         def attr_a():
-            attributes.register_attribute(
+            _register_attribute(
                 classes[0], "attrib", uselist=False, useobject=useobject
             )
 
         def attr_b():
-            attributes.register_attribute(
+            _register_attribute(
                 classes[1], "attrib", uselist=False, useobject=useobject
             )
 
         def attr_c():
-            attributes.register_attribute(
+            _register_attribute(
                 classes[2], "attrib", uselist=False, useobject=useobject
             )
 
@@ -3691,17 +3644,17 @@ class EventPropagateTest(fixtures.TestBase):
 
 class CollectionInitTest(fixtures.TestBase):
     def setup_test(self):
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
         self.A = A
         self.B = B
         instrumentation.register_class(A)
         instrumentation.register_class(B)
-        attributes.register_attribute(A, "bs", uselist=True, useobject=True)
+        _register_attribute(A, "bs", uselist=True, useobject=True)
 
     def test_bulk_replace_resets_empty(self):
         A = self.A
@@ -3750,17 +3703,17 @@ class CollectionInitTest(fixtures.TestBase):
 
 class TestUnlink(fixtures.TestBase):
     def setup_test(self):
-        class A(object):
+        class A:
             pass
 
-        class B(object):
+        class B:
             pass
 
         self.A = A
         self.B = B
         instrumentation.register_class(A)
         instrumentation.register_class(B)
-        attributes.register_attribute(A, "bs", uselist=True, useobject=True)
+        _register_attribute(A, "bs", uselist=True, useobject=True)
 
     def test_expired(self):
         A, B = self.A, self.B
@@ -3769,7 +3722,7 @@ class TestUnlink(fixtures.TestBase):
         a1.bs.append(B())
         state = attributes.instance_state(a1)
         state._expire(state.dict, set())
-        assert_raises(Warning, coll.append, B())
+        assert_warns(Warning, coll.append, B())
 
     def test_replaced(self):
         A, B = self.A, self.B
@@ -3790,7 +3743,7 @@ class TestUnlink(fixtures.TestBase):
         a1.bs.append(B())
         state = attributes.instance_state(a1)
         state._reset(state.dict, "bs")
-        assert_raises(Warning, coll.append, B())
+        assert_warns(Warning, coll.append, B())
 
     def test_ad_hoc_lazy(self):
         A, B = self.A, self.B
@@ -3799,4 +3752,4 @@ class TestUnlink(fixtures.TestBase):
         a1.bs.append(B())
         state = attributes.instance_state(a1)
         _set_callable(state, state.dict, "bs", lambda: B())
-        assert_raises(Warning, coll.append, B())
+        assert_warns(Warning, coll.append, B())

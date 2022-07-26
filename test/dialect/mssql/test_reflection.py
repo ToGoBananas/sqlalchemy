@@ -1,6 +1,7 @@
 # -*- encoding: utf-8
 import datetime
 import decimal
+import random
 
 from sqlalchemy import Column
 from sqlalchemy import DDL
@@ -19,11 +20,10 @@ from sqlalchemy import Table
 from sqlalchemy import testing
 from sqlalchemy import types
 from sqlalchemy import types as sqltypes
-from sqlalchemy import util
 from sqlalchemy.dialects import mssql
 from sqlalchemy.dialects.mssql import base
-from sqlalchemy.dialects.mssql.information_schema import CoerceUnicode
 from sqlalchemy.dialects.mssql.information_schema import tables
+from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import ComparesTables
@@ -34,6 +34,7 @@ from sqlalchemy.testing import in_
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import mock
+from sqlalchemy.testing import provision
 
 
 class ReflectionTest(fixtures.TestBase, ComparesTables, AssertsCompiledSQL):
@@ -262,12 +263,12 @@ class ReflectionTest(fixtures.TestBase, ComparesTables, AssertsCompiledSQL):
                 [
                     {
                         "id": 1,
-                        "txt": u"foo",
+                        "txt": "foo",
                         "dt2": datetime.datetime(2020, 1, 1, 1, 1, 1),
                     },
                     {
                         "id": 2,
-                        "txt": u"bar",
+                        "txt": "bar",
                         "dt2": datetime.datetime(2020, 2, 2, 2, 2, 2),
                     },
                 ],
@@ -348,6 +349,7 @@ class ReflectionTest(fixtures.TestBase, ComparesTables, AssertsCompiledSQL):
                 assert c2.dialect.has_table(
                     c2, "#myveryveryuniquetemptablename"
                 )
+                c2.rollback()
             finally:
                 with c1.begin():
                     c1.exec_driver_sql(
@@ -357,6 +359,54 @@ class ReflectionTest(fixtures.TestBase, ComparesTables, AssertsCompiledSQL):
                     c2.exec_driver_sql(
                         "drop table #myveryveryuniquetemptablename"
                     )
+
+    @testing.fixture
+    def temp_db_alt_collation_fixture(
+        self, connection_no_trans, testing_engine
+    ):
+        temp_db_name = "%s_different_collation" % (
+            provision.FOLLOWER_IDENT or "default"
+        )
+        cnxn = connection_no_trans.execution_options(
+            isolation_level="AUTOCOMMIT"
+        )
+        cnxn.exec_driver_sql(f"DROP DATABASE IF EXISTS {temp_db_name}")
+        cnxn.exec_driver_sql(
+            f"CREATE DATABASE {temp_db_name} COLLATE Danish_Norwegian_CI_AS"
+        )
+        eng = testing_engine(
+            url=testing.db.url.set(database=temp_db_name),
+            options=dict(poolclass=NullPool),
+        )
+
+        yield eng
+
+        cnxn.exec_driver_sql(f"DROP DATABASE IF EXISTS {temp_db_name}")
+
+    def test_global_temp_different_collation(
+        self, temp_db_alt_collation_fixture
+    ):
+        """test #8035"""
+
+        tname = f"##foo{random.randint(1,1000000)}"
+
+        with temp_db_alt_collation_fixture.connect() as conn:
+            conn.exec_driver_sql(f"CREATE TABLE {tname} (id int primary key)")
+            conn.commit()
+
+            eq_(
+                inspect(conn).get_columns(tname),
+                [
+                    {
+                        "name": "id",
+                        "type": testing.eq_type_affinity(sqltypes.INTEGER),
+                        "nullable": False,
+                        "default": None,
+                        "autoincrement": False,
+                    }
+                ],
+            )
+            Table(tname, MetaData(), autoload_with=conn)
 
     def test_db_qualified_items(self, metadata, connection):
         Table("foo", metadata, Column("id", Integer, primary_key=True))
@@ -549,12 +599,6 @@ class ReflectionTest(fixtures.TestBase, ComparesTables, AssertsCompiledSQL):
 
 
 class InfoCoerceUnicodeTest(fixtures.TestBase, AssertsCompiledSQL):
-    def test_info_unicode_coercion(self):
-
-        dialect = mssql.dialect()
-        value = CoerceUnicode().bind_processor(dialect)("a string")
-        assert isinstance(value, util.text_type)
-
     def test_info_unicode_cast_no_2000(self):
         dialect = mssql.dialect()
         dialect.server_version_info = base.MS_2000_VERSION
@@ -594,7 +638,7 @@ class ReflectHugeViewTest(fixtures.TablesTest):
             *[
                 Column("long_named_column_number_%d" % i, Integer)
                 for i in range(col_num)
-            ]
+            ],
         )
         cls.view_str = (
             view_str
@@ -788,8 +832,8 @@ class IdentityReflectionTest(fixtures.TablesTest):
                 eq_(type(col["identity"]["increment"]), int)
             elif col["name"] == "id3":
                 eq_(col["identity"], {"start": 1, "increment": 1})
-                eq_(type(col["identity"]["start"]), util.compat.long_type)
-                eq_(type(col["identity"]["increment"]), util.compat.long_type)
+                eq_(type(col["identity"]["start"]), int)
+                eq_(type(col["identity"]["increment"]), int)
             elif col["name"] == "id4":
                 eq_(col["identity"], {"start": 1, "increment": 1})
                 eq_(type(col["identity"]["start"]), int)

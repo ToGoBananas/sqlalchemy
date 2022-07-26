@@ -1,16 +1,20 @@
 # ext/declarative/extensions.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
+
+
 """Public API functions and helpers for declarative."""
+from __future__ import annotations
 
+import collections
+from typing import Callable
+from typing import TYPE_CHECKING
 
-from ... import inspection
-from ... import util
 from ...orm import exc as orm_exc
-from ...orm import registry
 from ...orm import relationships
 from ...orm.base import _mapper_or_none
 from ...orm.clsregistry import _resolver
@@ -19,25 +23,11 @@ from ...orm.util import polymorphic_union
 from ...schema import Table
 from ...util import OrderedDict
 
-
-@util.deprecated(
-    "2.0",
-    "the instrument_declarative function is deprecated "
-    "and will be removed in SQLAlhcemy 2.0.  Please use "
-    ":meth:`_orm.registry.map_declaratively",
-)
-def instrument_declarative(cls, cls_registry, metadata):
-    """Given a class, configure the class declaratively,
-    using the given registry, which can be any dictionary, and
-    MetaData object.
-
-    """
-    registry(metadata=metadata, class_registry=cls_registry).map_declaratively(
-        cls
-    )
+if TYPE_CHECKING:
+    from ...sql.schema import MetaData
 
 
-class ConcreteBase(object):
+class ConcreteBase:
     """A helper class for 'concrete' declarative mappings.
 
     :class:`.ConcreteBase` will use the :func:`.polymorphic_union`
@@ -315,7 +305,7 @@ class AbstractConcreteBase(ConcreteBase):
         )
 
 
-class DeferredReflection(object):
+class DeferredReflection:
     """A helper class for construction of mappings based on
     a deferred reflection step.
 
@@ -380,6 +370,11 @@ class DeferredReflection(object):
         ReflectedOne.prepare(engine_one)
         ReflectedTwo.prepare(engine_two)
 
+    .. seealso::
+
+        :ref:`orm_declarative_reflected_deferred_reflection` - in the
+        :ref:`orm_declarative_table_config_toplevel` section.
+
     """
 
     @classmethod
@@ -389,52 +384,92 @@ class DeferredReflection(object):
 
         to_map = _DeferredMapperConfig.classes_for_base(cls)
 
-        with inspection.inspect(engine)._inspection_context() as insp:
+        metadata_to_table = collections.defaultdict(set)
+
+        # first collect the primary __table__ for each class into a
+        # collection of metadata/schemaname -> table names
+        for thingy in to_map:
+
+            if thingy.local_table is not None:
+                metadata_to_table[
+                    (thingy.local_table.metadata, thingy.local_table.schema)
+                ].add(thingy.local_table.name)
+
+        # then reflect all those tables into their metadatas
+        with engine.connect() as conn:
+            for (metadata, schema), table_names in metadata_to_table.items():
+                metadata.reflect(
+                    conn,
+                    only=table_names,
+                    schema=schema,
+                    extend_existing=True,
+                    autoload_replace=False,
+                )
+
+            metadata_to_table.clear()
+
+            # .map() each class, then go through relationships and look
+            # for secondary
             for thingy in to_map:
-                cls._sa_decl_prepare(thingy.local_table, insp)
                 thingy.map()
+
                 mapper = thingy.cls.__mapper__
                 metadata = mapper.class_.metadata
-                for rel in mapper._props.values():
-                    if (
-                        isinstance(rel, relationships.RelationshipProperty)
-                        and rel.secondary is not None
-                    ):
-                        if isinstance(rel.secondary, Table):
-                            cls._reflect_table(rel.secondary, insp)
-                        elif isinstance(rel.secondary, str):
 
+                for rel in mapper._props.values():
+
+                    if (
+                        isinstance(rel, relationships.Relationship)
+                        and rel._init_args.secondary._is_populated()
+                    ):
+
+                        secondary_arg = rel._init_args.secondary
+
+                        if isinstance(secondary_arg.argument, Table):
+                            secondary_table = secondary_arg.argument
+                            metadata_to_table[
+                                (
+                                    secondary_table.metadata,
+                                    secondary_table.schema,
+                                )
+                            ].add(secondary_table.name)
+                        elif isinstance(secondary_arg.argument, str):
                             _, resolve_arg = _resolver(rel.parent.class_, rel)
 
-                            rel.secondary = resolve_arg(rel.secondary)
-                            rel.secondary._resolvers += (
-                                cls._sa_deferred_table_resolver(
-                                    insp, metadata
-                                ),
+                            resolver = resolve_arg(
+                                secondary_arg.argument, True
+                            )
+                            metadata_to_table[
+                                (metadata, thingy.local_table.schema)
+                            ].add(secondary_arg.argument)
+
+                            resolver._resolvers += (
+                                cls._sa_deferred_table_resolver(metadata),
                             )
 
-                            # controversy!  do we resolve it here? or leave
-                            # it deferred?   I think doing it here is necessary
-                            # so the connection does not leak.
-                            rel.secondary = rel.secondary()
+                            secondary_arg.argument = resolver()
+
+            for (metadata, schema), table_names in metadata_to_table.items():
+                metadata.reflect(
+                    conn,
+                    only=table_names,
+                    schema=schema,
+                    extend_existing=True,
+                    autoload_replace=False,
+                )
 
     @classmethod
-    def _sa_deferred_table_resolver(cls, inspector, metadata):
-        def _resolve(key):
-            t1 = Table(key, metadata)
-            cls._reflect_table(t1, inspector)
-            return t1
+    def _sa_deferred_table_resolver(
+        cls, metadata: MetaData
+    ) -> Callable[[str], Table]:
+        def _resolve(key: str) -> Table:
+            # reflection has already occurred so this Table would have
+            # its contents already
+            return Table(key, metadata)
 
         return _resolve
 
-    @classmethod
-    def _sa_decl_prepare(cls, local_table, inspector):
-        # autoload Table, which is already
-        # present in the metadata.  This
-        # will fill in db-loaded columns
-        # into the existing Table object.
-        if local_table is not None:
-            cls._reflect_table(local_table, inspector)
+    _sa_decl_prepare = True
 
     @classmethod
     def _sa_raise_deferred_config(cls):
@@ -444,15 +479,4 @@ class DeferredReflection(object):
             "Mappings are not produced until the .prepare() "
             "method is called on the class hierarchy."
             % orm_exc._safe_cls_name(cls),
-        )
-
-    @classmethod
-    def _reflect_table(cls, table, inspector):
-        Table(
-            table.name,
-            table.metadata,
-            extend_existing=True,
-            autoload_replace=False,
-            autoload_with=inspector,
-            schema=table.schema,
         )

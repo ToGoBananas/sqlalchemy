@@ -50,7 +50,19 @@ Getting the Current State of an Object
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The actual state of any mapped object can be viewed at any time using
-the :func:`_sa.inspect` system::
+the :func:`_sa.inspect` function on a mapped instance; this function will
+return the corresponding :class:`.InstanceState` object which manages the
+internal ORM state for the object.  :class:`.InstanceState` provides, among
+other accessors, boolean attributes indicating the persistence state
+of the object, including:
+
+* :attr:`.InstanceState.transient`
+* :attr:`.InstanceState.pending`
+* :attr:`.InstanceState.persistent`
+* :attr:`.InstanceState.deleted`
+* :attr:`.InstanceState.detached`
+
+E.g.::
 
   >>> from sqlalchemy import inspect
   >>> insp = inspect(my_object)
@@ -59,15 +71,8 @@ the :func:`_sa.inspect` system::
 
 .. seealso::
 
-    :attr:`.InstanceState.transient`
-
-    :attr:`.InstanceState.pending`
-
-    :attr:`.InstanceState.persistent`
-
-    :attr:`.InstanceState.deleted`
-
-    :attr:`.InstanceState.detached`
+  :ref:`orm_mapper_inspection_instancestate` - further examples of
+  :class:`.InstanceState`
 
 .. _session_attributes:
 
@@ -204,11 +209,14 @@ When given an instance, it follows these steps:
   key if not located locally.
 * If the given instance has no primary key, or if no instance can be found
   with the primary key given, a new instance is created.
-* The state of the given instance is then copied onto the located/newly
-  created instance.    For attributes which are present on the source
-  instance, the value is transferred to the target instance.  For mapped
-  attributes which aren't present on the source, the attribute is
-  expired on the target instance, discarding its existing value.
+* The state of the given instance is then copied onto the located/newly created
+  instance. For attribute values which are present on the source instance, the
+  value is transferred to the target instance. For attribute values that aren't
+  present on the source instance, the corresponding attribute on the target
+  instance is :term:`expired` from memory, which discards any locally
+  present value from the target instance for that attribute, but no
+  direct modification is made to the database-persisted value for that
+  attribute.
 
   If the ``load=True`` flag is left at its default,
   this copy process emits events and will load the target object's
@@ -284,16 +292,16 @@ Lets use the canonical example of the User and Address objects::
     class User(Base):
         __tablename__ = 'user'
 
-        id = Column(Integer, primary_key=True)
-        name = Column(String(50), nullable=False)
+        id = mapped_column(Integer, primary_key=True)
+        name = mapped_column(String(50), nullable=False)
         addresses = relationship("Address", backref="user")
 
     class Address(Base):
         __tablename__ = 'address'
 
-        id = Column(Integer, primary_key=True)
-        email_address = Column(String(50), nullable=False)
-        user_id = Column(Integer, ForeignKey('user.id'), nullable=False)
+        id = mapped_column(Integer, primary_key=True)
+        email_address = mapped_column(String(50), nullable=False)
+        user_id = mapped_column(Integer, ForeignKey('user.id'), nullable=False)
 
 Assume a ``User`` object with one ``Address``, already persistent::
 
@@ -411,7 +419,7 @@ When we talk about expiration of data we are usually talking about an object
 that is in the :term:`persistent` state.   For example, if we load an object
 as follows::
 
-    user = session.query(User).filter_by(name='user1').first()
+    user = session.scalars(select(User).filter_by(name='user1').limit(1)).first()
 
 The above ``User`` object is persistent, and has a series of attributes
 present; if we were to look inside its ``__dict__``, we'd see that state

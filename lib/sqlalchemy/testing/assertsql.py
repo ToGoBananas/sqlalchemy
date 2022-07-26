@@ -1,23 +1,25 @@
 # testing/assertsql.py
-# Copyright (C) 2005-2021 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: https://www.opensource.org/licenses/mit-license.php
+# mypy: ignore-errors
+
+
+from __future__ import annotations
 
 import collections
 import contextlib
 import re
 
 from .. import event
-from .. import util
 from ..engine import url
 from ..engine.default import DefaultDialect
-from ..engine.util import _distill_cursor_params
-from ..schema import _DDLCompiles
+from ..schema import BaseDDLElement
 
 
-class AssertRule(object):
+class AssertRule:
 
     is_consumed = False
     errormessage = None
@@ -65,10 +67,13 @@ class CursorSQL(SQLMatchRule):
 
 
 class CompiledSQL(SQLMatchRule):
-    def __init__(self, statement, params=None, dialect="default"):
+    def __init__(
+        self, statement, params=None, dialect="default", enable_returning=False
+    ):
         self.statement = statement
         self.params = params
         self.dialect = dialect
+        self.enable_returning = enable_returning
 
     def _compare_sql(self, execute_observed, received_statement):
         stmt = re.sub(r"[\n\t]", "", self.statement)
@@ -80,14 +85,14 @@ class CompiledSQL(SQLMatchRule):
             # this is currently what tests are expecting
             # dialect.supports_default_values = True
             dialect.supports_default_metavalue = True
+
+            if self.enable_returning:
+                dialect.insert_returning = (
+                    dialect.update_returning
+                ) = dialect.delete_returning = True
             return dialect
         else:
-            # ugh
-            if self.dialect == "postgresql":
-                params = {"implicit_returning": True}
-            else:
-                params = {}
-            return url.URL.create(self.dialect).get_dialect()(**params)
+            return url.URL.create(self.dialect).get_dialect()()
 
     def _received_statement(self, execute_observed):
         """reconstruct the statement and params in terms
@@ -110,7 +115,7 @@ class CompiledSQL(SQLMatchRule):
         else:
             map_ = None
 
-        if isinstance(execute_observed.clauseelement, _DDLCompiles):
+        if isinstance(execute_observed.clauseelement, BaseDDLElement):
 
             compiled = execute_observed.clauseelement.compile(
                 dialect=compare_dialect,
@@ -124,7 +129,7 @@ class CompiledSQL(SQLMatchRule):
                 for_executemany=context.compiled.for_executemany,
                 schema_translate_map=map_,
             )
-        _received_statement = re.sub(r"[\n\t]", "", util.text_type(compiled))
+        _received_statement = re.sub(r"[\n\t]", "", str(compiled))
         parameters = execute_observed.parameters
 
         if not parameters:
@@ -187,7 +192,9 @@ class CompiledSQL(SQLMatchRule):
             self.is_consumed = True
             self.errormessage = None
         else:
-            self.errormessage = self._failure_message(params) % {
+            self.errormessage = self._failure_message(
+                execute_observed, params
+            ) % {
                 "received_statement": _received_statement,
                 "received_parameters": _received_parameters,
             }
@@ -204,7 +211,7 @@ class CompiledSQL(SQLMatchRule):
         else:
             return None
 
-    def _failure_message(self, expected_params):
+    def _failure_message(self, execute_observed, expected_params):
         return (
             "Testing for compiled statement\n%r partial params %s, "
             "received\n%%(received_statement)r with params "
@@ -217,14 +224,17 @@ class CompiledSQL(SQLMatchRule):
 
 
 class RegexSQL(CompiledSQL):
-    def __init__(self, regex, params=None, dialect="default"):
+    def __init__(
+        self, regex, params=None, dialect="default", enable_returning=False
+    ):
         SQLMatchRule.__init__(self)
         self.regex = re.compile(regex)
         self.orig_regex = regex
         self.params = params
         self.dialect = dialect
+        self.enable_returning = enable_returning
 
-    def _failure_message(self, expected_params):
+    def _failure_message(self, execute_observed, expected_params):
         return (
             "Testing for compiled statement ~%r partial params %s, "
             "received %%(received_statement)r with params "
@@ -264,11 +274,12 @@ class DialectSQL(CompiledSQL):
 
         return received_stmt, execute_observed.context.compiled_parameters
 
-    def _compare_sql(self, execute_observed, received_statement):
+    def _dialect_adjusted_statement(self, paramstyle):
         stmt = re.sub(r"[\n\t]", "", self.statement)
-        # convert our comparison statement to have the
-        # paramstyle of the received
-        paramstyle = execute_observed.context.dialect.paramstyle
+
+        # temporarily escape out PG double colons
+        stmt = stmt.replace("::", "!!")
+
         if paramstyle == "pyformat":
             stmt = re.sub(r":([\w_]+)", r"%(\1)s", stmt)
         else:
@@ -282,7 +293,29 @@ class DialectSQL(CompiledSQL):
                 repl = None
             stmt = re.sub(r":([\w_]+)", repl, stmt)
 
+        # put them back
+        stmt = stmt.replace("!!", "::")
+
+        return stmt
+
+    def _compare_sql(self, execute_observed, received_statement):
+        paramstyle = execute_observed.context.dialect.paramstyle
+        stmt = self._dialect_adjusted_statement(paramstyle)
         return received_statement == stmt
+
+    def _failure_message(self, execute_observed, expected_params):
+        paramstyle = execute_observed.context.dialect.paramstyle
+        return (
+            "Testing for compiled statement\n%r partial params %s, "
+            "received\n%%(received_statement)r with params "
+            "%%(received_parameters)r"
+            % (
+                self._dialect_adjusted_statement(paramstyle).replace(
+                    "%", "%%"
+                ),
+                repr(expected_params).replace("%", "%%"),
+            )
+        )
 
 
 class CountStatements(AssertRule):
@@ -366,13 +399,17 @@ class Or(AllOf):
             self.errormessage = list(self.rules)[0].errormessage
 
 
-class SQLExecuteObserved(object):
+class SQLExecuteObserved:
     def __init__(self, context, clauseelement, multiparams, params):
         self.context = context
         self.clauseelement = clauseelement
-        self.parameters = _distill_cursor_params(
-            context.connection, tuple(multiparams), params
-        )
+
+        if multiparams:
+            self.parameters = multiparams
+        elif params:
+            self.parameters = [params]
+        else:
+            self.parameters = []
         self.statements = []
 
     def __repr__(self):
@@ -388,7 +425,7 @@ class SQLCursorExecuteObserved(
     pass
 
 
-class SQLAsserter(object):
+class SQLAsserter:
     def __init__(self):
         self.accumulated = []
 

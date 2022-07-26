@@ -17,15 +17,13 @@ Defining Mapped Properties with Declarative
 --------------------------------------------
 
 The examples given at :ref:`orm_declarative_table_config_toplevel`
-illustrate mappings against table-bound columns;
-the mapping of an individual column to an ORM class attribute is represented
-internally by the :class:`_orm.ColumnProperty` construct.   There are many
-other varieties of mapper properties, the most common being the
+illustrate mappings against table-bound columns, using the :func:`_orm.mapped_column`
+construct.  There are several other varieties of ORM mapped constructs
+that may be configured besides table-bound columns, the most common being the
 :func:`_orm.relationship` construct.  Other kinds of properties include
-synonyms to columns which are defined using the :func:`_orm.synonym`
-construct, SQL expressions that are defined using the :func:`_orm.column_property`
-construct, and deferred columns and SQL expressions which load only when
-accessed, defined using the :func:`_orm.deferred` construct.
+SQL expressions that are defined using the :func:`_orm.column_property`
+construct and multiple-column mappings using the :func:`_orm.composite`
+construct.
 
 While an :ref:`imperative mapping <orm_imperative_mapping>` makes use of
 the :ref:`properties <orm_mapping_properties>` dictionary to establish
@@ -36,45 +34,57 @@ which in the case of a declarative table mapping are inline with the
 :class:`_schema.Table` object.
 
 Working with the example mapping of ``User`` and ``Address``, we may illustrate
-a declarative table mapping that includes not just :class:`_schema.Column`
+a declarative table mapping that includes not just :func:`_orm.mapped_column`
 objects but also relationships and SQL expressions::
 
-    # mapping attributes using declarative with declarative table
-    # i.e. __tablename__
+    from typing import List
+    from typing import Optional
 
-    from sqlalchemy import Column, Integer, String, Text, ForeignKey
-    from sqlalchemy.orm import column_property, relationship, deferred
-    from sqlalchemy.orm import declarative_base
+    from sqlalchemy import Column
+    from sqlalchemy import ForeignKey
+    from sqlalchemy import String
+    from sqlalchemy import Text
+    from sqlalchemy.orm import column_property
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import Mapped
+    from sqlalchemy.orm import mapped_column
+    from sqlalchemy.orm import relationship
 
-    Base = declarative_base()
+
+    class Base(DeclarativeBase):
+        pass
+
 
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
-        id = Column(Integer, primary_key=True)
-        name = Column(String)
-        firstname = Column(String(50))
-        lastname = Column(String(50))
+        id: Mapped[int] = mapped_column(primary_key=True)
+        name: Mapped[str]
+        firstname: Mapped[str] = mapped_column(String(50))
+        lastname: Mapped[str] = mapped_column(String(50))
+        fullname: Mapped[str] = column_property(firstname + " " + lastname)
 
-        fullname = column_property(firstname + " " + lastname)
+        addresses: Mapped[List["Address"]] = relationship(back_populates="user")
 
-        addresses = relationship("Address", back_populates="user")
 
     class Address(Base):
-        __tablename__ = 'address'
+        __tablename__ = "address"
 
-        id = Column(Integer, primary_key=True)
-        user_id = Column(ForeignKey("user.id"))
-        email_address = Column(String)
-        address_statistics = deferred(Column(Text))
+        id: Mapped[int] = mapped_column(primary_key=True)
+        user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+        email_address: Mapped[str]
+        address_statistics: Mapped[Optional[str]] = mapped_column(
+            Text, deferred=True
+        )
 
-        user = relationship("User", back_populates="addresses")
+        user: Mapped["User"] = relationship(back_populates="addresses")
 
 The above declarative table mapping features two tables, each with a
 :func:`_orm.relationship` referring to the other, as well as a simple
 SQL expression mapped by :func:`_orm.column_property`, and an additional
-:class:`_schema.Column` that will be loaded on a "deferred" basis as defined
-by the :func:`_orm.deferred` construct.    More documentation
+:func:`_orm.mapped_column` that indicates loading should be on a
+"deferred" basis as defined
+by the :paramref:`_orm.mapped_column.deferred` keyword.    More documentation
 on these particular concepts may be found at :ref:`relationship_patterns`,
 :ref:`mapper_column_property_sql_expressions`, and :ref:`deferred`.
 
@@ -90,12 +100,15 @@ hybrid table style::
     # mapping attributes using declarative with imperative table
     # i.e. __table__
 
-    from sqlalchemy import Table
-    from sqlalchemy import Column, Integer, String, Text, ForeignKey
-    from sqlalchemy.orm import column_property, relationship, deferred
-    from sqlalchemy.orm import declarative_base
+    from sqlalchemy import Column, ForeignKey, Integer, String, Table, Text
+    from sqlalchemy.orm import column_property
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import deferred
+    from sqlalchemy.orm import relationship
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
+
 
     class User(Base):
         __table__ = Table(
@@ -104,12 +117,15 @@ hybrid table style::
             Column("id", Integer, primary_key=True),
             Column("name", String),
             Column("firstname", String(50)),
-            Column("lastname", String(50))
+            Column("lastname", String(50)),
         )
 
-        fullname = column_property(__table__.c.firstname + " " + __table__.c.lastname)
+        fullname = column_property(
+            __table__.c.firstname + " " + __table__.c.lastname
+        )
 
         addresses = relationship("Address", back_populates="user")
+
 
     class Address(Base):
         __table__ = Table(
@@ -118,7 +134,7 @@ hybrid table style::
             Column("id", Integer, primary_key=True),
             Column("user_id", ForeignKey("user.id")),
             Column("email_address", String),
-            Column("address_statistics", Text)
+            Column("address_statistics", Text),
         )
 
         address_statistics = deferred(__table__.c.address_statistics)
@@ -152,62 +168,150 @@ Mapper Configuration Options with Declarative
 With all mapping forms, the mapping of the class is configured through
 parameters that become part of the :class:`_orm.Mapper` object.
 The function which ultimately receives these arguments is the
-:func:`_orm.mapper` function, and are delivered to it from one of
+:class:`_orm.Mapper` function, and are delivered to it from one of
 the front-facing mapping functions defined on the :class:`_orm.registry`
 object.
 
 For the declarative form of mapping, mapper arguments are specified
 using the ``__mapper_args__`` declarative class variable, which is a dictionary
-that is passed as keyword arguments to the :func:`_orm.mapper` function.
+that is passed as keyword arguments to the :class:`_orm.Mapper` function.
 Some examples:
+
+**Map Specific Primary Key Columns**
+
+The example below illustrates Declarative-level settings for the
+:paramref:`_orm.Mapper.primary_key` parameter, which establishes
+particular columns as part of what the ORM should consider to be a primary
+key for the class, independently of schema-level primary key constraints::
+
+    class GroupUsers(Base):
+        __tablename__ = 'group_users'
+
+        user_id = mapped_column(String(40))
+        group_id = mapped_column(String(40))
+
+        __mapper_args__ = {
+            "primary_key": [user_id, group_id]
+        }
+
+.. seealso::
+
+    :ref:`mapper_primary_key` - further background on ORM mapping of explicit
+    columns as primary key columns
 
 **Version ID Column**
 
-The :paramref:`_orm.mapper.version_id_col` and
-:paramref:`_orm.mapper.version_id_generator` parameters::
+The example below illustrates Declarative-level settings for the
+:paramref:`_orm.Mapper.version_id_col` and
+:paramref:`_orm.Mapper.version_id_generator` parameters, which configure
+an ORM-maintained version counter that is updated and checked within the
+:term:`unit of work` flush process::
 
     from datetime import datetime
 
-    class Widget(Base):
-        __tablename__ = 'widgets'
 
-        id = Column(Integer, primary_key=True)
-        timestamp = Column(DateTime, nullable=False)
+    class Widget(Base):
+        __tablename__ = "widgets"
+
+        id = mapped_column(Integer, primary_key=True)
+        timestamp = mapped_column(DateTime, nullable=False)
 
         __mapper_args__ = {
-            'version_id_col': timestamp,
-            'version_id_generator': lambda v:datetime.now()
+            "version_id_col": timestamp,
+            "version_id_generator": lambda v: datetime.now(),
         }
+
+.. seealso::
+
+    :ref:`mapper_version_counter` - background on the ORM version counter feature
 
 **Single Table Inheritance**
 
-The :paramref:`_orm.mapper.polymorphic_on` and
-:paramref:`_orm.mapper.polymorphic_identity` parameters::
+The example below illustrates Declarative-level settings for the
+:paramref:`_orm.Mapper.polymorphic_on` and
+:paramref:`_orm.Mapper.polymorphic_identity` parameters, which are used when
+configuring a single-table inheritance mapping::
 
     class Person(Base):
-        __tablename__ = 'person'
+        __tablename__ = "person"
 
-        person_id = Column(Integer, primary_key=True)
-        type = Column(String, nullable=False)
+        person_id = mapped_column(Integer, primary_key=True)
+        type = mapped_column(String, nullable=False)
 
         __mapper_args__ = dict(
             polymorphic_on=type,
-            polymorphic_identity="person"
+            polymorphic_identity="person",
         )
+
 
     class Employee(Person):
         __mapper_args__ = dict(
-            polymorphic_identity="employee"
+            polymorphic_identity="employee",
         )
+
+
+.. seealso::
+
+    :ref:`single_inheritance` - background on the ORM single table inheritance
+    mapping feature.
+
+Constructing mapper arguments dynamically
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The ``__mapper_args__`` dictionary may be generated from a class-bound
 descriptor method rather than from a fixed dictionary by making use of the
-:func:`_orm.declared_attr` construct.   The section :ref:`orm_mixins_toplevel`
-discusses this concept further.
+:func:`_orm.declared_attr` construct.    This is useful to create arguments
+for mappers that are programmatically derived from the table configuration
+or other aspects of the mapped class.    A dynamic ``__mapper_args__``
+attribute will typically be useful when using a Declarative Mixin or
+abstract base class.
+
+For example, to omit from the mapping
+any columns that have a special :attr:`.Column.info` value, a mixin
+can use a ``__mapper_args__`` method that scans for these columns from the
+``cls.__table__`` attribute and passes them to the :paramref:`_orm.Mapper.exclude_properties`
+collection::
+
+    from sqlalchemy import Column
+    from sqlalchemy import Integer
+    from sqlalchemy import select
+    from sqlalchemy import String
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import declared_attr
+
+
+    class ExcludeColsWFlag:
+        @declared_attr
+        def __mapper_args__(cls):
+            return {
+                "exclude_properties": [
+                    column.key for column in cls.__table__.c if
+                    column.info.get("exclude", False)
+                ]
+            }
+
+    class Base(DeclarativeBase):
+        pass
+
+    class SomeClass(ExcludeColsWFlag, Base):
+        __tablename__ = 'some_table'
+
+        id = mapped_column(Integer, primary_key=True)
+        data = mapped_column(String)
+        not_needed = mapped_column(String, info={"exclude": True})
+
+
+Above, the ``ExcludeColsWFlag`` mixin provides a per-class ``__mapper_args__``
+hook that will scan for :class:`.Column` objects that include the key/value
+``'exclude': True`` passed to the :paramref:`.Column.info` parameter, and then
+add their string "key" name to the :paramref:`_orm.Mapper.exclude_properties`
+collection which will prevent the resulting :class:`.Mapper` from considering
+these columns for any SQL operations.
 
 .. seealso::
 
     :ref:`orm_mixins_toplevel`
+
 
 Other Declarative Mapping Directives
 --------------------------------------
@@ -249,12 +353,13 @@ configuration via the :meth:`.MapperEvents.before_configured` event::
 The :class:`_schema.MetaData` collection normally used to assign a new
 :class:`_schema.Table` is the :attr:`_orm.registry.metadata` attribute
 associated with the :class:`_orm.registry` object in use. When using a
-declarative base class such as that generated by :func:`_orm.declarative_base`
-as well as :meth:`_orm.registry.generate_base`, this :class:`_schema.MetaData`
-is also normally present also as an attribute named ``.metadata`` that's
-directly on the base class, and thus also on the mapped class via
-inheritance.    Declarative uses this attribute, when present, in order to
-determine the target :class:`_schema.MetaData` collection, or if not
+declarative base class such as that produced by the
+:class:`_orm.DeclarativeBase` superclass, as well as legacy functions such as
+:func:`_orm.declarative_base` and :meth:`_orm.registry.generate_base`, this
+:class:`_schema.MetaData` is also normally present as an attribute named
+``.metadata`` that's directly on the base class, and thus also on the mapped
+class via inheritance. Declarative uses this attribute, when present, in order
+to determine the target :class:`_schema.MetaData` collection, or if not
 present, uses the :class:`_schema.MetaData` associated directly with the
 :class:`_orm.registry`.
 
@@ -268,40 +373,34 @@ be illustrated using :meth:`_orm.registry.mapped` as follows::
 
     reg = registry()
 
+
     class BaseOne:
         metadata = MetaData()
+
 
     class BaseTwo:
         metadata = MetaData()
 
+
     @reg.mapped
     class ClassOne:
-        __tablename__ = 't1'  # will use reg.metadata
+        __tablename__ = "t1"  # will use reg.metadata
 
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
+
 
     @reg.mapped
     class ClassTwo(BaseOne):
-        __tablename__ = 't1'  # will use BaseOne.metadata
+        __tablename__ = "t1"  # will use BaseOne.metadata
 
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
+
 
     @reg.mapped
     class ClassThree(BaseTwo):
-        __tablename__ = 't1'  # will use BaseTwo.metadata
+        __tablename__ = "t1"  # will use BaseTwo.metadata
 
-        id = Column(Integer, primary_key=True)
-
-
-.. versionchanged:: 1.4.3  The :meth:`_orm.registry.mapped` decorator will
-   honor an attribute named ``.metadata`` on the class as an alternate
-   :class:`_schema.MetaData` collection to be used in place of the
-   :class:`_schema.MetaData` that's on the :class:`_orm.registry` itself.
-   This matches the behavior of the base class returned by the
-   :meth:`_orm.registry.generate_base` and :meth:`_orm.declarative_base`
-   method/function.  Note this feature was broken due to a regression in
-   1.4.0, 1.4.1 and 1.4.2, even when using :func:`_orm.declarative_base`;
-   1.4.3 is needed to restore the behavior.
+        id = mapped_column(Integer, primary_key=True)
 
 
 .. seealso::
@@ -322,23 +421,27 @@ subclasses to extend just from the special class::
         __abstract__ = True
 
         def some_helpful_method(self):
-            ""
+            """"""
 
         @declared_attr
         def __mapper_args__(cls):
-            return {"helpful mapper arguments":True}
+            return {"helpful mapper arguments": True}
+
 
     class MyMappedClass(SomeAbstractBase):
-        ""
+        pass
 
 One possible use of ``__abstract__`` is to use a distinct
 :class:`_schema.MetaData` for different bases::
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
+
 
     class DefaultBase(Base):
         __abstract__ = True
         metadata = MetaData()
+
 
     class OtherBase(Base):
         __abstract__ = True
@@ -352,7 +455,6 @@ created perhaps within distinct databases::
     DefaultBase.metadata.create_all(some_engine)
     OtherBase.metadata.create_all(some_other_engine)
 
-
 ``__table_cls__``
 ~~~~~~~~~~~~~~~~~
 
@@ -360,13 +462,10 @@ Allows the callable / class used to generate a :class:`_schema.Table` to be cust
 This is a very open-ended hook that can allow special customizations
 to a :class:`_schema.Table` that one generates here::
 
-    class MyMixin(object):
+    class MyMixin:
         @classmethod
         def __table_cls__(cls, name, metadata_obj, *arg, **kw):
-            return Table(
-                "my_" + name,
-                metadata_obj, *arg, **kw
-            )
+            return Table(f"my_{name}", metadata_obj, *arg, **kw)
 
 The above mixin would cause all :class:`_schema.Table` objects generated to include
 the prefix ``"my_"``, followed by the name normally specified using the
@@ -378,7 +477,7 @@ This may be useful in some customization schemes to determine that single-table
 inheritance should take place based on the arguments for the table itself,
 such as, define as single-inheritance if there is no primary key present::
 
-    class AutoTable(object):
+    class AutoTable:
         @declared_attr
         def __tablename__(cls):
             return cls.__name__
@@ -386,17 +485,20 @@ such as, define as single-inheritance if there is no primary key present::
         @classmethod
         def __table_cls__(cls, *arg, **kw):
             for obj in arg[1:]:
-                if (isinstance(obj, Column) and obj.primary_key) or \
-                        isinstance(obj, PrimaryKeyConstraint):
+                if (isinstance(obj, Column) and obj.primary_key) or isinstance(
+                    obj, PrimaryKeyConstraint
+                ):
                     return Table(*arg, **kw)
 
             return None
 
+
     class Person(AutoTable, Base):
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
+
 
     class Employee(Person):
-        employee_name = Column(String)
+        employee_name = mapped_column(String)
 
 The above ``Employee`` class would be mapped as single-table inheritance
 against ``Person``; the ``employee_name`` column would be added as a member

@@ -45,7 +45,7 @@ transaction).
 
     .. seealso::
 
-        `Repeatable Read Isolation Level <https://www.postgresql.org/docs/9.1/static/transaction-iso.html#XACT-REPEATABLE-READ>`_ - PostgreSQL's implementation of repeatable read, including a description of the error condition.
+        `Repeatable Read Isolation Level <https://www.postgresql.org/docs/current/static/transaction-iso.html#XACT-REPEATABLE-READ>`_ - PostgreSQL's implementation of repeatable read, including a description of the error condition.
 
 Simple Version Counting
 -----------------------
@@ -57,9 +57,9 @@ mapper options::
     class User(Base):
         __tablename__ = 'user'
 
-        id = Column(Integer, primary_key=True)
-        version_id = Column(Integer, nullable=False)
-        name = Column(String(50), nullable=False)
+        id = mapped_column(Integer, primary_key=True)
+        version_id = mapped_column(Integer, nullable=False)
+        name = mapped_column(String(50), nullable=False)
 
         __mapper_args__ = {
             "version_id_col": version_id
@@ -108,9 +108,9 @@ support a native GUID type, but we illustrate here using a simple string)::
     class User(Base):
         __tablename__ = 'user'
 
-        id = Column(Integer, primary_key=True)
-        version_uuid = Column(String(32), nullable=False)
-        name = Column(String(50), nullable=False)
+        id = mapped_column(Integer, primary_key=True)
+        version_uuid = mapped_column(String(32), nullable=False)
+        name = mapped_column(String(50), nullable=False)
 
         __mapper_args__ = {
             'version_id_col':version_uuid,
@@ -141,7 +141,7 @@ some means of generating new identifiers when a row is subject to an INSERT
 as well as with an UPDATE.   For the UPDATE case, typically an update trigger
 is needed, unless the database in question supports some other native
 version identifier.  The PostgreSQL database in particular supports a system
-column called `xmin <https://www.postgresql.org/docs/9.1/static/ddl-system-columns.html>`_
+column called `xmin <https://www.postgresql.org/docs/current/static/ddl-system-columns.html>`_
 which provides UPDATE versioning.  We can make use
 of the PostgreSQL ``xmin`` column to version our ``User``
 class as follows::
@@ -151,9 +151,9 @@ class as follows::
     class User(Base):
         __tablename__ = 'user'
 
-        id = Column(Integer, primary_key=True)
-        name = Column(String(50), nullable=False)
-        xmin = Column("xmin", String, system=True, server_default=FetchedValue())
+        id = mapped_column(Integer, primary_key=True)
+        name = mapped_column(String(50), nullable=False)
+        xmin = mapped_column("xmin", String, system=True, server_default=FetchedValue())
 
         __mapper_args__ = {
             'version_id_col': xmin,
@@ -175,7 +175,7 @@ automatically providing the new value of the version id counter.
 The ORM typically does not actively fetch the values of database-generated
 values when it emits an INSERT or UPDATE, instead leaving these columns as
 "expired" and to be fetched when they are next accessed, unless the ``eager_defaults``
-:func:`.mapper` flag is set.  However, when a
+:class:`_orm.Mapper` flag is set.  However, when a
 server side version column is used, the ORM needs to actively fetch the newly
 generated value.  This is so that the version counter is set up *before*
 any concurrent transaction may update it again.   This fetching is also
@@ -204,8 +204,7 @@ missed version counters::
 
 It is *strongly recommended* that server side version counters only be used
 when absolutely necessary and only on backends that support :term:`RETURNING`,
-e.g. PostgreSQL, Oracle, SQL Server (though SQL Server has
-`major caveats <https://blogs.msdn.com/b/sqlprogrammability/archive/2008/07/11/update-with-output-clause-triggers-and-sqlmoreresults.aspx>`_ when triggers are used), Firebird.
+currently PostgreSQL, Oracle, MariaDB 10.5, SQLite 3.35, and SQL Server.
 
 .. versionadded:: 0.9.0
 
@@ -225,9 +224,9 @@ at our choosing::
     class User(Base):
         __tablename__ = 'user'
 
-        id = Column(Integer, primary_key=True)
-        version_uuid = Column(String(32), nullable=False)
-        name = Column(String(50), nullable=False)
+        id = mapped_column(Integer, primary_key=True)
+        version_uuid = mapped_column(String(32), nullable=False)
+        name = mapped_column(String(50), nullable=False)
 
         __mapper_args__ = {
             'version_id_col':version_uuid,

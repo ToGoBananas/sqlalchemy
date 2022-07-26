@@ -16,7 +16,6 @@ sections, are listed here.
 
 .. autoclass:: ClassManager
     :members:
-    :inherited-members:
 
 .. autoclass:: ColumnProperty
     :members:
@@ -32,11 +31,12 @@ sections, are listed here.
 
             :ref:`maptojoin` - usage example
 
-.. autoclass:: CompositeProperty
+.. autoclass:: Composite
     :members:
 
+.. autodata:: CompositeProperty
 
-.. autoclass:: AttributeEvent
+.. autoclass:: AttributeEventToken
     :members:
 
 .. autoclass:: IdentityMap
@@ -62,6 +62,8 @@ sections, are listed here.
 
 .. autoclass:: Mapped
 
+.. autoclass:: MappedColumn
+
 .. autoclass:: MapperProperty
     :members:
 
@@ -85,7 +87,11 @@ sections, are listed here.
 
             :attr:`.SchemaItem.info`
 
-.. autodata:: NOT_EXTENSION
+.. autoclass:: InspectionAttrExtensionType
+    :members:
+
+.. autoclass:: NotExtension
+    :members:
 
 .. autofunction:: merge_result
 
@@ -98,13 +104,17 @@ sections, are listed here.
     :members:
     :inherited-members:
 
-.. autoclass:: RelationshipProperty
+.. autoclass:: Relationship
     :members:
     :inherited-members:
 
-.. autoclass:: SynonymProperty
+.. autodata:: RelationshipProperty
+
+.. autoclass:: Synonym
     :members:
     :inherited-members:
+
+.. autodata:: SynonymProperty
 
 .. autoclass:: QueryContext
     :members:

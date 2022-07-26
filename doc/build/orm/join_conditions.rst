@@ -20,29 +20,30 @@ Consider a ``Customer`` class that contains two foreign keys to an ``Address``
 class::
 
     from sqlalchemy import Integer, ForeignKey, String, Column
-    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import DeclarativeBase
     from sqlalchemy.orm import relationship
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
     class Customer(Base):
         __tablename__ = 'customer'
-        id = Column(Integer, primary_key=True)
-        name = Column(String)
+        id = mapped_column(Integer, primary_key=True)
+        name = mapped_column(String)
 
-        billing_address_id = Column(Integer, ForeignKey("address.id"))
-        shipping_address_id = Column(Integer, ForeignKey("address.id"))
+        billing_address_id = mapped_column(Integer, ForeignKey("address.id"))
+        shipping_address_id = mapped_column(Integer, ForeignKey("address.id"))
 
         billing_address = relationship("Address")
         shipping_address = relationship("Address")
 
     class Address(Base):
         __tablename__ = 'address'
-        id = Column(Integer, primary_key=True)
-        street = Column(String)
-        city = Column(String)
-        state = Column(String)
-        zip = Column(String)
+        id = mapped_column(Integer, primary_key=True)
+        street = mapped_column(String)
+        city = mapped_column(String)
+        state = mapped_column(String)
+        zip = mapped_column(String)
 
 The above mapping, when we attempt to use it, will produce the error::
 
@@ -65,11 +66,11 @@ the appropriate form is as follows::
 
     class Customer(Base):
         __tablename__ = 'customer'
-        id = Column(Integer, primary_key=True)
-        name = Column(String)
+        id = mapped_column(Integer, primary_key=True)
+        name = mapped_column(String)
 
-        billing_address_id = Column(Integer, ForeignKey("address.id"))
-        shipping_address_id = Column(Integer, ForeignKey("address.id"))
+        billing_address_id = mapped_column(Integer, ForeignKey("address.id"))
+        shipping_address_id = mapped_column(Integer, ForeignKey("address.id"))
 
         billing_address = relationship("Address", foreign_keys=[billing_address_id])
         shipping_address = relationship("Address", foreign_keys=[shipping_address_id])
@@ -122,28 +123,29 @@ create a relationship ``boston_addresses`` which will only
 load those ``Address`` objects which specify a city of "Boston"::
 
     from sqlalchemy import Integer, ForeignKey, String, Column
-    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import DeclarativeBase
     from sqlalchemy.orm import relationship
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
     class User(Base):
         __tablename__ = 'user'
-        id = Column(Integer, primary_key=True)
-        name = Column(String)
+        id = mapped_column(Integer, primary_key=True)
+        name = mapped_column(String)
         boston_addresses = relationship("Address",
                         primaryjoin="and_(User.id==Address.user_id, "
                             "Address.city=='Boston')")
 
     class Address(Base):
         __tablename__ = 'address'
-        id = Column(Integer, primary_key=True)
-        user_id = Column(Integer, ForeignKey('user.id'))
+        id = mapped_column(Integer, primary_key=True)
+        user_id = mapped_column(Integer, ForeignKey('user.id'))
 
-        street = Column(String)
-        city = Column(String)
-        state = Column(String)
-        zip = Column(String)
+        street = mapped_column(String)
+        city = mapped_column(String)
+        state = mapped_column(String)
+        zip = mapped_column(String)
 
 Within this string SQL expression, we made use of the :func:`.and_` conjunction
 construct to establish two distinct predicates for the join condition - joining
@@ -166,7 +168,7 @@ is generally only significant when SQLAlchemy is rendering SQL in
 order to load or represent this relationship. That is, it's used in
 the SQL statement that's emitted in order to perform a per-attribute
 lazy load, or when a join is constructed at query time, such as via
-:meth:`_query.Query.join`, or via the eager "joined" or "subquery" styles of
+:meth:`Select.join`, or via the eager "joined" or "subquery" styles of
 loading.   When in-memory objects are being manipulated, we can place
 any ``Address`` object we'd like into the ``boston_addresses``
 collection, regardless of what the value of the ``.city`` attribute
@@ -204,16 +206,17 @@ type of the other::
     from sqlalchemy.orm import relationship
     from sqlalchemy.dialects.postgresql import INET
 
-    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import DeclarativeBase
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
     class HostEntry(Base):
         __tablename__ = 'host_entry'
 
-        id = Column(Integer, primary_key=True)
-        ip_address = Column(INET)
-        content = Column(String(50))
+        id = mapped_column(Integer, primary_key=True)
+        ip_address = mapped_column(INET)
+        content = mapped_column(String(50))
 
         # relationship() using explicit foreign_keys, remote_side
         parent_host = relationship("HostEntry",
@@ -244,9 +247,9 @@ SQL expressions::
     class HostEntry(Base):
         __tablename__ = 'host_entry'
 
-        id = Column(Integer, primary_key=True)
-        ip_address = Column(INET)
-        content = Column(String(50))
+        id = mapped_column(Integer, primary_key=True)
+        ip_address = mapped_column(INET)
+        content = mapped_column(String(50))
 
         # relationship() using explicit foreign() and remote() annotations
         # in lieu of separate arguments
@@ -264,51 +267,39 @@ Using custom operators in join conditions
 Another use case for relationships is the use of custom operators, such
 as PostgreSQL's "is contained within" ``<<`` operator when joining with
 types such as :class:`_postgresql.INET` and :class:`_postgresql.CIDR`.
-For custom operators we use the :meth:`.Operators.op` function::
+For custom boolean operators we use the :meth:`.Operators.bool_op` function::
 
-    inet_column.op("<<")(cidr_column)
+    inet_column.bool_op("<<")(cidr_column)
 
-However, if we construct a :paramref:`_orm.relationship.primaryjoin` using this
-operator, :func:`_orm.relationship` will still need more information.  This is because
-when it examines our primaryjoin condition, it specifically looks for operators
-used for **comparisons**, and this is typically a fixed list containing known
-comparison operators such as ``==``, ``<``, etc.   So for our custom operator
-to participate in this system, we need it to register as a comparison operator
-using the :paramref:`~.Operators.op.is_comparison` parameter::
-
-    inet_column.op("<<", is_comparison=True)(cidr_column)
-
-A complete example::
+A comparison like the above may be used directly with
+:paramref:`_orm.relationship.primaryjoin` when constructing
+a :func:`_orm.relationship`::
 
     class IPA(Base):
         __tablename__ = 'ip_address'
 
-        id = Column(Integer, primary_key=True)
-        v4address = Column(INET)
+        id = mapped_column(Integer, primary_key=True)
+        v4address = mapped_column(INET)
 
         network = relationship("Network",
-                            primaryjoin="IPA.v4address.op('<<', is_comparison=True)"
+                            primaryjoin="IPA.v4address.bool_op('<<')"
                                 "(foreign(Network.v4representation))",
                             viewonly=True
                         )
     class Network(Base):
         __tablename__ = 'network'
 
-        id = Column(Integer, primary_key=True)
-        v4representation = Column(CIDR)
+        id = mapped_column(Integer, primary_key=True)
+        v4representation = mapped_column(CIDR)
 
 Above, a query such as::
 
-    session.query(IPA).join(IPA.network)
+    select(IPA).join(IPA.network)
 
 Will render as::
 
     SELECT ip_address.id AS ip_address_id, ip_address.v4address AS ip_address_v4address
     FROM ip_address JOIN network ON ip_address.v4address << network.v4representation
-
-.. versionadded:: 0.9.2 - Added the :paramref:`.Operators.op.is_comparison`
-   flag to assist in the creation of :func:`_orm.relationship` constructs using
-   custom operators.
 
 .. _relationship_custom_operator_sql_function:
 
@@ -331,8 +322,8 @@ two expressions.  The below example illustrates this with the
 
     class Polygon(Base):
         __tablename__ = "polygon"
-        id = Column(Integer, primary_key=True)
-        geom = Column(Geometry("POLYGON", srid=4326))
+        id = mapped_column(Integer, primary_key=True)
+        geom = mapped_column(Geometry("POLYGON", srid=4326))
         points = relationship(
             "Point",
             primaryjoin="func.ST_Contains(foreign(Polygon.geom), Point.geom).as_comparison(1, 2)",
@@ -341,8 +332,8 @@ two expressions.  The below example illustrates this with the
 
     class Point(Base):
         __tablename__ = "point"
-        id = Column(Integer, primary_key=True)
-        geom = Column(Geometry("POINT", srid=4326))
+        id = mapped_column(Integer, primary_key=True)
+        geom = mapped_column(Geometry("POINT", srid=4326))
 
 Above, the :meth:`.FunctionElement.as_comparison` indicates that the
 ``func.ST_Contains()`` SQL function is comparing the ``Polygon.geom`` and
@@ -370,15 +361,15 @@ for both; then to make ``Article`` refer to ``Writer`` as well,
     class Magazine(Base):
         __tablename__ = 'magazine'
 
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
 
 
     class Article(Base):
         __tablename__ = 'article'
 
-        article_id = Column(Integer)
-        magazine_id = Column(ForeignKey('magazine.id'))
-        writer_id = Column()
+        article_id = mapped_column(Integer)
+        magazine_id = mapped_column(ForeignKey('magazine.id'))
+        writer_id = mapped_column()
 
         magazine = relationship("Magazine")
         writer = relationship("Writer")
@@ -395,8 +386,8 @@ for both; then to make ``Article`` refer to ``Writer`` as well,
     class Writer(Base):
         __tablename__ = 'writer'
 
-        id = Column(Integer, primary_key=True)
-        magazine_id = Column(ForeignKey('magazine.id'), primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
+        magazine_id = mapped_column(ForeignKey('magazine.id'), primary_key=True)
         magazine = relationship("Magazine")
 
 When the above mapping is configured, we will see this warning emitted::
@@ -496,7 +487,7 @@ we'll be dealing with collections so we keep things configured as "one to many":
     class Element(Base):
         __tablename__ = 'element'
 
-        path = Column(String, primary_key=True)
+        path = mapped_column(String, primary_key=True)
 
         descendants = relationship('Element',
                                primaryjoin=
@@ -537,10 +528,11 @@ A common situation which involves the usage of :paramref:`_orm.relationship.prim
 is when establishing a many-to-many relationship from a class to itself, as shown below::
 
     from sqlalchemy import Integer, ForeignKey, String, Column, Table
-    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import DeclarativeBase
     from sqlalchemy.orm import relationship
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
     node_to_node = Table("node_to_node", Base.metadata,
         Column("left_node_id", Integer, ForeignKey("node.id"), primary_key=True),
@@ -549,8 +541,8 @@ is when establishing a many-to-many relationship from a class to itself, as show
 
     class Node(Base):
         __tablename__ = 'node'
-        id = Column(Integer, primary_key=True)
-        label = Column(String)
+        id = mapped_column(Integer, primary_key=True)
+        label = mapped_column(String)
         right_nodes = relationship("Node",
                             secondary=node_to_node,
                             primaryjoin=id==node_to_node.c.left_node_id,
@@ -574,8 +566,8 @@ use the string name of the table as it is present in the :class:`_schema.MetaDat
 
     class Node(Base):
         __tablename__ = 'node'
-        id = Column(Integer, primary_key=True)
-        label = Column(String)
+        id = mapped_column(Integer, primary_key=True)
+        label = mapped_column(String)
         right_nodes = relationship("Node",
                             secondary="node_to_node",
                             primaryjoin="Node.id==node_to_node.c.left_node_id",
@@ -609,7 +601,7 @@ to ``node.c.id``::
         Column('id', Integer, primary_key=True),
         Column('label', String)
     )
-    class Node(object):
+    class Node:
         pass
 
     mapper_registry.map_imperatively(Node, node, properties={
@@ -663,8 +655,8 @@ join condition (requires version 0.9.2 at least to function as is)::
     class A(Base):
         __tablename__ = 'a'
 
-        id = Column(Integer, primary_key=True)
-        b_id = Column(ForeignKey('b.id'))
+        id = mapped_column(Integer, primary_key=True)
+        b_id = mapped_column(ForeignKey('b.id'))
 
         d = relationship("D",
                     secondary="join(B, D, B.d_id == D.id)."
@@ -678,20 +670,20 @@ join condition (requires version 0.9.2 at least to function as is)::
     class B(Base):
         __tablename__ = 'b'
 
-        id = Column(Integer, primary_key=True)
-        d_id = Column(ForeignKey('d.id'))
+        id = mapped_column(Integer, primary_key=True)
+        d_id = mapped_column(ForeignKey('d.id'))
 
     class C(Base):
         __tablename__ = 'c'
 
-        id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('a.id'))
-        d_id = Column(ForeignKey('d.id'))
+        id = mapped_column(Integer, primary_key=True)
+        a_id = mapped_column(ForeignKey('a.id'))
+        d_id = mapped_column(ForeignKey('d.id'))
 
     class D(Base):
         __tablename__ = 'd'
 
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
 
 In the above example, we provide all three of :paramref:`_orm.relationship.secondary`,
 :paramref:`_orm.relationship.primaryjoin`, and :paramref:`_orm.relationship.secondaryjoin`,
@@ -700,7 +692,7 @@ directly.  A query from ``A`` to ``D`` looks like:
 
 .. sourcecode:: python+sql
 
-    sess.query(A).join(A.d).all()
+    sess.scalars(select(A).join(A.d)).all()
 
     {opensql}SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a JOIN (
@@ -763,30 +755,30 @@ the rows in both ``A`` and ``B`` simultaneously::
     class A(Base):
         __tablename__ = 'a'
 
-        id = Column(Integer, primary_key=True)
-        b_id = Column(ForeignKey('b.id'))
+        id = mapped_column(Integer, primary_key=True)
+        b_id = mapped_column(ForeignKey('b.id'))
 
     class B(Base):
         __tablename__ = 'b'
 
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
 
     class C(Base):
         __tablename__ = 'c'
 
-        id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('a.id'))
+        id = mapped_column(Integer, primary_key=True)
+        a_id = mapped_column(ForeignKey('a.id'))
 
-        some_c_value = Column(String)
+        some_c_value = mapped_column(String)
 
     class D(Base):
         __tablename__ = 'd'
 
-        id = Column(Integer, primary_key=True)
-        c_id = Column(ForeignKey('c.id'))
-        b_id = Column(ForeignKey('b.id'))
+        id = mapped_column(Integer, primary_key=True)
+        c_id = mapped_column(ForeignKey('c.id'))
+        b_id = mapped_column(ForeignKey('b.id'))
 
-        some_d_value = Column(String)
+        some_d_value = mapped_column(String)
 
     # 1. set up the join() as a variable, so we can refer
     # to it in the mapping multiple times.
@@ -801,7 +793,7 @@ With the above mapping, a simple join looks like:
 
 .. sourcecode:: python+sql
 
-    sess.query(A).join(A.b).all()
+    sess.scalars(select(A).join(A.b)).all()
 
     {opensql}SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a JOIN (b JOIN d ON d.b_id = b.id JOIN c ON c.id = d.c_id) ON a.b_id = b.id
@@ -827,7 +819,7 @@ A query using the above ``A.b`` relationship will render a subquery:
 
 .. sourcecode:: python+sql
 
-    sess.query(A).join(A.b).all()
+    sess.scalars(select(A).join(A.b)).all()
 
     {opensql}SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a JOIN (SELECT b.id AS id, b.some_b_column AS some_b_column
@@ -838,10 +830,11 @@ so in terms of ``B_viacd_subquery`` rather than ``B`` directly:
 
 .. sourcecode:: python+sql
 
-    (
-      sess.query(A).join(A.b).
-      filter(B_viacd_subquery.some_b_column == "some b").
-      order_by(B_viacd_subquery.id)
+    sess.scalars(
+        select(A)
+        .join(A.b)
+        .where(B_viacd_subquery.some_b_column == "some b")
+        .order_by(B_viacd_subquery.id)
     ).all()
 
     {opensql}SELECT a.id AS a_id, a.b_id AS a_b_id
@@ -865,13 +858,13 @@ ten items for each collection::
     class A(Base):
         __tablename__ = 'a'
 
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
 
 
     class B(Base):
         __tablename__ = 'b'
-        id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey("a.id"))
+        id = mapped_column(Integer, primary_key=True)
+        a_id = mapped_column(ForeignKey("a.id"))
 
     partition = select(
         B,
@@ -890,8 +883,8 @@ ten items for each collection::
 We can use the above ``partitioned_bs`` relationship with most of the loader
 strategies, such as :func:`.selectinload`::
 
-    for a1 in s.query(A).options(selectinload(A.partitioned_bs)):
-        print(a1.partitioned_bs)   # <-- will be no more than ten objects
+    for a1 in session.scalars(select(A).options(selectinload(A.partitioned_bs))):
+        print(a1.partitioned_bs)  # <-- will be no more than ten objects
 
 Where above, the "selectinload" query looks like:
 
@@ -934,7 +927,7 @@ conjunction with :class:`_query.Query` as follows:
 
     class User(Base):
         __tablename__ = 'user'
-        id = Column(Integer, primary_key=True)
+        id = mapped_column(Integer, primary_key=True)
 
         @property
         def addresses(self):

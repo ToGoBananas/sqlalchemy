@@ -13,10 +13,15 @@ Describing Databases with MetaData
 This section discusses the fundamental :class:`_schema.Table`, :class:`_schema.Column`
 and :class:`_schema.MetaData` objects.
 
+.. seealso::
+
+    :ref:`tutorial_working_with_metadata` - tutorial introduction to
+    SQLAlchemy's database metadata concept in the :ref:`unified_tutorial`
+
 A collection of metadata entities is stored in an object aptly named
 :class:`~sqlalchemy.schema.MetaData`::
 
-    from sqlalchemy import *
+    from sqlalchemy import MetaData
 
     metadata_obj = MetaData()
 
@@ -160,41 +165,41 @@ The usual way to issue CREATE is to use
 that first check for the existence of each individual table, and if not found
 will issue the CREATE statements:
 
-    .. sourcecode:: python+sql
+.. sourcecode:: python+sql
 
-        engine = create_engine('sqlite:///:memory:')
+    engine = create_engine('sqlite:///:memory:')
 
-        metadata_obj = MetaData()
+    metadata_obj = MetaData()
 
-        user = Table('user', metadata_obj,
-            Column('user_id', Integer, primary_key=True),
-            Column('user_name', String(16), nullable=False),
-            Column('email_address', String(60), key='email'),
-            Column('nickname', String(50), nullable=False)
-        )
+    user = Table('user', metadata_obj,
+        Column('user_id', Integer, primary_key=True),
+        Column('user_name', String(16), nullable=False),
+        Column('email_address', String(60), key='email'),
+        Column('nickname', String(50), nullable=False)
+    )
 
-        user_prefs = Table('user_prefs', metadata_obj,
-            Column('pref_id', Integer, primary_key=True),
-            Column('user_id', Integer, ForeignKey("user.user_id"), nullable=False),
-            Column('pref_name', String(40), nullable=False),
-            Column('pref_value', String(100))
-        )
+    user_prefs = Table('user_prefs', metadata_obj,
+        Column('pref_id', Integer, primary_key=True),
+        Column('user_id', Integer, ForeignKey("user.user_id"), nullable=False),
+        Column('pref_name', String(40), nullable=False),
+        Column('pref_value', String(100))
+    )
 
-        {sql}metadata_obj.create_all(engine)
-        PRAGMA table_info(user){}
-        CREATE TABLE user(
-                user_id INTEGER NOT NULL PRIMARY KEY,
-                user_name VARCHAR(16) NOT NULL,
-                email_address VARCHAR(60),
-                nickname VARCHAR(50) NOT NULL
-        )
-        PRAGMA table_info(user_prefs){}
-        CREATE TABLE user_prefs(
-                pref_id INTEGER NOT NULL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES user(user_id),
-                pref_name VARCHAR(40) NOT NULL,
-                pref_value VARCHAR(100)
-        )
+    {sql}metadata_obj.create_all(engine)
+    PRAGMA table_info(user){}
+    CREATE TABLE user(
+            user_id INTEGER NOT NULL PRIMARY KEY,
+            user_name VARCHAR(16) NOT NULL,
+            email_address VARCHAR(60),
+            nickname VARCHAR(50) NOT NULL
+    )
+    PRAGMA table_info(user_prefs){}
+    CREATE TABLE user_prefs(
+            pref_id INTEGER NOT NULL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES user(user_id),
+            pref_name VARCHAR(40) NOT NULL,
+            pref_value VARCHAR(100)
+    )
 
 :func:`~sqlalchemy.schema.MetaData.create_all` creates foreign key constraints
 between tables usually inline with the table definition itself, and for this
@@ -284,11 +289,11 @@ remote servers (Oracle DBLINK with synonyms).
 
 What all of the above approaches have (mostly) in common is that there's a way
 of referring to this alternate set of tables using a string name.  SQLAlchemy
-refers to this name as the **schema name**.  Within SQLAlchemy, this is nothing more than
-a string name which is associated with a :class:`_schema.Table` object, and
-is then rendered into SQL statements in a manner appropriate to the target
-database such that the table is referred towards in its remote "schema", whatever
-mechanism that is on the target database.
+refers to this name as the **schema name**.  Within SQLAlchemy, this is nothing
+more than a string name which is associated with a :class:`_schema.Table`
+object, and is then rendered into SQL statements in a manner appropriate to the
+target database such that the table is referred towards in its remote "schema",
+whatever mechanism that is on the target database.
 
 The "schema" name may be associated directly with a :class:`_schema.Table`
 using the :paramref:`_schema.Table.schema` argument; when using the ORM
@@ -298,10 +303,26 @@ the parameter is passed using the ``__table_args__`` parameter dictionary.
 The "schema" name may also be associated with the :class:`_schema.MetaData`
 object where it will take effect automatically for all :class:`_schema.Table`
 objects associated with that :class:`_schema.MetaData` that don't otherwise
-specify their own name.   Finally, SQLAlchemy also supports a "dynamic" schema name
+specify their own name.  Finally, SQLAlchemy also supports a "dynamic" schema name
 system that is often used for multi-tenant applications such that a single set
 of :class:`_schema.Table` metadata may refer to a dynamically configured set of
 schema names on a per-connection or per-statement basis.
+
+.. topic::  What's "schema" ?
+
+    SQLAlchemy's support for database "schema" was designed with first party
+    support for PostgreSQL-style schemas.  In this style, there is first a
+    "database" that typically has a single "owner".  Within this database there
+    can be any number of "schemas" which then contain the actual table objects.
+
+    A table within a specific schema is referred towards explicitly using the
+    syntax "<schemaname>.<tablename>".  Contrast this to an architecture such
+    as that of MySQL, where there are only "databases", however SQL statements
+    can refer to multiple databases at once, using the same syntax except it
+    is "<database>.<tablename>".  On Oracle, this syntax refers to yet another
+    concept, the "owner" of a table.  Regardless of which kind of database is
+    in use, SQLAlchemy uses the phrase "schema" to refer to the qualifying
+    identifier within the general syntax of "<qualifier>.<tablename>".
 
 .. seealso::
 
@@ -367,6 +388,8 @@ at once, such as::
 
     :ref:`multipart_schema_names` - describes use of dotted schema names
     with the SQL Server dialect.
+
+    :ref:`metadata_reflection_schemas`
 
 
 .. _schema_metadata_schema_name:
@@ -438,10 +461,10 @@ to specify that it should not be schema qualified may use the special symbol
         schema=BLANK_SCHEMA  # will not use "remote_banks"
     )
 
-
 .. seealso::
 
     :paramref:`_schema.MetaData.schema`
+
 
 .. _schema_dynamic_naming_convention:
 
@@ -454,10 +477,10 @@ basis, so that for example in multi-tenant situations, each transaction
 or statement may be targeted at a specific set of schema names that change.
 The section :ref:`schema_translating` describes how this feature is used.
 
-
 .. seealso::
 
     :ref:`schema_translating`
+
 
 .. _schema_set_default_connections:
 
@@ -506,6 +529,17 @@ for specific information regarding how default schemas are configured.
 
     :ref:`postgresql_alternate_search_path` - in the :ref:`postgresql_toplevel` dialect documentation.
 
+
+
+
+Schemas and Reflection
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The schema feature of SQLAlchemy interacts with the table reflection
+feature introduced at ref:`metadata_reflection_toplevel`.  See the section
+:ref:`metadata_reflection_schemas` for additional details on how this works.
+
+
 Backend-Specific Options
 ------------------------
 
@@ -528,20 +562,14 @@ Column, Table, MetaData API
 ---------------------------
 
 .. attribute:: sqlalchemy.schema.BLANK_SCHEMA
+    :noindex:
 
-    Symbol indicating that a :class:`_schema.Table` or :class:`.Sequence`
-    should have 'None' for its schema, even if the parent
-    :class:`_schema.MetaData` has specified a schema.
+    Refers to :attr:`.SchemaConst.BLANK_SCHEMA`.
 
-    .. seealso::
+.. attribute:: sqlalchemy.schema.RETAIN_SCHEMA
+    :noindex:
 
-        :paramref:`_schema.MetaData.schema`
-
-        :paramref:`_schema.Table.schema`
-
-        :paramref:`.Sequence.schema`
-
-    .. versionadded:: 1.0.14
+    Refers to :attr:`.SchemaConst.RETAIN_SCHEMA`
 
 
 .. autoclass:: Column
@@ -552,6 +580,8 @@ Column, Table, MetaData API
 .. autoclass:: MetaData
     :members:
 
+.. autoclass:: SchemaConst
+    :members:
 
 .. autoclass:: SchemaItem
     :members:
@@ -559,9 +589,3 @@ Column, Table, MetaData API
 .. autoclass:: Table
     :members:
     :inherited-members:
-
-
-.. autoclass:: ThreadLocalMetaData
-    :members:
-
-

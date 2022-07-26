@@ -18,11 +18,19 @@ from sqlalchemy.orm.instrumentation import register_class
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_not
 from sqlalchemy.testing import ne_
 from sqlalchemy.testing.util import decorator
+
+
+def _register_attribute(class_, key, **kw):
+    kw.setdefault("comparator", object())
+    kw.setdefault("parententity", object())
+
+    attributes.register_attribute(class_, key, **kw)
 
 
 @decorator
@@ -35,7 +43,7 @@ def modifies_instrumentation_finders(fn, *args, **kw):
         instrumentation.instrumentation_finders.extend(pristine)
 
 
-class _ExtBase(object):
+class _ExtBase:
     @classmethod
     def teardown_test_class(cls):
         instrumentation._reinstall_default_lookups()
@@ -107,10 +115,16 @@ class DisposeTest(_ExtBase, fixtures.TestBase):
 
                 return get
 
-        class MyClass(object):
+        class MyClass:
             __sa_instrumentation_manager__ = MyClassState
 
-        assert attributes.manager_of_class(MyClass) is None
+        assert attributes.opt_manager_of_class(MyClass) is None
+
+        with expect_raises_message(
+            sa.orm.exc.UnmappedClassError,
+            r"Can't locate an instrumentation manager for class .*MyClass",
+        ):
+            attributes.manager_of_class(MyClass)
 
         t = Table(
             "my_table",
@@ -120,7 +134,7 @@ class DisposeTest(_ExtBase, fixtures.TestBase):
 
         registry.map_imperatively(MyClass, t)
 
-        manager = attributes.manager_of_class(MyClass)
+        manager = attributes.opt_manager_of_class(MyClass)
         is_not(manager, None)
         is_(manager, MyClass.xyz)
 
@@ -128,7 +142,7 @@ class DisposeTest(_ExtBase, fixtures.TestBase):
 
         registry.dispose()
 
-        manager = attributes.manager_of_class(MyClass)
+        manager = attributes.opt_manager_of_class(MyClass)
         is_(manager, None)
 
         assert not hasattr(MyClass, "xyz")
@@ -139,12 +153,12 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
     def setup_test_class(cls):
         global MyBaseClass, MyClass
 
-        class MyBaseClass(object):
+        class MyBaseClass:
             __sa_instrumentation_manager__ = (
                 instrumentation.InstrumentationManager
             )
 
-        class MyClass(object):
+        class MyClass:
 
             # This proves that a staticmethod will work here; don't
             # flatten this back to a class assignment!
@@ -198,13 +212,9 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
             pass
 
         register_class(User)
-        attributes.register_attribute(
-            User, "user_id", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
-            User, "user_name", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
+        _register_attribute(User, "user_id", uselist=False, useobject=False)
+        _register_attribute(User, "user_name", uselist=False, useobject=False)
+        _register_attribute(
             User, "email_address", uselist=False, useobject=False
         )
 
@@ -231,13 +241,13 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
                 pass
 
             register_class(User)
-            attributes.register_attribute(
+            _register_attribute(
                 User, "user_id", uselist=False, useobject=False
             )
-            attributes.register_attribute(
+            _register_attribute(
                 User, "user_name", uselist=False, useobject=False
             )
-            attributes.register_attribute(
+            _register_attribute(
                 User, "email_address", uselist=False, useobject=False
             )
 
@@ -277,12 +287,8 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
 
             manager = register_class(Foo)
             manager.expired_attribute_loader = loader
-            attributes.register_attribute(
-                Foo, "a", uselist=False, useobject=False
-            )
-            attributes.register_attribute(
-                Foo, "b", uselist=False, useobject=False
-            )
+            _register_attribute(Foo, "a", uselist=False, useobject=False)
+            _register_attribute(Foo, "b", uselist=False, useobject=False)
 
             if base is object:
                 assert Foo not in (
@@ -353,13 +359,13 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
             def func3(state, passive):
                 return "this is the shared attr"
 
-            attributes.register_attribute(
+            _register_attribute(
                 Foo, "element", uselist=False, callable_=func1, useobject=True
             )
-            attributes.register_attribute(
+            _register_attribute(
                 Foo, "element2", uselist=False, callable_=func3, useobject=True
             )
-            attributes.register_attribute(
+            _register_attribute(
                 Bar, "element", uselist=False, callable_=func2, useobject=True
             )
 
@@ -381,7 +387,7 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
 
             register_class(Post)
             register_class(Blog)
-            attributes.register_attribute(
+            _register_attribute(
                 Post,
                 "blog",
                 uselist=False,
@@ -389,7 +395,7 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
                 trackparent=True,
                 useobject=True,
             )
-            attributes.register_attribute(
+            _register_attribute(
                 Blog,
                 "posts",
                 uselist=True,
@@ -431,15 +437,11 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
 
             register_class(Foo)
             register_class(Bar)
-            attributes.register_attribute(
-                Foo, "name", uselist=False, useobject=False
-            )
-            attributes.register_attribute(
+            _register_attribute(Foo, "name", uselist=False, useobject=False)
+            _register_attribute(
                 Foo, "bars", uselist=True, trackparent=True, useobject=True
             )
-            attributes.register_attribute(
-                Bar, "name", uselist=False, useobject=False
-            )
+            _register_attribute(Bar, "name", uselist=False, useobject=False)
 
             f1 = Foo()
             f1.name = "f1"
@@ -510,10 +512,8 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
             pass
 
         register_class(Foo)
-        attributes.register_attribute(
-            Foo, "name", uselist=False, useobject=False
-        )
-        attributes.register_attribute(
+        _register_attribute(Foo, "name", uselist=False, useobject=False)
+        _register_attribute(
             Foo, "bars", uselist=True, trackparent=True, useobject=True
         )
 
@@ -523,7 +523,7 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
     def test_alternate_finders(self):
         """Ensure the generic finder front-end deals with edge cases."""
 
-        class Unknown(object):
+        class Unknown:
             pass
 
         class Known(MyBaseClass):
@@ -532,9 +532,9 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
         register_class(Known)
         k, u = Known(), Unknown()
 
-        assert instrumentation.manager_of_class(Unknown) is None
-        assert instrumentation.manager_of_class(Known) is not None
-        assert instrumentation.manager_of_class(None) is None
+        assert instrumentation.opt_manager_of_class(Unknown) is None
+        assert instrumentation.opt_manager_of_class(Known) is not None
+        assert instrumentation.opt_manager_of_class(None) is None
 
         assert attributes.instance_state(k) is not None
         assert_raises((AttributeError, KeyError), attributes.instance_state, u)
@@ -569,7 +569,7 @@ class UserDefinedExtensionTest(_ExtBase, fixtures.ORMTest):
 
 class FinderTest(_ExtBase, fixtures.ORMTest):
     def test_standard(self):
-        class A(object):
+        class A:
             pass
 
         register_class(A)
@@ -577,19 +577,22 @@ class FinderTest(_ExtBase, fixtures.ORMTest):
         eq_(type(manager_of_class(A)), instrumentation.ClassManager)
 
     def test_nativeext_interfaceexact(self):
-        class A(object):
+        class A:
             __sa_instrumentation_manager__ = (
                 instrumentation.InstrumentationManager
             )
 
         register_class(A)
-        ne_(type(manager_of_class(A)), instrumentation.ClassManager)
+        ne_(
+            type(attributes.opt_manager_of_class(A)),
+            instrumentation.ClassManager,
+        )
 
     def test_nativeext_submanager(self):
         class Mine(instrumentation.ClassManager):
             pass
 
-        class A(object):
+        class A:
             __sa_instrumentation_manager__ = Mine
 
         register_class(A)
@@ -600,7 +603,7 @@ class FinderTest(_ExtBase, fixtures.ORMTest):
         class Mine(instrumentation.ClassManager):
             pass
 
-        class A(object):
+        class A:
             pass
 
         def find(cls):
@@ -612,7 +615,7 @@ class FinderTest(_ExtBase, fixtures.ORMTest):
 
     @modifies_instrumentation_finders
     def test_customfinder_pass(self):
-        class A(object):
+        class A:
             pass
 
         def find(cls):
@@ -626,7 +629,7 @@ class FinderTest(_ExtBase, fixtures.ORMTest):
 
 class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
     def test_none(self):
-        class A(object):
+        class A:
             pass
 
         register_class(A)
@@ -634,18 +637,18 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         def mgr_factory(cls):
             return instrumentation.ClassManager(cls)
 
-        class B(object):
+        class B:
             __sa_instrumentation_manager__ = staticmethod(mgr_factory)
 
         register_class(B)
 
-        class C(object):
+        class C:
             __sa_instrumentation_manager__ = instrumentation.ClassManager
 
         register_class(C)
 
     def test_single_down(self):
-        class A(object):
+        class A:
             pass
 
         register_class(A)
@@ -664,7 +667,7 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         )
 
     def test_single_up(self):
-        class A(object):
+        class A:
             pass
 
         # delay registration
@@ -688,7 +691,7 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         def mgr_factory(cls):
             return instrumentation.ClassManager(cls)
 
-        class A(object):
+        class A:
             pass
 
         class B1(A):
@@ -697,7 +700,7 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         class B2(A):
             __sa_instrumentation_manager__ = staticmethod(mgr_factory)
 
-        class C(object):
+        class C:
             pass
 
         assert_raises_message(
@@ -711,7 +714,7 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         def mgr_factory(cls):
             return instrumentation.ClassManager(cls)
 
-        class A(object):
+        class A:
             pass
 
         class B1(A):
@@ -720,7 +723,7 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         class B2(A):
             __sa_instrumentation_manager__ = staticmethod(mgr_factory)
 
-        class C(object):
+        class C:
             pass
 
         register_class(B2)
@@ -735,7 +738,7 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         def mgr_factory(cls):
             return instrumentation.ClassManager(cls)
 
-        class A(object):
+        class A:
             pass
 
         class B1(A):
@@ -744,7 +747,7 @@ class InstrumentationCollisionTest(_ExtBase, fixtures.ORMTest):
         class B2(A):
             __sa_instrumentation_manager__ = staticmethod(mgr_factory)
 
-        class C(object):
+        class C:
             pass
 
         register_class(C)
@@ -773,7 +776,7 @@ class ExtendedEventsTest(_ExtBase, fixtures.ORMTest):
             0, lambda cls: MyClassManager
         )
 
-        class A(object):
+        class A:
             pass
 
         register_class(A)

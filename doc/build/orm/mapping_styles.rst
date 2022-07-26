@@ -1,546 +1,169 @@
 .. _orm_mapping_classes_toplevel:
 
-=======================
-Mapping Python Classes
-=======================
+==========================
+ORM Mapped Class Overview
+==========================
 
-SQLAlchemy historically features two distinct styles of mapper configuration.
+Overview of ORM class mapping configuration.
+
+For readers new to the SQLAlchemy ORM and/or new to Python in general,
+it's recommended to browse through the
+:ref:`orm_quickstart` and preferably to work through the
+:ref:`unified_tutorial`, where ORM configuration is first introduced at
+:ref:`tutorial_orm_table_metadata`.
+
+.. _orm_mapping_styles:
+
+ORM Mapping Styles
+==================
+
+SQLAlchemy features two distinct styles of mapper configuration, which then
+feature further sub-options for how they are set up.   The variability in mapper
+styles is present to suit a varied list of developer preferences, including
+the degree of abstraction of a user-defined class from how it is to be
+mapped to relational schema tables and columns, what kinds of class hierarchies
+are in use, including whether or not custom metaclass schemes are present,
+and finally if there are other class-instrumentation approaches present such
+as if Python dataclasses_ are in use simultaneously.
+
+In modern SQLAlchemy, the difference between these styles is mostly
+superficial; when a particular SQLAlchemy configurational style is used to
+express the intent to map a class, the internal process of mapping the class
+proceeds in mostly the same way for each, where the end result is always a
+user-defined class that has a :class:`_orm.Mapper` configured against a
+selectable unit, typically represented by a :class:`_schema.Table` object, and
+the class itself has been :term:`instrumented` to include behaviors linked to
+relational operations both at the level of the class as well as on instances of
+that class. As the process is basically the same in all cases, classes mapped
+from different styles are always fully interoperable with each other.
+
 The original mapping API is commonly referred to as "classical" style,
 whereas the more automated style of mapping is known as "declarative" style.
 SQLAlchemy now refers to these two mapping styles as **imperative mapping**
 and **declarative mapping**.
 
-Both styles may be used interchangeably, as the end result of each is exactly
-the same - a user-defined class that has a :class:`_orm.Mapper` configured
-against a selectable unit, typically represented by a :class:`_schema.Table`
-object.
-
-Both imperative and declarative mapping begin with an ORM :class:`_orm.registry`
-object, which maintains a set of classes that are mapped.    This registry
-is present for all mappings.
+Regardless of what style of mapping used, all ORM mappings as of SQLAlchemy 1.4
+originate from a single object known as :class:`_orm.registry`, which is a
+registry of mapped classes. Using this registry, a set of mapper configurations
+can be finalized as a group, and classes within a particular registry may refer
+to each other by name within the configurational process.
 
 .. versionchanged:: 1.4  Declarative and classical mapping are now referred
    to as "declarative" and "imperative" mapping, and are unified internally,
    all originating from the :class:`_orm.registry` construct that represents
    a collection of related mappings.
 
-The full suite of styles can be hierarchically organized as follows:
-
-* :ref:`orm_declarative_mapping`
-    * Using :func:`_orm.declarative_base` Base class w/ metaclass
-        * :ref:`orm_declarative_table`
-        * :ref:`Imperative Table (a.k.a. "hybrid table") <orm_imperative_table_configuration>`
-    * Using :meth:`_orm.registry.mapped` Declarative Decorator
-        * :ref:`Declarative Table <orm_declarative_decorator>` - combine :meth:`_orm.registry.mapped`
-          with ``__tablename__``
-        * Imperative Table (Hybrid) - combine :meth:`_orm.registry.mapped` with ``__table__``
-        * :ref:`orm_declarative_dataclasses`
-            * :ref:`orm_declarative_dataclasses_imperative_table`
-            * :ref:`orm_declarative_dataclasses_declarative_table`
-            * :ref:`orm_declarative_attrs_imperative_table`
-* :ref:`Imperative (a.k.a. "classical" mapping) <orm_imperative_mapping>`
-    * Using :meth:`_orm.registry.map_imperatively`
-        * :ref:`orm_imperative_dataclasses`
-
 .. _orm_declarative_mapping:
 
 Declarative Mapping
-===================
+-------------------
 
-The **Declarative Mapping** is the typical way that
-mappings are constructed in modern SQLAlchemy.   The most common pattern
-is to first construct a base class using the :func:`_orm.declarative_base`
-function, which will apply the declarative mapping process to all subclasses
-that derive from it.  Below features a declarative base which is then
-used in a declarative table mapping::
+The **Declarative Mapping** is the typical way that mappings are constructed in
+modern SQLAlchemy. The most common pattern is to first construct a base class
+using the :class:`_orm.DeclarativeBase` superclass. The resulting base class,
+when subclassed will apply the declarative mapping process to all subclasses
+that derive from it, relative to a particular :class:`_orm.registry` that
+is local to the new base by default. The example below illustrates
+the use of a declarative base which is then used in a declarative table mapping::
 
-    from sqlalchemy import Column, Integer, String, ForeignKey
-    from sqlalchemy.orm import declarative_base
+    from sqlalchemy import Integer, String, ForeignKey
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import Mapped
+    from sqlalchemy.orm import mapped_column
 
     # declarative base class
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
     # an example mapping using the base
     class User(Base):
         __tablename__ = 'user'
 
-        id = Column(Integer, primary_key=True)
-        name = Column(String)
-        fullname = Column(String)
-        nickname = Column(String)
+        id: Mapped[int] = mapped_column(primary_key=True)
+        name: Mapped[str]
+        fullname: Mapped[str] = mapped_column(String(30))
+        nickname: Mapped[Optional[str]]
 
-Above, the :func:`_orm.declarative_base` callable returns a new base class from
+Above, the :class:`_orm.DeclarativeBase` class is used to generate a new
+base class (within SQLAlchemy's documentation it's typically referred towards
+as ``Base``, however can have any desired name) from
 which new classes to be mapped may inherit from, as above a new mapped
 class ``User`` is constructed.
 
-The base class refers to a
-:class:`_orm.registry` object that maintains a collection of related mapped
-classes.   The :func:`_orm.declarative_base` function is in fact shorthand
-for first creating the registry with the :class:`_orm.registry`
-constructor, and then generating a base class using the
-:meth:`_orm.registry.generate_base` method::
+.. versionchanged:: 2.0 The :class:`_orm.DeclarativeBase` superclass supersedes
+   the use of the :func:`_orm.declarative_base` function and
+   :meth:`_orm.registry.generate_base` methods; the superclass approach
+   integrates with :pep:`484` tools without the use of plugins.
+   See :ref:`whatsnew_20_orm_declarative_typing` for migration notes.
 
-    from sqlalchemy.orm import registry
+The base class refers to a :class:`_orm.registry` object that maintains a
+collection of related mapped classes. as well as to a :class:`_schema.MetaData`
+object that retains a collection of :class:`_schema.Table` objects to which
+the classes are mapped.
 
-    # equivalent to Base = declarative_base()
+The major Declarative mapping styles are further detailed in the following
+sections:
 
-    mapper_registry = registry()
-    Base = mapper_registry.generate_base()
-
-The :class:`_orm.registry` is used directly in order to access a variety
-of mapping styles to suit different use cases:
+* :ref:`orm_declarative_generated_base_class` - declarative mapping using a
+  base class.
 
 * :ref:`orm_declarative_decorator` - declarative mapping using a decorator,
   rather than a base class.
 
-* :ref:`orm_imperative_mapping` - imperative mapping, specifying all mapping
-  arguments directly rather than scanning a class.
+Within the scope of a Declarative mapped class, there are also two varieties
+of how the :class:`_schema.Table` metadata may be declared.  These include:
+
+* :ref:`orm_declarative_table` - table columns are declared inline
+  within the mapped class using the :func:`_orm.mapped_column` directive
+  (or in legacy form, using the :class:`_schema.Column` object directly).
+  The :func:`_orm.mapped_column` directive may also be optionally combined with
+  type annotations using the :class:`_orm.Mapped` class which can provide
+  some details about the mapped columns directly.  The column
+  directives, in combination with the ``__tablename__`` and optional
+  ``__table_args__`` class level directives will allow the
+  Declarative mapping process to construct a :class:`_schema.Table` object to
+  be mapped.
+
+* :ref:`orm_imperative_table_configuration` - Instead of specifying table name
+  and attributes separately, an explicitly constructed :class:`_schema.Table` object
+  is associated with a class that is otherwise mapped declaratively.  This
+  style of mapping is a hybrid of "declarative" and "imperative" mapping,
+  and applies to techniques such as mapping classes to :term:`reflected`
+  :class:`_schema.Table` objects, as well as mapping classes to existing
+  Core constructs such as joins and subqueries.
+
 
 Documentation for Declarative mapping continues at :ref:`declarative_config_toplevel`.
 
-.. seealso::
-
-    :ref:`declarative_config_toplevel`
-
-.. _orm_explicit_declarative_base:
-
-Creating an Explicit Base Non-Dynamically (for use with mypy, similar)
-----------------------------------------------------------------------
-
-SQLAlchemy includes a :ref:`Mypy plugin <mypy_toplevel>` that automatically
-accommodates for the dynamically generated ``Base`` class
-delivered by SQLAlchemy functions like :func:`_orm.declarative_base`.
-This plugin works along with a new set of typing stubs published at
-`sqlalchemy2-stubs <https://pypi.org/project/sqlalchemy2-stubs>`_.
-
-When this plugin is not in use, or when using other :pep:`484` tools which
-may not know how to interpret this class, the declarative base class may
-be produced in a fully explicit fashion using the
-:class:`_orm.DeclarativeMeta` directly as follows::
-
-    from sqlalchemy.orm import registry
-    from sqlalchemy.orm.decl_api import DeclarativeMeta
-
-    mapper_registry = registry()
-
-    class Base(metaclass=DeclarativeMeta):
-        __abstract__ = True
-
-        # these are supplied by the sqlalchemy2-stubs, so may be omitted
-        # when they are installed
-        registry = mapper_registry
-        metadata = mapper_registry.metadata
-
-        __init__ = mapper_registry.constructor
-
-The above ``Base`` is equivalent to one created using the
-:meth:`_orm.registry.generate_base` method and will be fully understood by
-type analysis tools without the use of plugins.
-
-.. seealso::
-
-    :ref:`mypy_toplevel` - background on the Mypy plugin which applies the
-    above structure automatically when running Mypy.
-
-
-.. _orm_declarative_decorator:
-
-Declarative Mapping using a Decorator (no declarative base)
-------------------------------------------------------------
-
-As an alternative to using the "declarative base" class is to apply
-declarative mapping to a class explicitly, using either an imperative technique
-similar to that of a "classical" mapping, or more succinctly by using
-a decorator.  The :meth:`_orm.registry.mapped` function is a class decorator
-that can be applied to any Python class with no hierarchy in place.  The
-Python class otherwise is configured in declarative style normally::
-
-    from sqlalchemy import Column, Integer, String, Text, ForeignKey
-
-    from sqlalchemy.orm import registry
-    from sqlalchemy.orm import relationship
-
-    mapper_registry = registry()
-
-    @mapper_registry.mapped
-    class User:
-        __tablename__ = 'user'
-
-        id = Column(Integer, primary_key=True)
-        name = Column(String)
-
-        addresses = relationship("Address", back_populates="user")
-
-    @mapper_registry.mapped
-    class Address:
-        __tablename__ = 'address'
-
-        id = Column(Integer, primary_key=True)
-        user_id = Column(ForeignKey("user.id"))
-        email_address = Column(String)
-
-        user = relationship("User", back_populates="addresses")
-
-Above, the same :class:`_orm.registry` that we'd use to generate a declarative
-base class via its :meth:`_orm.registry.generate_base` method may also apply
-a declarative-style mapping to a class without using a base.   When using
-the above style, the mapping of a particular class will **only** proceed
-if the decorator is applied to that class directly.   For inheritance
-mappings, the decorator should be applied to each subclass::
-
-    from sqlalchemy.orm import registry
-    mapper_registry = registry()
-
-    @mapper_registry.mapped
-    class Person:
-        __tablename__ = "person"
-
-        person_id = Column(Integer, primary_key=True)
-        type = Column(String, nullable=False)
-
-        __mapper_args__ = {
-
-            "polymorphic_on": type,
-            "polymorphic_identity": "person"
-        }
-
-
-    @mapper_registry.mapped
-    class Employee(Person):
-        __tablename__ = "employee"
-
-        person_id = Column(ForeignKey("person.person_id"), primary_key=True)
-
-        __mapper_args__ = {
-            "polymorphic_identity": "employee"
-        }
-
-Both the "declarative table" and "imperative table" styles of declarative
-mapping may be used with the above mapping style.
-
-The decorator form of mapping is particularly useful when combining a
-SQLAlchemy declarative mapping with other forms of class declaration, notably
-the Python ``dataclasses`` module.  See the next section.
-
-.. _orm_declarative_dataclasses:
-
-Declarative Mapping with Dataclasses and Attrs
-----------------------------------------------
-
-The dataclasses_ module, added in Python 3.7, provides a ``@dataclass`` class
-decorator to automatically generate boilerplate definitions of ``__init__()``,
-``__eq__()``, ``__repr()__``, etc. methods. Another very popular library that does
-the same, and much more, is attrs_.  Both libraries make use of class
-decorators in order to scan a class for attributes that define the class'
-behavior, which are then used to generate methods, documentation, and annotations.
-
-The :meth:`_orm.registry.mapped` class decorator allows the declarative mapping
-of a class to occur after the class has been fully constructed, allowing the
-class to be processed by other class decorators first.  The ``@dataclass``
-and ``@attr.s`` decorators may therefore be applied first before the
-ORM mapping process proceeds via the :meth:`_orm.registry.mapped` decorator
-or via the :meth:`_orm.registry.map_imperatively` method discussed in a
-later section.
-
-Mapping with ``@dataclass`` or ``@attr.s`` may be used in a straightforward
-way with :ref:`orm_imperative_table_configuration` style, where the
-the :class:`_schema.Table`, which means that it is defined separately and
-associated with the class via the ``__table__``.   For dataclasses specifically,
-:ref:`orm_declarative_table` is also supported.
-
-.. versionadded:: 1.4.0b2 Added support for full declarative mapping when using
-   dataclasses.
-
-When attributes are defined using ``dataclasses``, the ``@dataclass``
-decorator consumes them but leaves them in place on the class.
-SQLAlchemy's mapping process, when it encounters an attribute that normally
-is to be mapped to a :class:`_schema.Column`, checks explicitly if the
-attribute is part of a Dataclasses setup, and if so will **replace**
-the class-bound dataclass attribute with its usual mapped
-properties.  The ``__init__`` method created by ``@dataclass`` is left
-intact.   In contrast, the ``@attr.s`` decorator actually removes its
-own class-bound attributes after the decorator runs, so that SQLAlchemy's
-mapping process takes over these attributes without any issue.
-
-.. versionadded:: 1.4 Added support for direct mapping of Python dataclasses,
-   where the :class:`_orm.Mapper` will now detect attributes that are specific
-   to the ``@dataclasses`` module and replace them at mapping time, rather
-   than skipping them as is the default behavior for any class attribute
-   that's not part of the mapping.
-
-.. _orm_declarative_dataclasses_imperative_table:
-
-Example One - Dataclasses with Imperative Table
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-An example of a mapping using ``@dataclass`` using
-:ref:`orm_imperative_table_configuration` is as follows::
-
-    from __future__ import annotations
-
-    from dataclasses import dataclass
-    from dataclasses import field
-    from typing import List
-    from typing import Optional
-
-    from sqlalchemy import Column
-    from sqlalchemy import ForeignKey
-    from sqlalchemy import Integer
-    from sqlalchemy import String
-    from sqlalchemy import Table
-    from sqlalchemy.orm import registry
-    from sqlalchemy.orm import relationship
-
-    mapper_registry = registry()
-
-
-    @mapper_registry.mapped
-    @dataclass
-    class User:
-        __table__ = Table(
-            "user",
-            mapper_registry.metadata,
-            Column("id", Integer, primary_key=True),
-            Column("name", String(50)),
-            Column("fullname", String(50)),
-            Column("nickname", String(12)),
-        )
-        id: int = field(init=False)
-        name: Optional[str] = None
-        fullname: Optional[str] = None
-        nickname: Optional[str] = None
-        addresses: List[Address] = field(default_factory=list)
-
-        __mapper_args__ = {   # type: ignore
-            "properties" : {
-                "addresses": relationship("Address")
-            }
-        }
-
-    @mapper_registry.mapped
-    @dataclass
-    class Address:
-        __table__ = Table(
-            "address",
-            mapper_registry.metadata,
-            Column("id", Integer, primary_key=True),
-            Column("user_id", Integer, ForeignKey("user.id")),
-            Column("email_address", String(50)),
-        )
-        id: int = field(init=False)
-        user_id: int = field(init=False)
-        email_address: Optional[str] = None
-
-In the above example, the ``User.id``, ``Address.id``, and ``Address.user_id``
-attributes are defined as ``field(init=False)``. This means that parameters for
-these won't be added to ``__init__()`` methods, but
-:class:`.Session` will still be able to set them after getting their values
-during flush from autoincrement or other default value generator.   To
-allow them to be specified in the constructor explicitly, they would instead
-be given a default value of ``None``.
-
-For a :func:`_orm.relationship` to be declared separately, it needs to
-be specified directly within the :paramref:`_orm.mapper.properties`
-dictionary passed to the :func:`_orm.mapper`.   An alternative to this
-approach is in the next example.
-
-.. _orm_declarative_dataclasses_declarative_table:
-
-Example Two - Dataclasses with Declarative Table
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The fully declarative approach requires that :class:`_schema.Column` objects
-are declared as class attributes, which when using dataclasses would conflict
-with the dataclass-level attributes.  An approach to combine these together
-is to make use of the ``metadata`` attribute on the ``dataclass.field``
-object, where SQLAlchemy-specific mapping information may be supplied.
-Declarative supports extraction of these parameters when the class
-specifies the attribute ``__sa_dataclass_metadata_key__``.  This also
-provides a more succinct method of indicating the :func:`_orm.relationship`
-association::
-
-
-    from __future__ import annotations
-
-    from dataclasses import dataclass
-    from dataclasses import field
-    from typing import List
-
-    from sqlalchemy import Column
-    from sqlalchemy import ForeignKey
-    from sqlalchemy import Integer
-    from sqlalchemy import String
-    from sqlalchemy.orm import registry
-    from sqlalchemy.orm import relationship
-
-    mapper_registry = registry()
-
-
-    @mapper_registry.mapped
-    @dataclass
-    class User:
-        __tablename__ = "user"
-
-        __sa_dataclass_metadata_key__ = "sa"
-        id: int = field(
-            init=False, metadata={"sa": Column(Integer, primary_key=True)}
-        )
-        name: str = field(default=None, metadata={"sa": Column(String(50))})
-        fullname: str = field(default=None, metadata={"sa": Column(String(50))})
-        nickname: str = field(default=None, metadata={"sa": Column(String(12))})
-        addresses: List[Address] = field(
-            default_factory=list, metadata={"sa": relationship("Address")}
-        )
-
-
-    @mapper_registry.mapped
-    @dataclass
-    class Address:
-        __tablename__ = "address"
-        __sa_dataclass_metadata_key__ = "sa"
-        id: int = field(
-            init=False, metadata={"sa": Column(Integer, primary_key=True)}
-        )
-        user_id: int = field(
-            init=False, metadata={"sa": Column(ForeignKey("user.id"))}
-        )
-        email_address: str = field(
-            default=None, metadata={"sa": Column(String(50))}
-        )
-
-.. _orm_declarative_dataclasses_mixin:
-
-Using Declarative Mixins with Dataclasses
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-In the section :ref:`orm_mixins_toplevel`, Declarative Mixin classes
-are introduced.  One requirement of declarative mixins is that certain
-constructs that can't be easily duplicated must be given as callables,
-using the :class:`_orm.declared_attr` decorator, such as in the
-example at :ref:`orm_declarative_mixins_relationships`::
-
-    class RefTargetMixin(object):
-        @declared_attr
-        def target_id(cls):
-            return Column('target_id', ForeignKey('target.id'))
-
-        @declared_attr
-        def target(cls):
-            return relationship("Target")
-
-This form is supported within the Dataclasses ``field()`` object by using
-a lambda to indicate the SQLAlchemy construct inside the ``field()``.
-Using :func:`_orm.declared_attr` to surround the lambda is optional.
-If we wanted to produce our ``User`` class above where the ORM fields
-came from a mixin that is itself a dataclass, the form would be::
-
-    @dataclass
-    class UserMixin:
-        __tablename__ = "user"
-
-        __sa_dataclass_metadata_key__ = "sa"
-
-        id: int = field(
-            init=False, metadata={"sa": Column(Integer, primary_key=True)}
-        )
-
-        addresses: List[Address] = field(
-            default_factory=list, metadata={"sa": lambda: relationship("Address")}
-        )
-
-    @dataclass
-    class AddressMixin:
-        __tablename__ = "address"
-        __sa_dataclass_metadata_key__ = "sa"
-        id: int = field(
-            init=False, metadata={"sa": Column(Integer, primary_key=True)}
-        )
-        user_id: int = field(
-            init=False, metadata={"sa": lambda: Column(ForeignKey("user.id"))}
-        )
-        email_address: str = field(
-            default=None, metadata={"sa": Column(String(50))}
-        )
-
-    @mapper_registry.mapped
-    class User(UserMixin):
-        pass
-
-    @mapper_registry.mapped
-    class Address(AddressMixin):
-      pass
-
-.. versionadded:: 1.4.2  Added support for "declared attr" style mixin attributes,
-   namely :func:`_orm.relationship` constructs as well as :class:`_schema.Column`
-   objects with foreign key declarations, to be used within "Dataclasses
-   with Declarative Table" style mappings.
-
-.. _orm_declarative_attrs_imperative_table:
-
-Example Three - attrs with Imperative Table
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-A mapping using ``@attr.s``, in conjunction with imperative table::
-
-    import attr
-
-    # other imports
-
-    from sqlalchemy.orm import registry
-
-    mapper_registry = registry()
-
-
-    @mapper_registry.mapped
-    @attr.s
-    class User:
-        __table__ = Table(
-            "user",
-            mapper_registry.metadata,
-            Column("id", Integer, primary_key=True),
-            Column("name", String(50)),
-            Column("fullname", String(50)),
-            Column("nickname", String(12)),
-        )
-        id = attr.ib()
-        name = attr.ib()
-        fullname = attr.ib()
-        nickname = attr.ib()
-        addresses = attr.ib()
-
-    # other classes...
-
-``@dataclass`` and attrs_ mappings may also be used with classical mappings, i.e.
-with the :meth:`_orm.registry.map_imperatively` function.  See the section
-:ref:`orm_imperative_dataclasses` for a similar example.
-
-.. _dataclasses: https://docs.python.org/3/library/dataclasses.html
-.. _attrs: https://pypi.org/project/attrs/
-
+.. _classical_mapping:
 .. _orm_imperative_mapping:
 
-.. _classical_mapping:
-
-Imperative (a.k.a. Classical) Mappings
-======================================
+Imperative Mapping
+-------------------
 
 An **imperative** or **classical** mapping refers to the configuration of a
 mapped class using the :meth:`_orm.registry.map_imperatively` method,
 where the target class does not include any declarative class attributes.
-The "map imperative" style has historically been achieved using the
-:func:`_orm.mapper` function directly, however this function now expects
-that a :meth:`_orm.registry` is present.
 
-.. deprecated:: 1.4  Using the :func:`_orm.mapper` function directly to
-   achieve a classical mapping directly is deprecated.   The
-   :meth:`_orm.registry.map_imperatively` method retains the identical
-   functionality while also allowing for string-based resolution of
-   other mapped classes from within the registry.
+.. tip:: The imperative mapping form is a lesser-used form of mapping that
+   originates from the very first releases of SQLAlchemy in 2006.  It's
+   essentially a means of bypassing the Declarative system to provide a
+   more "barebones" system of mapping, and does not offer modern features
+   such as :pep:`484` support.  As such, most documentation examples
+   use Declarative forms, and it's recommended that new users start
+   with :ref:`Declarative Table <orm_declarative_table_config_toplevel>`
+   configuration.
 
+.. versionchanged:: 2.0  The :meth:`_orm.registry.map_imperatively` method
+   is now used to create classical mappings.  The ``sqlalchemy.orm.mapper()``
+   standalone function is effectively removed.
 
 In "classical" form, the table metadata is created separately with the
 :class:`_schema.Table` construct, then associated with the ``User`` class via
-the :meth:`_orm.registry.map_imperatively` method::
+the :meth:`_orm.registry.map_imperatively` method, after establishing
+a :class:`_orm.registry` instance.  Normally, a single instance of
+:class:`_orm.registry`
+shared for all mapped classes that are related to each other::
 
     from sqlalchemy import Table, Column, Integer, String, ForeignKey
     from sqlalchemy.orm import registry
@@ -562,7 +185,6 @@ the :meth:`_orm.registry.map_imperatively` method::
     mapper_registry.map_imperatively(User, user_table)
 
 
-
 Information about mapped attributes, such as relationships to other classes, are provided
 via the ``properties`` dictionary.  The example below illustrates a second :class:`_schema.Table`
 object, mapped to a class called ``Address``, then linked to ``User`` via :func:`_orm.relationship`::
@@ -579,107 +201,32 @@ object, mapped to a class called ``Address``, then linked to ``User`` via :func:
 
     mapper_registry.map_imperatively(Address, address)
 
-When using classical mappings, classes must be provided directly without the benefit
-of the "string lookup" system provided by Declarative.  SQL expressions are typically
-specified in terms of the :class:`_schema.Table` objects, i.e. ``address.c.id`` above
-for the ``Address`` relationship, and not ``Address.id``, as ``Address`` may not
-yet be linked to table metadata, nor can we specify a string here.
+Note that classes which are mapped with the Imperative approach are **fully
+interchangeable** with those mapped with the Declarative approach. Both systems
+ultimately create the same configuration, consisting of a
+:class:`_schema.Table`, user-defined class, linked together with a
+:class:`_orm.Mapper` object. When we talk about "the behavior of
+:class:`_orm.Mapper`", this includes when using the Declarative system as well
+- it's still used, just behind the scenes.
 
-Some examples in the documentation still use the classical approach, but note that
-the classical as well as Declarative approaches are **fully interchangeable**.  Both
-systems ultimately create the same configuration, consisting of a :class:`_schema.Table`,
-user-defined class, linked together with a :func:`.mapper`.  When we talk about
-"the behavior of :func:`.mapper`", this includes when using the Declarative system
-as well - it's still used, just behind the scenes.
-
-
-
-
-.. _orm_imperative_dataclasses:
-
-Imperative Mapping with Dataclasses and Attrs
----------------------------------------------
-
-As described in the section :ref:`orm_declarative_dataclasses`, the
-``@dataclass`` decorator and the attrs_ library both work as class
-decorators that are applied to a class first, before it is passed to
-SQLAlchemy for mapping.   Just like we can use the
-:meth:`_orm.registry.mapped` decorator in order to apply declarative-style
-mapping to the class, we can also pass it to the :meth:`_orm.registry.map_imperatively`
-method so that we may pass all :class:`_schema.Table` and :class:`_orm.Mapper`
-configuration imperatively to the function rather than having them defined
-on the class itself as declarative class variables::
-
-    from __future__ import annotations
-
-    from dataclasses import dataclass
-    from dataclasses import field
-    from typing import List
-
-    from sqlalchemy import Column
-    from sqlalchemy import ForeignKey
-    from sqlalchemy import Integer
-    from sqlalchemy import MetaData
-    from sqlalchemy import String
-    from sqlalchemy import Table
-    from sqlalchemy.orm import registry
-    from sqlalchemy.orm import relationship
-
-    mapper_registry = registry()
-
-    @dataclass
-    class User:
-        id: int = field(init=False)
-        name: str = None
-        fullname: str = None
-        nickname: str = None
-        addresses: List[Address] = field(default_factory=list)
-
-    @dataclass
-    class Address:
-        id: int = field(init=False)
-        user_id: int = field(init=False)
-        email_address: str = None
-
-    metadata_obj = MetaData()
-
-    user = Table(
-        'user',
-        metadata_obj,
-        Column('id', Integer, primary_key=True),
-        Column('name', String(50)),
-        Column('fullname', String(50)),
-        Column('nickname', String(12)),
-    )
-
-    address = Table(
-        'address',
-        metadata_obj,
-        Column('id', Integer, primary_key=True),
-        Column('user_id', Integer, ForeignKey('user.id')),
-        Column('email_address', String(50)),
-    )
-
-    mapper_registry.map_imperatively(User, user, properties={
-        'addresses': relationship(Address, backref='user', order_by=address.c.id),
-    })
-
-    mapper_registry.map_imperatively(Address, address)
 
 .. _orm_mapper_configuration_overview:
 
-Mapper Configuration Overview
-=============================
+Mapped Class Essential Components
+==================================
 
-With all mapping forms, the mapping of the class can be
-configured in many ways by passing construction arguments that become
-part of the :class:`_orm.Mapper` object.   The function which ultimately
-receives these arguments is the :func:`_orm.mapper` function, which are delivered
-to it originating from one of the front-facing mapping functions defined
-on the :class:`_orm.registry` object.
+With all mapping forms, the mapping of the class can be configured in many ways
+by passing construction arguments that ultimately become part of the :class:`_orm.Mapper`
+object via its constructor.  The parameters that are delivered to
+:class:`_orm.Mapper` originate from the given mapping form, including
+parameters passed to :meth:`_orm.registry.map_imperatively` for an Imperative
+mapping, or when using the Declarative system, from a combination
+of the table columns, SQL expressions and
+relationships being mapped along with that of attributes such as
+:ref:`__mapper_args__ <orm_declarative_mapper_options>`.
 
 There are four general classes of configuration information that the
-:func:`_orm.mapper` function looks for:
+:class:`_orm.Mapper` class looks for:
 
 The class to be mapped
 ----------------------
@@ -744,34 +291,25 @@ by scanning the class to be mapped for appropriate attributes.  See
 the section :ref:`orm_declarative_properties` for notes on this process.
 
 When mapping with the :ref:`imperative <orm_imperative_mapping>` style, the
-properties dictionary is passed directly as the ``properties`` argument
+properties dictionary is passed directly as the
+``properties`` parameter
 to :meth:`_orm.registry.map_imperatively`, which will pass it along to the
-:paramref:`_orm.mapper.properties` parameter.
+:paramref:`_orm.Mapper.properties` parameter.
 
 Other mapper configuration parameters
 -------------------------------------
 
-These flags are documented at  :func:`_orm.mapper`.
-
 When mapping with the :ref:`declarative <orm_declarative_mapping>` mapping
 style, additional mapper configuration arguments are configured via the
-``__mapper_args__`` class attribute, documented at
-:ref:`orm_declarative_mapper_options`
+``__mapper_args__`` class attribute.   Examples of use are available
+at :ref:`orm_declarative_mapper_options`.
 
 When mapping with the :ref:`imperative <orm_imperative_mapping>` style,
 keyword arguments are passed to the to :meth:`_orm.registry.map_imperatively`
-method which passes them along to the :func:`_orm.mapper` function.
+method which passes them along to the :class:`_orm.Mapper` class.
 
+The full range of parameters accepted are documented at  :class:`_orm.Mapper`.
 
-.. [1] When running under Python 2, a Python 2 "old style" class is the only
-       kind of class that isn't compatible.    When running code on Python 2,
-       all classes must extend from the Python ``object`` class.  Under
-       Python 3 this is always the case.
-
-.. [2] There is a legacy feature known as a "non primary mapper", where
-       additional :class:`_orm.Mapper` objects may be associated with a class
-       that's already mapped, however they don't apply instrumentation
-       to the class.  This feature is deprecated as of SQLAlchemy 1.3.
 
 
 Mapped Class Behavior
@@ -791,25 +329,38 @@ method, to all mapped classes that don't explicitly have their own
 a convenient keyword constructor that will accept as optional keyword arguments
 all the attributes that are named.   E.g.::
 
-    from sqlalchemy.orm import declarative_base
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import Mapped
+    from sqlalchemy.orm import mapped_column
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
     class User(Base):
         __tablename__ = 'user'
 
-        id = Column(...)
-        name = Column(...)
-        fullname = Column(...)
+        id: Mapped[int] = mapped_column(primary_key=True)
+        name: Mapped[str]
+        fullname: Mapped[str]
 
 An object of type ``User`` above will have a constructor which allows
 ``User`` objects to be created as::
 
     u1 = User(name='some name', fullname='some fullname')
 
-The above constructor may be customized by passing a Python callable to
-the :paramref:`_orm.registry.constructor` parameter which provides the
-desired default ``__init__()`` behavior.
+.. tip::
+
+    The :ref:`orm_declarative_native_dataclasses` feature provides an alternate
+    means of generating a default ``__init__()`` method by using
+    Python dataclasses, and allows for a highly configurable constructor
+    form.
+
+A class that includes an explicit ``__init__()`` method will maintain
+that method, and no default constructor will be applied.
+
+To change the default constructor used, a user-defined Python callable may be
+provided to the :paramref:`_orm.registry.constructor` parameter which will be
+used as the default constructor.
 
 The constructor also applies to imperative mappings::
 
@@ -829,15 +380,17 @@ The constructor also applies to imperative mappings::
 
     mapper_registry.map_imperatively(User, user_table)
 
-The above class, mapped imperatively as described at :ref:`classical_mapping`,
+The above class, mapped imperatively as described at :ref:`orm_imperative_mapping`,
 will also feature the default constructor associated with the :class:`_orm.registry`.
 
 .. versionadded:: 1.4  classical mappings now support a standard configuration-level
    constructor when they are mapped via the :meth:`_orm.registry.map_imperatively`
    method.
 
-Runtime Introspection of Mapped classes and Mappers
----------------------------------------------------
+.. _orm_mapper_inspection:
+
+Runtime Introspection of Mapped classes, Instances and Mappers
+---------------------------------------------------------------
 
 A class that is mapped using :class:`_orm.registry` will also feature a few
 attributes that are common to all mappings:
@@ -857,12 +410,12 @@ attributes that are common to all mappings:
   ..
 
 * The ``__table__`` attribute will refer to the :class:`_schema.Table`, or
-  more generically to the :class:`_schema.FromClause` object, to which the
+  more generically to the :class:`.FromClause` object, to which the
   class is mapped::
 
     table = User.__table__
 
-  This :class:`_schema.FromClause` is also what's returned when using the
+  This :class:`.FromClause` is also what's returned when using the
   :attr:`_orm.Mapper.local_table` attribute of the :class:`_orm.Mapper`::
 
     table = inspect(User).local_table
@@ -877,8 +430,10 @@ attributes that are common to all mappings:
 
   ..
 
-Mapper Inspection Features
---------------------------
+.. _orm_mapper_inspection_mapper:
+
+Inspection of Mapper objects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 As illustrated in the previous section, the :class:`_orm.Mapper` object is
 available from any mapped class, regardless of method, using the
@@ -921,8 +476,89 @@ As well as :attr:`_orm.Mapper.column_attrs`::
 
 .. seealso::
 
-    :ref:`core_inspection_toplevel`
+    :class:`.Mapper`
 
-    :class:`_orm.Mapper`
+.. _orm_mapper_inspection_instancestate:
+
+Inspection of Mapped Instances
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The :func:`_sa.inspect` function also provides information about instances
+of a mapped class.  When applied to an instance of a mapped class, rather
+than the class itself, the object returned is known as :class:`.InstanceState`,
+which will provide links to not only the :class:`.Mapper` in use by the
+class, but also a detailed interface that provides information on the state
+of individual attributes within the instance including their current value
+and how this relates to what their database-loaded value is.
+
+Given an instance of the ``User`` class loaded from the database::
+
+  >>> u1 = session.scalars(select(User)).first()
+
+The :func:`_sa.inspect` function will return to us an :class:`.InstanceState`
+object::
+
+  >>> insp = inspect(u1)
+  >>> insp
+  <sqlalchemy.orm.state.InstanceState object at 0x7f07e5fec2e0>
+
+With this object we can see elements such as the :class:`.Mapper`::
+
+  >>> insp.mapper
+  <Mapper at 0x7f07e614ef50; User>
+
+The :class:`_orm.Session` to which the object is :term:`attached`, if any::
+
+  >>> insp.session
+  <sqlalchemy.orm.session.Session object at 0x7f07e614f160>
+
+Information about the current :ref:`persistence state <session_object_states>`
+for the object::
+
+  >>> insp.persistent
+  True
+  >>> insp.pending
+  False
+
+Attribute state information such as attributes that have not been loaded or
+:term:`lazy loaded` (assume ``addresses`` refers to a :func:`_orm.relationship`
+on the mapped class to a related class)::
+
+  >>> insp.unloaded
+  {'addresses'}
+
+Information regarding the current in-Python status of attributes, such as
+attributes that have not been modified since the last flush::
+
+  >>> insp.unmodified
+  {'nickname', 'name', 'fullname', 'id'}
+
+as well as specific history on modifications to attributes since the last flush::
+
+  >>> insp.attrs.nickname.value
+  'nickname'
+  >>> u1.nickname = 'new nickname'
+  >>> insp.attrs.nickname.history
+  History(added=['new nickname'], unchanged=(), deleted=['nickname'])
+
+.. seealso::
 
     :class:`.InstanceState`
+
+    :attr:`.InstanceState.attrs`
+
+    :class:`.AttributeState`
+
+
+.. _dataclasses: https://docs.python.org/3/library/dataclasses.html
+
+.. [1] When running under Python 2, a Python 2 "old style" class is the only
+       kind of class that isn't compatible.    When running code on Python 2,
+       all classes must extend from the Python ``object`` class.  Under
+       Python 3 this is always the case.
+
+.. [2] There is a legacy feature known as a "non primary mapper", where
+       additional :class:`_orm.Mapper` objects may be associated with a class
+       that's already mapped, however they don't apply instrumentation
+       to the class.  This feature is deprecated as of SQLAlchemy 1.3.
+
