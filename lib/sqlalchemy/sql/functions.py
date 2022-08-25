@@ -462,7 +462,8 @@ class FunctionElement(Executable, ColumnElement[_T], FromClause, Generative):
         return FunctionFilter(self, *criterion)
 
     def as_comparison(self, left_index, right_index):
-        """Interpret this expression as a boolean comparison between two values.
+        """Interpret this expression as a boolean comparison between two
+        values.
 
         This method is used for an ORM use case described at
         :ref:`relationship_custom_operator_sql_function`.
@@ -571,7 +572,7 @@ class FunctionElement(Executable, ColumnElement[_T], FromClause, Generative):
         in the columns or where clause, for a backend such as PostgreSQL.
 
         For a full table-valued expression, use the
-        :meth:`_function.FunctionElement.table_valued` method first to
+        :meth:`_functions.FunctionElement.table_valued` method first to
         establish named columns.
 
         e.g.::

@@ -113,6 +113,11 @@ exclude_patterns = ["build", "**/unreleased*/*", "**/*_include.rst"]
 
 autodoc_class_signature = "separated"
 
+autodoc_default_options = {
+    "exclude-members": "__new__",
+    "no-undoc-members": True,
+}
+
 # enable "annotation" indicator.  doesn't actually use this
 # link right now, it's just a png image
 zzzeeksphinx_annotation_key = "glossary#annotated-example"

@@ -472,8 +472,17 @@ class ReflectedIndex(TypedDict):
     name: Optional[str]
     """index name"""
 
-    column_names: List[str]
-    """column names which the index refers towards"""
+    column_names: List[Optional[str]]
+    """column names which the index refers towards.
+    An element of this list is ``None`` if it's an expression and is
+    returned in the ``expressions`` list.
+    """
+
+    expressions: NotRequired[List[str]]
+    """Expressions that compose the index. This list, when present, contains
+    both plain column names (that are also in ``column_names``) and
+    expressions (that are ``None`` in ``column_names``).
+    """
 
     unique: bool
     """whether or not the index has a unique flag"""
@@ -772,8 +781,22 @@ class Dialect(EventTarget):
 
     """
 
+    update_returning_multifrom: bool
+    """if the dialect supports RETURNING with UPDATE..FROM
+
+    .. versionadded:: 2.0
+
+    """
+
     delete_returning: bool
     """if the dialect supports RETURNING with DELETE
+
+    .. versionadded:: 2.0
+
+    """
+
+    delete_returning_multifrom: bool
+    """if the dialect supports RETURNING with DELETE..FROM
 
     .. versionadded:: 2.0
 
@@ -942,6 +965,10 @@ class Dialect(EventTarget):
 
     is_async: bool
     """Whether or not this dialect is intended for asyncio use."""
+
+    has_terminate: bool
+    """Whether or not this dialect has a separate "terminate" implementation
+    that does not block or require awaiting."""
 
     engine_config_types: Mapping[str, Any]
     """a mapping of string keys that can be in an engine config linked to
@@ -1756,6 +1783,23 @@ class Dialect(EventTarget):
 
         :param dbapi_connection: a DBAPI connection, typically
          proxied within a :class:`.ConnectionFairy`.
+
+        """
+
+        raise NotImplementedError()
+
+    def do_terminate(self, dbapi_connection: DBAPIConnection) -> None:
+        """Provide an implementation of ``connection.close()`` that tries as
+        much as possible to not block, given a DBAPI
+        connection.
+
+        In the vast majority of cases this just calls .close(), however
+        for some asyncio dialects may call upon different API features.
+
+        This hook is called by the :class:`_pool.Pool`
+        when a connection is being recycled or has been invalidated.
+
+        .. versionadded:: 1.4.41
 
         """
 

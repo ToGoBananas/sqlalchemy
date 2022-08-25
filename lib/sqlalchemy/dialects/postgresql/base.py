@@ -178,7 +178,7 @@ To set using per-connection execution options::
             # ... work with transaction
 
 There are also more options for isolation level configurations, such as
-"sub-engine" objects linked to a main :class:`.Engine` which each apply
+"sub-engine" objects linked to a main :class:`_engine.Engine` which each apply
 different isolation level settings.  See the discussion at
 :ref:`dbapi_autocommit` for background.
 
@@ -1317,134 +1317,6 @@ itself::
 .. versionadded:: 1.4.0b2
 
 
-ARRAY Types
------------
-
-The PostgreSQL dialect supports arrays, both as multidimensional column types
-as well as array literals:
-
-* :class:`_postgresql.ARRAY` - ARRAY datatype
-
-* :class:`_postgresql.array` - array literal
-
-* :func:`_postgresql.array_agg` - ARRAY_AGG SQL function
-
-* :class:`_postgresql.aggregate_order_by` - helper for PG's ORDER BY aggregate
-  function syntax.
-
-JSON Types
-----------
-
-The PostgreSQL dialect supports both JSON and JSONB datatypes, including
-psycopg2's native support and support for all of PostgreSQL's special
-operators:
-
-* :class:`_postgresql.JSON`
-
-* :class:`_postgresql.JSONB`
-
-HSTORE Type
------------
-
-The PostgreSQL HSTORE type as well as hstore literals are supported:
-
-* :class:`_postgresql.HSTORE` - HSTORE datatype
-
-* :class:`_postgresql.hstore` - hstore literal
-
-ENUM Types
-----------
-
-PostgreSQL has an independently creatable TYPE structure which is used
-to implement an enumerated type.   This approach introduces significant
-complexity on the SQLAlchemy side in terms of when this type should be
-CREATED and DROPPED.   The type object is also an independently reflectable
-entity.   The following sections should be consulted:
-
-* :class:`_postgresql.ENUM` - DDL and typing support for ENUM.
-
-* :meth:`.PGInspector.get_enums` - retrieve a listing of current ENUM types
-
-* :meth:`.postgresql.ENUM.create` , :meth:`.postgresql.ENUM.drop` - individual
-  CREATE and DROP commands for ENUM.
-
-.. _postgresql_array_of_enum:
-
-Using ENUM with ARRAY
-^^^^^^^^^^^^^^^^^^^^^
-
-The combination of ENUM and ARRAY is not directly supported by backend
-DBAPIs at this time.   Prior to SQLAlchemy 1.3.17, a special workaround
-was needed in order to allow this combination to work, described below.
-
-.. versionchanged:: 1.3.17 The combination of ENUM and ARRAY is now directly
-   handled by SQLAlchemy's implementation without any workarounds needed.
-
-.. sourcecode:: python
-
-    from sqlalchemy import TypeDecorator
-    from sqlalchemy.dialects.postgresql import ARRAY
-
-    class ArrayOfEnum(TypeDecorator):
-        impl = ARRAY
-
-        def bind_expression(self, bindvalue):
-            return sa.cast(bindvalue, self)
-
-        def result_processor(self, dialect, coltype):
-            super_rp = super(ArrayOfEnum, self).result_processor(
-                dialect, coltype)
-
-            def handle_raw_string(value):
-                inner = re.match(r"^{(.*)}$", value).group(1)
-                return inner.split(",") if inner else []
-
-            def process(value):
-                if value is None:
-                    return None
-                return super_rp(handle_raw_string(value))
-            return process
-
-E.g.::
-
-    Table(
-        'mydata', metadata,
-        Column('id', Integer, primary_key=True),
-        Column('data', ArrayOfEnum(ENUM('a', 'b, 'c', name='myenum')))
-
-    )
-
-This type is not included as a built-in type as it would be incompatible
-with a DBAPI that suddenly decides to support ARRAY of ENUM directly in
-a new version.
-
-.. _postgresql_array_of_json:
-
-Using JSON/JSONB with ARRAY
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Similar to using ENUM, prior to SQLAlchemy 1.3.17, for an ARRAY of JSON/JSONB
-we need to render the appropriate CAST.   Current psycopg2 drivers accommodate
-the result set correctly without any special steps.
-
-.. versionchanged:: 1.3.17 The combination of JSON/JSONB and ARRAY is now
-   directly handled by SQLAlchemy's implementation without any workarounds
-   needed.
-
-.. sourcecode:: python
-
-    class CastingArray(ARRAY):
-        def bind_expression(self, bindvalue):
-            return sa.cast(bindvalue, self)
-
-E.g.::
-
-    Table(
-        'mydata', metadata,
-        Column('id', Integer, primary_key=True),
-        Column('data', CastingArray(JSONB))
-    )
-
 
 """  # noqa: E501
 
@@ -1640,7 +1512,7 @@ colspecs = {
     sqltypes.ARRAY: _array.ARRAY,
     sqltypes.Interval: INTERVAL,
     sqltypes.Enum: ENUM,
-    sqltypes.JSON.JSONPathType: _json.JSONPathType,
+    sqltypes.JSON.JSONPathType: _json.JSONPATH,
     sqltypes.JSON: _json.JSON,
     UUID: PGUuid,
 }
@@ -1656,6 +1528,12 @@ ischema_names = {
     "daterange": _ranges.DATERANGE,
     "tsrange": _ranges.TSRANGE,
     "tstzrange": _ranges.TSTZRANGE,
+    "int4multirange": _ranges.INT4MULTIRANGE,
+    "int8multirange": _ranges.INT8MULTIRANGE,
+    "nummultirange": _ranges.NUMMULTIRANGE,
+    "datemultirange": _ranges.DATEMULTIRANGE,
+    "tsmultirange": _ranges.TSMULTIRANGE,
+    "tstzmultirange": _ranges.TSTZMULTIRANGE,
     "integer": INTEGER,
     "bigint": BIGINT,
     "smallint": SMALLINT,
@@ -2500,6 +2378,24 @@ class PGTypeCompiler(compiler.GenericTypeCompiler):
     def visit_JSONB(self, type_, **kw):
         return "JSONB"
 
+    def visit_INT4MULTIRANGE(self, type_, **kw):
+        return "INT4MULTIRANGE"
+
+    def visit_INT8MULTIRANGE(self, type_, **kw):
+        return "INT8MULTIRANGE"
+
+    def visit_NUMMULTIRANGE(self, type_, **kw):
+        return "NUMMULTIRANGE"
+
+    def visit_DATEMULTIRANGE(self, type_, **kw):
+        return "DATEMULTIRANGE"
+
+    def visit_TSMULTIRANGE(self, type_, **kw):
+        return "TSMULTIRANGE"
+
+    def visit_TSTZMULTIRANGE(self, type_, **kw):
+        return "TSTZMULTIRANGE"
+
     def visit_INT4RANGE(self, type_, **kw):
         return "INT4RANGE"
 
@@ -2606,6 +2502,12 @@ class PGTypeCompiler(compiler.GenericTypeCompiler):
             inner,
             count=1,
         )
+
+    def visit_json_path(self, type_, **kw):
+        return self.visit_JSONPATH(type_, **kw)
+
+    def visit_JSONPATH(self, type_, **kw):
+        return "JSONPATH"
 
 
 class PGIdentifierPreparer(compiler.IdentifierPreparer):
@@ -2924,6 +2826,8 @@ class PGDialect(default.DefaultDialect):
     update_returning = True
     delete_returning = True
     insert_returning = True
+    update_returning_multifrom = True
+    delete_returning_multifrom = True
 
     connection_characteristics = (
         default.DefaultDialect.connection_characteristics
@@ -4060,11 +3964,23 @@ class PGDialect(default.DefaultDialect):
             select(
                 idx_sq.c.indexrelid,
                 idx_sq.c.indrelid,
-                pg_catalog.pg_attribute.c.attname,
+                # NOTE: always using pg_get_indexdef is too slow so just
+                # invoke when the element is an expression
+                sql.case(
+                    (
+                        idx_sq.c.attnum == 0,
+                        pg_catalog.pg_get_indexdef(
+                            idx_sq.c.indexrelid, idx_sq.c.ord + 1, True
+                        ),
+                    ),
+                    else_=pg_catalog.pg_attribute.c.attname,
+                ).label("element"),
+                (idx_sq.c.attnum == 0).label("is_expr"),
             )
-            .select_from(pg_catalog.pg_attribute)
-            .join(
-                idx_sq,
+            .select_from(idx_sq)
+            .outerjoin(
+                # do not remove rows where idx_sq.c.attnum is 0
+                pg_catalog.pg_attribute,
                 sql.and_(
                     pg_catalog.pg_attribute.c.attnum == idx_sq.c.attnum,
                     pg_catalog.pg_attribute.c.attrelid == idx_sq.c.indrelid,
@@ -4079,7 +3995,10 @@ class PGDialect(default.DefaultDialect):
             select(
                 attr_sq.c.indexrelid,
                 attr_sq.c.indrelid,
-                sql.func.array_agg(attr_sq.c.attname).label("cols"),
+                sql.func.array_agg(attr_sq.c.element).label("elements"),
+                sql.func.array_agg(attr_sq.c.is_expr).label(
+                    "elements_is_expr"
+                ),
             )
             .group_by(attr_sq.c.indexrelid, attr_sq.c.indrelid)
             .subquery("idx_cols")
@@ -4095,19 +4014,27 @@ class PGDialect(default.DefaultDialect):
                 pg_catalog.pg_index.c.indrelid,
                 pg_class_index.c.relname.label("relname_index"),
                 pg_catalog.pg_index.c.indisunique,
-                pg_catalog.pg_index.c.indexprs,
                 pg_catalog.pg_constraint.c.conrelid.is_not(None).label(
                     "has_constraint"
                 ),
                 pg_catalog.pg_index.c.indoption,
                 pg_class_index.c.reloptions,
                 pg_catalog.pg_am.c.amname,
-                pg_catalog.pg_get_expr(
-                    pg_catalog.pg_index.c.indpred,
-                    pg_catalog.pg_index.c.indrelid,
+                sql.case(
+                    # pg_get_expr is very fast so this case has almost no
+                    # performance impact
+                    (
+                        pg_catalog.pg_index.c.indpred.is_not(None),
+                        pg_catalog.pg_get_expr(
+                            pg_catalog.pg_index.c.indpred,
+                            pg_catalog.pg_index.c.indrelid,
+                        ),
+                    ),
+                    else_=sql.null(),
                 ).label("filter_definition"),
                 indnkeyatts,
-                cols_sq.c.cols.label("index_cols"),
+                cols_sq.c.elements,
+                cols_sq.c.elements_is_expr,
             )
             .select_from(pg_catalog.pg_index)
             .where(
@@ -4178,38 +4105,43 @@ class PGDialect(default.DefaultDialect):
 
                     table_indexes = indexes[(schema, table_name)]
 
-                    if row["indexprs"]:
-                        tn = (
-                            table_name
-                            if schema is None
-                            else f"{schema}.{table_name}"
-                        )
-                        util.warn(
-                            "Skipped unsupported reflection of "
-                            f"expression-based index {index_name} of "
-                            f"table {tn}"
-                        )
-                        continue
-
-                    all_cols = row["index_cols"]
+                    all_elements = row["elements"]
+                    all_elements_is_expr = row["elements_is_expr"]
                     indnkeyatts = row["indnkeyatts"]
                     # "The number of key columns in the index, not counting any
                     # included columns, which are merely stored and do not
                     # participate in the index semantics"
-                    if indnkeyatts and all_cols[indnkeyatts:]:
+                    if indnkeyatts and len(all_elements) > indnkeyatts:
                         # this is a "covering index" which has INCLUDE columns
                         # as well as regular index columns
-                        inc_cols = all_cols[indnkeyatts:]
-                        idx_cols = all_cols[:indnkeyatts]
+                        inc_cols = all_elements[indnkeyatts:]
+                        idx_elements = all_elements[:indnkeyatts]
+                        idx_elements_is_expr = all_elements_is_expr[
+                            :indnkeyatts
+                        ]
+                        # postgresql does not support expression on included
+                        # columns as of v14: "ERROR: expressions are not
+                        # supported in included columns".
+                        assert all(
+                            not is_expr
+                            for is_expr in all_elements_is_expr[indnkeyatts:]
+                        )
                     else:
-                        idx_cols = all_cols
+                        idx_elements = all_elements
+                        idx_elements_is_expr = all_elements_is_expr
                         inc_cols = []
 
-                    index = {
-                        "name": index_name,
-                        "unique": row["indisunique"],
-                        "column_names": idx_cols,
-                    }
+                    index = {"name": index_name, "unique": row["indisunique"]}
+                    if any(idx_elements_is_expr):
+                        index["column_names"] = [
+                            None if is_expr else expr
+                            for expr, is_expr in zip(
+                                idx_elements, idx_elements_is_expr
+                            )
+                        ]
+                        index["expressions"] = idx_elements
+                    else:
+                        index["column_names"] = idx_elements
 
                     sorting = {}
                     for col_index, col_flags in enumerate(row["indoption"]):
@@ -4224,7 +4156,7 @@ class PGDialect(default.DefaultDialect):
                             if col_flags & 0x02:
                                 col_sorting += ("nulls_first",)
                         if col_sorting:
-                            sorting[idx_cols[col_index]] = col_sorting
+                            sorting[idx_elements[col_index]] = col_sorting
                     if sorting:
                         index["column_sorting"] = sorting
                     if row["has_constraint"]:

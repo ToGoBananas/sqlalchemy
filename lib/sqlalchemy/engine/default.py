@@ -143,6 +143,8 @@ class DefaultDialect(Dialect):
     insert_null_pk_still_autoincrements = False
     update_returning = False
     delete_returning = False
+    update_returning_multifrom = False
+    delete_returning_multifrom = False
     insert_returning = False
     insert_executemany_returning = False
 
@@ -234,6 +236,8 @@ class DefaultDialect(Dialect):
     requires_name_normalize = False
 
     is_async = False
+
+    has_terminate = False
 
     # TODO: this is not to be part of 2.0.  implement rudimentary binary
     # literals for SQLite, PostgreSQL, MySQL only within
@@ -618,6 +622,9 @@ class DefaultDialect(Dialect):
     def do_commit(self, dbapi_connection):
         dbapi_connection.commit()
 
+    def do_terminate(self, dbapi_connection):
+        self.do_close(dbapi_connection)
+
     def do_close(self, dbapi_connection):
         dbapi_connection.close()
 
@@ -902,6 +909,10 @@ class StrCompileDialect(DefaultDialect):
     ddl_compiler = compiler.DDLCompiler
     type_compiler_cls = compiler.StrSQLTypeCompiler
     preparer = compiler.IdentifierPreparer
+
+    insert_returning = True
+    update_returning = True
+    delete_returning = True
 
     supports_statement_cache = True
 
