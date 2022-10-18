@@ -59,19 +59,48 @@ real SQL tables that exist, or will exist, in a particular database::
     ...     def __repr__(self):
     ...         return f"Address(id={self.id!r}, email_address={self.email_address!r})"
 
-Above, the declarative mapping makes use of :class:`_schema.Column` objects
-to define the basic units of data storage that will be in the database.
-The :func:`_orm.relationship` construct defines linkages between two
-:term:`mapped` classes, ``User`` and ``Address`` above.
 
-The schema contains necessary elements such as primary key constraints set up
-by the :paramref:`_schema.Column.primary_key` parameter, a
-:term:`foreign key constraint` configured using :class:`_schema.ForeignKey`
-(which is used by :func:`_orm.relationship` as well), and datatypes for columns
-including :class:`_types.Integer` and :class:`_types.String`.
+The mapping starts with a base class, which above is called ``Base``, and is
+created by calling upon the :func:`_orm.declarative_base` function, which
+produces a new base class.
 
-More on table metadata and an intro to ORM declared mapping is in the
-Tutorial at :ref:`tutorial_working_with_metadata`.
+Individual mapped classes are then created by making subclasses of ``Base``.
+A mapped class typically refers to a single particular database table,
+the name of which is indicated by using the ``__tablename__`` class-level
+attribute.
+
+Next, columns that are part of the table are declared, by adding attributes
+linked to the :class:`_schema.Column` construct.  :class:`_schema.Column`
+describes all aspects of a database column, including typing
+information with type objects such as :class:`.Integer` and :class:`.String`
+as well as server defaults and
+constraint information, such as membership within the primary key and foreign
+keys.
+
+All ORM mapped classes require at least one column be declared as part of the
+primary key, typically by using the :paramref:`_schema.Column.primary_key`
+parameter on those :class:`_schema.Column` objects that should be part
+of the key.  In the above example, the ``User.id`` and ``Address.id``
+columns are marked as primary key.
+
+Taken together, the combination of a string table name as well as a list
+of column declarations is referred towards in SQLAlchemy as :term:`table metadata`.
+Setting up table metadata using both Core and ORM approaches is introduced
+in the :ref:`unified_tutorial` at :ref:`tutorial_working_with_metadata`.
+The above mapping is an example of what's referred towards as
+:ref:`Declarative Table <orm_declarative_table>`
+configuration.
+
+Other Declarative directives are available, most commonly
+the :func:`_orm.relationship` construct indicated above.  In contrast
+to the column-based attributes, :func:`_orm.relationship` denotes a linkage
+between two ORM classes.  In the above example, ``User.addresses`` links
+``User`` to ``Address``, and ``Address.user`` links ``Address`` to ``User``.
+The :func:`_orm.relationship` construct is introduced in the
+:ref:`unified_tutorial` at :ref:`tutorial_orm_related_objects`.
+
+Finally, the above example classes include a ``__repr__()`` method, which is
+not required but is useful for debugging.
 
 Create an Engine
 ------------------
@@ -134,7 +163,7 @@ Create Objects and Persist
 ---------------------------
 
 We are now ready to insert data in the database.  We accomplish this by
-creating instances of ``User`` and ``Address`` objects, which have
+creating instances of ``User`` and ``Address`` classes, which have
 an ``__init__()`` method already as established automatically by the
 declarative mapping process.  We then pass them
 to the database using an object called a :ref:`Session <tutorial_executing_orm_session>`,
@@ -249,10 +278,10 @@ construct creates joins using the :meth:`_sql.Select.join` method:
 .. sourcecode:: pycon+sql
 
     >>> stmt = (
-    ...  select(Address)
-    ...  .join(Address.user)
-    ...  .where(User.name == "sandy")
-    ...  .where(Address.email_address == "sandy@sqlalchemy.org")
+    ...     select(Address)
+    ...     .join(Address.user)
+    ...     .where(User.name == "sandy")
+    ...     .where(Address.email_address == "sandy@sqlalchemy.org")
     ... )
     >>> sandy_address = session.scalars(stmt).one()
     {opensql}SELECT address.id, address.email_address, address.user_id
@@ -291,9 +320,7 @@ address associated with "sandy", and also add a new email address to
     [...] ('patrick',)
     {stop}
 
-    >>> patrick.addresses.append(
-    ...     Address(email_address="patrickstar@sqlalchemy.org")
-    ... )
+    >>> patrick.addresses.append(Address(email_address="patrickstar@sqlalchemy.org"))
     {opensql}SELECT address.id AS address_id, address.email_address AS address_email_address, address.user_id AS address_user_id
     FROM address
     WHERE ? = address.user_id

@@ -107,7 +107,7 @@ where we acquired the :class:`_future.Connection` object:
     ...     conn.execute(text("CREATE TABLE some_table (x int, y int)"))
     ...     conn.execute(
     ...         text("INSERT INTO some_table (x, y) VALUES (:x, :y)"),
-    ...         [{"x": 1, "y": 1}, {"x": 2, "y": 4}]
+    ...         [{"x": 1, "y": 1}, {"x": 2, "y": 4}],
     ...     )
     ...     conn.commit()
     {opensql}BEGIN (implicit)
@@ -145,7 +145,7 @@ may be referred towards as **begin once**:
     >>> with engine.begin() as conn:
     ...     conn.execute(
     ...         text("INSERT INTO some_table (x, y) VALUES (:x, :y)"),
-    ...         [{"x": 6, "y": 8}, {"x": 9, "y": 10}]
+    ...         [{"x": 6, "y": 8}, {"x": 9, "y": 10}],
     ...     )
     {opensql}BEGIN (implicit)
     INSERT INTO some_table (x, y) VALUES (?, ?)
@@ -286,8 +286,8 @@ Below we illustrate a variety of ways to access rows.
       result = conn.execute(text("select x, y from some_table"))
 
       for dict_row in result.mappings():
-          x = dict_row['x']
-          y = dict_row['y']
+          x = dict_row["x"]
+          y = dict_row["y"]
 
   ..
 
@@ -316,12 +316,9 @@ construct accepts these using a colon format "``:y``".   The actual value for
 .. sourcecode:: pycon+sql
 
     >>> with engine.connect() as conn:
-    ...     result = conn.execute(
-    ...         text("SELECT x, y FROM some_table WHERE y > :y"),
-    ...         {"y": 2}
-    ...     )
+    ...     result = conn.execute(text("SELECT x, y FROM some_table WHERE y > :y"), {"y": 2})
     ...     for row in result:
-    ...        print(f"x: {row.x}  y: {row.y}")
+    ...         print(f"x: {row.x}  y: {row.y}")
     {opensql}BEGIN (implicit)
     SELECT x, y FROM some_table WHERE y > ?
     [...] (2,)
@@ -370,7 +367,7 @@ be invoked against each parameter set individually:
     >>> with engine.connect() as conn:
     ...     conn.execute(
     ...         text("INSERT INTO some_table (x, y) VALUES (:x, :y)"),
-    ...         [{"x": 11, "y": 12}, {"x": 13, "y": 14}]
+    ...         [{"x": 11, "y": 12}, {"x": 13, "y": 14}],
     ...     )
     ...     conn.commit()
     {opensql}BEGIN (implicit)
@@ -398,48 +395,6 @@ for this use case.
    however again when using the ORM, there is a different technique
    generally used for updating or deleting many individual rows separately.
 
-.. rst-class:: orm-addin
-
-.. _tutorial_bundling_parameters:
-
-Bundling Parameters with a Statement
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The two previous cases illustrate a series of parameters being passed to
-accompany a SQL statement.    For single-parameter statement executions,
-SQLAlchemy's use of parameters is in fact more often than not done by
-**bundling** the parameters with the statement itself, which is a primary
-feature of the SQL Expression Language and makes for queries that can be
-composed naturally while still making use of parameterization in all cases.
-This concept will be discussed in much more detail in the sections that follow;
-for a brief preview, the :func:`_sql.text` construct itself being part of the
-SQL Expression Language supports this feature by using the
-:meth:`_sql.TextClause.bindparams` method; this is a :term:`generative` method that
-returns a new copy of the SQL construct with additional state added, in this
-case the parameter values we want to pass along:
-
-
-.. sourcecode:: pycon+sql
-
-    >>> stmt = text("SELECT x, y FROM some_table WHERE y > :y ORDER BY x, y").bindparams(y=6)
-    >>> with engine.connect() as conn:
-    ...     result = conn.execute(stmt)
-    ...     for row in result:
-    ...        print(f"x: {row.x}  y: {row.y}")
-    {opensql}BEGIN (implicit)
-    SELECT x, y FROM some_table WHERE y > ? ORDER BY x, y
-    [...] (6,)
-    {stop}x: 6  y: 8
-    x: 9  y: 10
-    x: 11  y: 12
-    x: 13  y: 14
-    {opensql}ROLLBACK{stop}
-
-
-The interesting thing to note above is that even though we passed only a single
-argument, ``stmt``, to the :meth:`_future.Connection.execute` method, the
-execution of the statement illustrated both the SQL string as well as the
-separate parameter tuple.
 
 .. rst-class:: orm-addin
 
@@ -474,11 +429,11 @@ a context manager:
 
     >>> from sqlalchemy.orm import Session
 
-    >>> stmt = text("SELECT x, y FROM some_table WHERE y > :y ORDER BY x, y").bindparams(y=6)
+    >>> stmt = text("SELECT x, y FROM some_table WHERE y > :y ORDER BY x, y")
     >>> with Session(engine) as session:
-    ...     result = session.execute(stmt)
+    ...     result = session.execute(stmt, {"y": 6})
     ...     for row in result:
-    ...        print(f"x: {row.x}  y: {row.y}")
+    ...         print(f"x: {row.x}  y: {row.y}")
     {opensql}BEGIN (implicit)
     SELECT x, y FROM some_table WHERE y > ? ORDER BY x, y
     [...] (6,){stop}
@@ -489,7 +444,7 @@ a context manager:
     {opensql}ROLLBACK{stop}
 
 The example above can be compared to the example in the preceding section
-in :ref:`tutorial_bundling_parameters` - we directly replace the call to
+in :ref:`tutorial_sending_parameters` - we directly replace the call to
 ``with engine.connect() as conn`` with ``with Session(engine) as session``,
 and then make use of the :meth:`_orm.Session.execute` method just like we
 do with the :meth:`_future.Connection.execute` method.
@@ -504,7 +459,7 @@ our data:
     >>> with Session(engine) as session:
     ...     result = session.execute(
     ...         text("UPDATE some_table SET y=:y WHERE x=:x"),
-    ...         [{"x": 9, "y":11}, {"x": 13, "y": 15}]
+    ...         [{"x": 9, "y": 11}, {"x": 13, "y": 15}],
     ...     )
     ...     session.commit()
     {opensql}BEGIN (implicit)
