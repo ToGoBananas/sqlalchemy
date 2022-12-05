@@ -37,6 +37,7 @@ from ._typing import insp_is_aliased_class
 from ._typing import insp_is_mapper
 from ._typing import prop_is_relationship
 from .base import _class_to_mapper as _class_to_mapper
+from .base import _MappedAnnotationBase
 from .base import _never_set as _never_set  # noqa: F401
 from .base import _none_set as _none_set  # noqa: F401
 from .base import attribute_str as attribute_str  # noqa: F401
@@ -67,6 +68,7 @@ from ..sql import lambdas
 from ..sql import roles
 from ..sql import util as sql_util
 from ..sql import visitors
+from ..sql._typing import is_selectable
 from ..sql.annotation import SupportsCloneAnnotations
 from ..sql.base import ColumnCollection
 from ..sql.cache_key import HasCacheKey
@@ -76,8 +78,10 @@ from ..sql.elements import KeyedColumnElement
 from ..sql.selectable import FromClause
 from ..util.langhelpers import MemoizedSlots
 from ..util.typing import de_stringify_annotation
-from ..util.typing import is_origin_of
+from ..util.typing import eval_name_only
+from ..util.typing import is_origin_of_cls
 from ..util.typing import Literal
+from ..util.typing import typing_get_origin
 
 if typing.TYPE_CHECKING:
     from ._typing import _EntityType
@@ -88,7 +92,7 @@ if typing.TYPE_CHECKING:
     from .context import ORMCompileState
     from .mapper import Mapper
     from .query import Query
-    from .relationships import Relationship
+    from .relationships import RelationshipProperty
     from ..engine import Row
     from ..engine import RowMapping
     from ..sql._typing import _CE
@@ -132,7 +136,7 @@ class CascadeOptions(FrozenSet[str]):
     )
     _allowed_cascades = all_cascades
 
-    _viewonly_cascades = ["expunge", "all", "none", "refresh-expire"]
+    _viewonly_cascades = ["expunge", "all", "none", "refresh-expire", "merge"]
 
     __slots__ = (
         "save_update",
@@ -886,7 +890,7 @@ class AliasedInsp(
     def _with_polymorphic_factory(
         cls,
         base: Union[_O, Mapper[_O]],
-        classes: Iterable[_EntityType[Any]],
+        classes: Union[Literal["*"], Iterable[_EntityType[Any]]],
         selectable: Union[Literal[False, None], FromClause] = False,
         flat: bool = False,
         polymorphic_on: Optional[ColumnElement[Any]] = None,
@@ -1007,7 +1011,7 @@ class AliasedInsp(
         our_classes = util.to_set(
             mp.class_ for mp in self.with_polymorphic_mappers
         )
-        new_classes = set([mp.class_ for mp in other.with_polymorphic_mappers])
+        new_classes = {mp.class_ for mp in other.with_polymorphic_mappers}
         if our_classes == new_classes:
             return other
         else:
@@ -1274,8 +1278,7 @@ class LoaderCriteriaOption(CriteriaOption):
     def _all_mappers(self) -> Iterator[Mapper[Any]]:
 
         if self.entity:
-            for mp_ent in self.entity.mapper.self_and_descendants:
-                yield mp_ent
+            yield from self.entity.mapper.self_and_descendants
         else:
             assert self.root_entity
             stack = list(self.root_entity.__subclasses__())
@@ -1286,8 +1289,7 @@ class LoaderCriteriaOption(CriteriaOption):
                     inspection.inspect(subclass, raiseerr=False),
                 )
                 if ent:
-                    for mp in ent.mapper.self_and_descendants:
-                        yield mp
+                    yield from ent.mapper.self_and_descendants
                 else:
                     stack.extend(subclass.__subclasses__())
 
@@ -1313,7 +1315,10 @@ class LoaderCriteriaOption(CriteriaOption):
             crit = self.where_criteria  # type: ignore
         assert isinstance(crit, ColumnElement)
         return sql_util._deep_annotate(
-            crit, {"for_loader_criteria": self}, detect_subquery_cols=True
+            crit,
+            {"for_loader_criteria": self},
+            detect_subquery_cols=True,
+            ind_cols_on_fromclause=True,
         )
 
     def process_compile_state_replaced_entities(
@@ -1360,6 +1365,18 @@ def _inspect_mc(
         return mapper
 
 
+GenericAlias = type(List[Any])
+
+
+@inspection._inspects(GenericAlias)
+def _inspect_generic_alias(
+    class_: Type[_O],
+) -> Optional[Mapper[_O]]:
+
+    origin = cast("Type[_O]", typing_get_origin(class_))
+    return _inspect_mc(origin)
+
+
 @inspection._self_inspects
 class Bundle(
     ORMColumnsClauseRole[_T],
@@ -1378,8 +1395,6 @@ class Bundle(
     to override is that of how the set of expressions should be returned,
     allowing post-processing as well as custom return types, without
     involving ORM identity-mapped classes.
-
-    .. versionadded:: 0.9.0
 
     .. seealso::
 
@@ -1401,6 +1416,8 @@ class Bundle(
     is_bundle = True
 
     _propagate_attrs: _PropagateAttrsType = util.immutabledict()
+
+    proxy_set = util.EMPTY_SET  # type: ignore
 
     exprs: List[_ColumnsClauseElement]
 
@@ -1538,11 +1555,35 @@ class Bundle(
     ) -> Callable[[Row[Any]], Any]:
         """Produce the "row processing" function for this :class:`.Bundle`.
 
-        May be overridden by subclasses.
+        May be overridden by subclasses to provide custom behaviors when
+        results are fetched. The method is passed the statement object and a
+        set of "row processor" functions at query execution time; these
+        processor functions when given a result row will return the individual
+        attribute value, which can then be adapted into any kind of return data
+        structure.
 
-        .. seealso::
+        The example below illustrates replacing the usual :class:`.Row`
+        return structure with a straight Python dictionary::
 
-            :ref:`bundles` - includes an example of subclassing.
+            from sqlalchemy.orm import Bundle
+
+            class DictBundle(Bundle):
+                def create_row_processor(self, query, procs, labels):
+                    'Override create_row_processor to return values as
+                    dictionaries'
+
+                    def proc(row):
+                        return dict(
+                            zip(labels, (proc(row) for proc in procs))
+                        )
+                    return proc
+
+        A result from the above :class:`_orm.Bundle` will return dictionary
+        values::
+
+            bn = DictBundle('mybundle', MyClass.data1, MyClass.data2)
+            for row in session.execute(select(bn)).where(bn.c.data1 == 'd1'):
+                print(row.mybundle['data1'], row.mybundle['data2'])
 
         """
         keyed_tuple = result_tuple(labels, [() for l in labels])
@@ -1616,7 +1657,9 @@ class _ORMJoin(expression.Join):
 
         if isinstance(onclause, attributes.QueryableAttribute):
             if TYPE_CHECKING:
-                assert isinstance(onclause.comparator, Relationship.Comparator)
+                assert isinstance(
+                    onclause.comparator, RelationshipProperty.Comparator
+                )
             on_selectable = onclause.comparator._source_selectable()
             prop = onclause.property
             _extra_criteria += onclause._extra_criteria
@@ -1665,6 +1708,24 @@ class _ORMJoin(expression.Join):
                 onclause = pj
 
             self._target_adapter = target_adapter
+
+            # we don't use the normal coercions logic for _ORMJoin
+            # (probably should), so do some gymnastics to get the entity.
+            # logic here is for #8721, which was a major bug in 1.4
+            # for almost two years, not reported/fixed until 1.4.43 (!)
+            if is_selectable(left_info):
+                parententity = left_selectable._annotations.get(
+                    "parententity", None
+                )
+            elif insp_is_mapper(left_info) or insp_is_aliased_class(left_info):
+                parententity = left_info
+            else:
+                parententity = None
+
+            if parententity is not None:
+                self._annotations = self._annotations.union(
+                    {"parententity": parententity}
+                )
 
         augment_onclause = onclause is None and _extra_criteria
         expression.Join.__init__(self, left, right, onclause, isouter, full)
@@ -1791,7 +1852,7 @@ def with_parent(
       .. versionadded:: 1.2
 
     """
-    prop_t: Relationship[Any]
+    prop_t: RelationshipProperty[Any]
 
     if isinstance(prop, str):
         raise sa_exc.ArgumentError(
@@ -1963,58 +2024,126 @@ def _getitem(iterable_query: Query[Any], item: Any) -> Any:
 
 
 def _is_mapped_annotation(
-    raw_annotation: _AnnotationScanType, cls: Type[Any]
+    raw_annotation: _AnnotationScanType,
+    cls: Type[Any],
+    originating_cls: Type[Any],
 ) -> bool:
     try:
-        annotated = de_stringify_annotation(cls, raw_annotation)
+        annotated = de_stringify_annotation(
+            cls, raw_annotation, originating_cls.__module__
+        )
     except NameError:
+        # in most cases, at least within our own tests, we can raise
+        # here, which is more accurate as it prevents us from returning
+        # false negatives.  However, in the real world, try to avoid getting
+        # involved with end-user annotations that have nothing to do with us.
+        # see issue #8888 where we bypass using this function in the case
+        # that we want to detect an unresolvable Mapped[] type.
         return False
     else:
-        return is_origin_of(annotated, "Mapped", module="sqlalchemy.orm")
+        return is_origin_of_cls(annotated, _MappedAnnotationBase)
 
 
-def _cleanup_mapped_str_annotation(annotation: str) -> str:
+class _CleanupError(Exception):
+    pass
+
+
+def _cleanup_mapped_str_annotation(
+    annotation: str, originating_module: str
+) -> str:
     # fix up an annotation that comes in as the form:
     # 'Mapped[List[Address]]'  so that it instead looks like:
     # 'Mapped[List["Address"]]' , which will allow us to get
     # "Address" as a string
 
+    # additionally, resolve symbols for these names since this is where
+    # we'd have to do it
+
     inner: Optional[Match[str]]
 
     mm = re.match(r"^(.+?)\[(.+)\]$", annotation)
-    if mm and mm.group(1) == "Mapped":
-        stack = []
-        inner = mm
-        while True:
-            stack.append(inner.group(1))
-            g2 = inner.group(2)
-            inner = re.match(r"^(.+?)\[(.+)\]$", g2)
-            if inner is None:
-                stack.append(g2)
-                break
 
-        # stack: ['Mapped', 'List', 'Address']
-        if not re.match(r"""^["'].*["']$""", stack[-1]):
-            stripchars = "\"' "
-            stack[-1] = ", ".join(
-                f'"{elem.strip(stripchars)}"' for elem in stack[-1].split(",")
-            )
-            # stack: ['Mapped', 'List', '"Address"']
+    if not mm:
+        return annotation
 
-            annotation = "[".join(stack) + ("]" * (len(stack) - 1))
+    # ticket #8759.  Resolve the Mapped name to a real symbol.
+    # originally this just checked the name.
+    try:
+        obj = eval_name_only(mm.group(1), originating_module)
+    except NameError as ne:
+        raise _CleanupError(
+            f'For annotation "{annotation}", could not resolve '
+            f'container type "{mm.group(1)}".  '
+            "Please ensure this type is imported at the module level "
+            "outside of TYPE_CHECKING blocks"
+        ) from ne
+
+    try:
+        if issubclass(obj, _MappedAnnotationBase):
+            real_symbol = obj.__name__
+        else:
+            return annotation
+    except TypeError:
+        # avoid isinstance(obj, type) check, just catch TypeError
+        return annotation
+
+    # note: if one of the codepaths above didn't define real_symbol and
+    # then didn't return, real_symbol raises UnboundLocalError
+    # which is actually a NameError, and the calling routines don't
+    # notice this since they are catching NameError anyway.   Just in case
+    # this is being modified in the future, something to be aware of.
+
+    stack = []
+    inner = mm
+    while True:
+        stack.append(real_symbol if mm is inner else inner.group(1))
+        g2 = inner.group(2)
+        inner = re.match(r"^(.+?)\[(.+)\]$", g2)
+        if inner is None:
+            stack.append(g2)
+            break
+
+    # stacks we want to rewrite, that is, quote the last entry which
+    # we think is a relationship class name:
+    #
+    #   ['Mapped', 'List', 'Address']
+    #   ['Mapped', 'A']
+    #
+    # stacks we dont want to rewrite, which are generally MappedColumn
+    # use cases:
+    #
+    # ['Mapped', "'Optional[Dict[str, str]]'"]
+    # ['Mapped', 'dict[str, str] | None']
+
+    if (
+        # avoid already quoted symbols such as
+        # ['Mapped', "'Optional[Dict[str, str]]'"]
+        not re.match(r"""^["'].*["']$""", stack[-1])
+        # avoid further generics like Dict[] such as
+        # ['Mapped', 'dict[str, str] | None']
+        and not re.match(r".*\[.*\]", stack[-1])
+    ):
+        stripchars = "\"' "
+        stack[-1] = ", ".join(
+            f'"{elem.strip(stripchars)}"' for elem in stack[-1].split(",")
+        )
+
+        annotation = "[".join(stack) + ("]" * (len(stack) - 1))
+
     return annotation
 
 
 def _extract_mapped_subtype(
     raw_annotation: Optional[_AnnotationScanType],
     cls: type,
+    originating_module: str,
     key: str,
     attr_cls: Type[Any],
     required: bool,
     is_dataclass_field: bool,
     expect_mapped: bool = True,
     raiseerr: bool = True,
-) -> Optional[Union[type, str]]:
+) -> Optional[Tuple[Union[type, str], Optional[type]]]:
     """given an annotation, figure out if it's ``Mapped[something]`` and if
     so, return the ``something`` part.
 
@@ -2034,33 +2163,33 @@ def _extract_mapped_subtype(
 
     try:
         annotated = de_stringify_annotation(
-            cls, raw_annotation, _cleanup_mapped_str_annotation
+            cls,
+            raw_annotation,
+            originating_module,
+            _cleanup_mapped_str_annotation,
         )
+    except _CleanupError as ce:
+        raise sa_exc.ArgumentError(
+            f"Could not interpret annotation {raw_annotation}.  "
+            "Check that it uses names that are correctly imported at the "
+            "module level. See chained stack trace for more hints."
+        ) from ce
     except NameError as ne:
         if raiseerr and "Mapped[" in raw_annotation:  # type: ignore
             raise sa_exc.ArgumentError(
                 f"Could not interpret annotation {raw_annotation}.  "
-                "Check that it's not using names that might not be imported "
-                "at the module level.  See chained stack trace for more hints."
+                "Check that it uses names that are correctly imported at the "
+                "module level. See chained stack trace for more hints."
             ) from ne
 
         annotated = raw_annotation  # type: ignore
 
     if is_dataclass_field:
-        return annotated
+        return annotated, None
     else:
-        if not hasattr(annotated, "__origin__") or not is_origin_of(
-            annotated, "Mapped", module="sqlalchemy.orm"
+        if not hasattr(annotated, "__origin__") or not is_origin_of_cls(
+            annotated, _MappedAnnotationBase
         ):
-            anno_name = (
-                getattr(annotated, "__name__", None)
-                if not isinstance(annotated, str)
-                else None
-            )
-            if anno_name is None:
-                our_annotated_str = repr(annotated)
-            else:
-                our_annotated_str = anno_name
 
             if expect_mapped:
                 if getattr(annotated, "__origin__", None) is typing.ClassVar:
@@ -2069,36 +2198,29 @@ def _extract_mapped_subtype(
                 if not raiseerr:
                     return None
 
-                if attr_cls.__name__ == our_annotated_str or attr_cls is type(
-                    None
-                ):
-                    raise sa_exc.ArgumentError(
-                        f'Type annotation for "{cls.__name__}.{key}" '
-                        "should use the "
-                        f'syntax "Mapped[{our_annotated_str}]".  To leave '
-                        f"the attribute unmapped, use "
-                        f"ClassVar[{our_annotated_str}], assign a value to "
-                        f"the attribute, or "
-                        f"set __allow_unmapped__ = True on the class."
-                    )
-                else:
-                    raise sa_exc.ArgumentError(
-                        f'Type annotation for "{cls.__name__}.{key}" '
-                        "should use the "
-                        f'syntax "Mapped[{our_annotated_str}]" or '
-                        f'"{attr_cls.__name__}[{our_annotated_str}]".  To '
-                        f"leave the attribute unmapped, use "
-                        f"ClassVar[{our_annotated_str}], assign a value to "
-                        f"the attribute, or "
-                        f"set __allow_unmapped__ = True on the class."
-                    )
+                raise sa_exc.ArgumentError(
+                    f'Type annotation for "{cls.__name__}.{key}" '
+                    "can't be correctly interpreted for "
+                    "Annotated Declarative Table form.  ORM annotations "
+                    "should normally make use of the ``Mapped[]`` generic "
+                    "type, or other ORM-compatible generic type, as a "
+                    "container for the actual type, which indicates the "
+                    "intent that the attribute is mapped. "
+                    "Class variables that are not intended to be mapped "
+                    "by the ORM should use ClassVar[].  "
+                    "To allow Annotated Declarative to disregard legacy "
+                    "annotations which don't use Mapped[] to pass, set "
+                    '"__allow_unmapped__ = True" on the class or a '
+                    "superclass this class.",
+                    code="zlpr",
+                )
 
             else:
-                return annotated
+                return annotated, None
 
         if len(annotated.__args__) != 1:  # type: ignore
             raise sa_exc.ArgumentError(
                 "Expected sub-type for Mapped[] annotation"
             )
 
-        return annotated.__args__[0]  # type: ignore
+        return annotated.__args__[0], annotated.__origin__  # type: ignore

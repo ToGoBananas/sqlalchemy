@@ -1,4 +1,3 @@
-# coding: utf-8
 import datetime
 import decimal
 import importlib
@@ -511,9 +510,9 @@ class _UserDefinedTypeFixture:
             cache_ok = True
 
             def bind_processor(self, dialect):
-                impl_processor = super(MyDecoratedType, self).bind_processor(
-                    dialect
-                ) or (lambda value: value)
+                impl_processor = super().bind_processor(dialect) or (
+                    lambda value: value
+                )
 
                 def process(value):
                     if value is None:
@@ -523,7 +522,7 @@ class _UserDefinedTypeFixture:
                 return process
 
             def result_processor(self, dialect, coltype):
-                impl_processor = super(MyDecoratedType, self).result_processor(
+                impl_processor = super().result_processor(
                     dialect, coltype
                 ) or (lambda value: value)
 
@@ -577,9 +576,9 @@ class _UserDefinedTypeFixture:
             cache_ok = True
 
             def bind_processor(self, dialect):
-                impl_processor = super(MyUnicodeType, self).bind_processor(
-                    dialect
-                ) or (lambda value: value)
+                impl_processor = super().bind_processor(dialect) or (
+                    lambda value: value
+                )
 
                 def process(value):
                     if value is None:
@@ -590,7 +589,7 @@ class _UserDefinedTypeFixture:
                 return process
 
             def result_processor(self, dialect, coltype):
-                impl_processor = super(MyUnicodeType, self).result_processor(
+                impl_processor = super().result_processor(
                     dialect, coltype
                 ) or (lambda value: value)
 
@@ -1070,7 +1069,7 @@ class UserDefinedTest(
                 if dialect.name == "sqlite":
                     return String(50)
                 else:
-                    return super(MyType, self).load_dialect_impl(dialect)
+                    return super().load_dialect_impl(dialect)
 
         sl = dialects.sqlite.dialect()
         pg = dialects.postgresql.dialect()
@@ -1143,7 +1142,7 @@ class UserDefinedTest(
     def test_user_defined_dialect_specific_args(self):
         class MyType(types.UserDefinedType):
             def __init__(self, foo="foo", **kwargs):
-                super(MyType, self).__init__()
+                super().__init__()
                 self.foo = foo
                 self.dialect_specific_args = kwargs
 
@@ -3125,8 +3124,9 @@ class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
                 return "MYTYPE"
 
         with expect_raises_message(
-            NotImplementedError,
-            r"Don't know how to literal-quote value \[1, 2, 3\]",
+            exc.CompileError,
+            r"No literal value renderer is available for literal value "
+            r"\"\[1, 2, 3\]\" with datatype ARRAY",
         ):
             self.assert_compile(
                 select(literal([1, 2, 3], ARRAY(MyType()))),
@@ -3292,6 +3292,43 @@ class ExpressionTest(
                 )
             ],
         )
+
+    @testing.variation("secondary_adapt", [True, False])
+    @testing.variation("expression_type", ["literal", "right_side"])
+    def test_value_level_bind_hooks(
+        self, connection, metadata, secondary_adapt, expression_type
+    ):
+        """test new feature added in #8884, allowing custom value objects
+        to indicate the SQL type they should resolve towards.
+
+        """
+
+        class MyFoobarType(types.UserDefinedType):
+            if secondary_adapt:
+
+                def _resolve_for_literal(self, value):
+                    return String(value.length)
+
+        class Widget:
+            def __init__(self, length):
+                self.length = length
+
+            @property
+            def __sa_type_engine__(self):
+                return MyFoobarType()
+
+        if expression_type.literal:
+            expr = literal(Widget(52))
+        elif expression_type.right_side:
+            expr = (column("x", Integer) == Widget(52)).right
+        else:
+            assert False
+
+        if secondary_adapt:
+            is_(expr.type._type_affinity, String)
+            eq_(expr.type.length, 52)
+        else:
+            is_(expr.type._type_affinity, MyFoobarType)
 
     def test_grouped_bind_adapt(self):
         test_table = self.tables.test
@@ -3629,7 +3666,8 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
     def test_compile_err_formatting(self):
         with expect_raises_message(
             exc.CompileError,
-            r"Don't know how to render literal SQL value: \(1, 2, 3\)",
+            r"No literal value renderer is available for literal "
+            r"value \"\(1, 2, 3\)\" with datatype NULL",
         ):
             func.foo((1, 2, 3)).compile(compile_kwargs={"literal_binds": True})
 

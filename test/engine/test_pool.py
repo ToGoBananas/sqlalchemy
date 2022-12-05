@@ -9,8 +9,10 @@ from unittest.mock import patch
 import weakref
 
 import sqlalchemy as tsa
+from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy import pool
+from sqlalchemy import PoolResetState
 from sqlalchemy import select
 from sqlalchemy import testing
 from sqlalchemy.engine import default
@@ -1373,6 +1375,16 @@ class QueuePoolTest(PoolTestBase):
     def test_max_overflow(self):
         self._test_overflow(40, 5)
 
+    @testing.combinations(42, 0, -5, 1)
+    def test_unlimited(self, max_overflow):
+        p = self._queuepool_fixture(pool_size=0, max_overflow=max_overflow)
+        eq_(p.overflow(), 0)
+        c1 = p.connect()
+        c2 = p.connect()
+        eq_(p.overflow(), 0)
+        c1.close()
+        c2.close()
+
     def test_overflow_no_gc(self):
         p = self._queuepool_fixture(pool_size=2, max_overflow=2)
 
@@ -1398,8 +1410,8 @@ class QueuePoolTest(PoolTestBase):
         # two pooled connections unclosed.
 
         eq_(
-            set([c.close.call_count for c in strong_refs]),
-            set([1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0]),
+            {c.close.call_count for c in strong_refs},
+            {1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0},
         )
 
     def test_recycle(self):
@@ -1681,7 +1693,7 @@ class QueuePoolTest(PoolTestBase):
         class TrackQueuePool(pool.QueuePool):
             def __init__(self, *arg, **kw):
                 pools.append(self)
-                super(TrackQueuePool, self).__init__(*arg, **kw)
+                super().__init__(*arg, **kw)
 
         def creator():
             return slow_closing_connection.connect()
@@ -1899,13 +1911,142 @@ class ResetOnReturnTest(PoolTestBase):
             pool.QueuePool(creator=lambda: dbapi.connect("foo.db"), **kw),
         )
 
-    def test_plain_rollback(self):
+    def _engine_fixture(self, **kw):
+        dbapi = Mock()
+
+        return dbapi, create_engine(
+            "postgresql://",
+            module=dbapi,
+            creator=lambda: dbapi.connect("foo.db"),
+            _initialize=False,
+        )
+
+    @testing.combinations("detach", "invalidate", "return")
+    def test_custom(self, extra_step):
+        dbapi, p = self._fixture(reset_on_return=None)
+
+        @event.listens_for(p, "reset")
+        def custom_reset(dbapi_conn, record, reset_state):
+            dbapi_conn.special_reset_method(reset_state)
+
+        c1 = p.connect()
+
+        if extra_step == "detach":
+            c1.detach()
+        elif extra_step == "invalidate":
+            c1.invalidate()
+        c1.close()
+
+        special_event = mock.call.special_reset_method(
+            PoolResetState(
+                transaction_was_reset=False,
+                terminate_only=extra_step == "detach",
+                asyncio_safe=True,
+            )
+        )
+        if extra_step == "detach":
+            expected = [special_event, mock.call.close()]
+        elif extra_step == "invalidate":
+            expected = [mock.call.close()]
+        else:
+            expected = [special_event]
+        eq_(dbapi.connect().mock_calls, expected)
+
+        assert not dbapi.connect().rollback.called
+        assert not dbapi.connect().commit.called
+
+    @testing.combinations(True, False, argnames="assert_w_event")
+    @testing.combinations(True, False, argnames="use_engine_transaction")
+    def test_custom_via_engine(self, assert_w_event, use_engine_transaction):
+        dbapi, engine = self._engine_fixture(reset_on_return=None)
+
+        if assert_w_event:
+
+            @event.listens_for(engine, "reset")
+            def custom_reset(dbapi_conn, record, reset_state):
+                dbapi_conn.special_reset_method(reset_state)
+
+        c1 = engine.connect()
+        if use_engine_transaction:
+            c1.begin()
+        c1.close()
+        assert dbapi.connect().rollback.called
+
+        if assert_w_event:
+            special_event = mock.call.special_reset_method(
+                PoolResetState(
+                    transaction_was_reset=use_engine_transaction,
+                    terminate_only=False,
+                    asyncio_safe=True,
+                )
+            )
+
+            if use_engine_transaction:
+                expected = [mock.call.rollback(), special_event]
+            else:
+                expected = [special_event, mock.call.rollback()]
+            eq_(dbapi.connect().mock_calls, expected)
+
+    @testing.combinations(True, False, argnames="assert_w_event")
+    def test_plain_rollback(self, assert_w_event):
         dbapi, p = self._fixture(reset_on_return="rollback")
+
+        if assert_w_event:
+
+            @event.listens_for(p, "reset")
+            def custom_reset(dbapi_conn, record, reset_state):
+                dbapi_conn.special_reset_method(reset_state)
 
         c1 = p.connect()
         c1.close()
         assert dbapi.connect().rollback.called
         assert not dbapi.connect().commit.called
+
+        if assert_w_event:
+            special_event = mock.call.special_reset_method(
+                PoolResetState(
+                    transaction_was_reset=False,
+                    terminate_only=False,
+                    asyncio_safe=True,
+                )
+            )
+
+            expected = [special_event, mock.call.rollback()]
+            eq_(dbapi.connect().mock_calls, expected)
+
+    @testing.combinations(True, False, argnames="assert_w_event")
+    @testing.combinations(True, False, argnames="use_engine_transaction")
+    def test_plain_rollback_via_engine(
+        self, assert_w_event, use_engine_transaction
+    ):
+        dbapi, engine = self._engine_fixture(reset_on_return="rollback")
+
+        if assert_w_event:
+
+            @event.listens_for(engine, "reset")
+            def custom_reset(dbapi_conn, record, reset_state):
+                dbapi_conn.special_reset_method(reset_state)
+
+        c1 = engine.connect()
+        if use_engine_transaction:
+            c1.begin()
+        c1.close()
+        assert dbapi.connect().rollback.called
+
+        if assert_w_event:
+            special_event = mock.call.special_reset_method(
+                PoolResetState(
+                    transaction_was_reset=use_engine_transaction,
+                    terminate_only=False,
+                    asyncio_safe=True,
+                )
+            )
+
+            if use_engine_transaction:
+                expected = [mock.call.rollback(), special_event]
+            else:
+                expected = [special_event, mock.call.rollback()]
+            eq_(dbapi.connect().mock_calls, expected)
 
     def test_plain_commit(self):
         dbapi, p = self._fixture(reset_on_return="commit")

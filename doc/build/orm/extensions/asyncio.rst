@@ -30,7 +30,9 @@ Asyncio Platform Installation Notes (Including Apple M1)
 
 The asyncio extension requires Python 3 only. It also depends
 upon the `greenlet <https://pypi.org/project/greenlet/>`_ library. This
-dependency is installed by default on common machine platforms including::
+dependency is installed by default on common machine platforms including:
+
+.. sourcecode:: text
 
     x86_64 aarch64 ppc64le amd64 win32
 
@@ -44,7 +46,9 @@ To install SQLAlchemy while ensuring the ``greenlet`` dependency is present
 regardless of what platform is in use, the
 ``[asyncio]`` `setuptools extra <https://packaging.python.org/en/latest/tutorials/installing-packages/#installing-setuptools-extras>`_
 may be installed
-as follows, which will include also instruct ``pip`` to install ``greenlet``::
+as follows, which will include also instruct ``pip`` to install ``greenlet``:
+
+.. sourcecode:: text
 
   pip install sqlalchemy[asyncio]
 
@@ -142,17 +146,19 @@ illustrates a complete example including mapper and session configuration::
 
     import asyncio
 
-    from sqlalchemy import (
-        Column,
-        DateTime,
-        ForeignKey,
-        Integer,
-        String,
-        func,
-        select,
-    )
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-    from sqlalchemy.orm import DeclarativeBase, relationship, selectinload
+    from sqlalchemy import DateTime
+    from sqlalchemy import ForeignKey
+    from sqlalchemy import func
+    from sqlalchemy import Integer
+    from sqlalchemy import select
+    from sqlalchemy import String
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import mapped_column
+    from sqlalchemy.orm import relationship
+    from sqlalchemy.orm import selectinload
+
 
     class Base(DeclarativeBase):
         pass
@@ -239,15 +245,6 @@ then used in a Python asynchronous context manager (i.e. ``async with:``
 statement) so that it is automatically closed at the end of the block; this is
 equivalent to calling the :meth:`_asyncio.AsyncSession.close` method.
 
-.. note:: :class:`_asyncio.AsyncSession` uses SQLAlchemy's future mode, which
-   has several potentially breaking changes.  One such change is the new
-   default behavior of ``cascade_backrefs`` is ``False``, which may affect
-   how related objects are saved to the database.
-
-   .. seealso::
-
-     :ref:`change_5150`
-
 
 .. _asyncio_orm_avoid_lazyloads:
 
@@ -328,14 +325,12 @@ Other guidelines include:
   setting, which means that the :meth:`.AsyncSession.refresh` method will
   expire the attributes on related objects, but not necessarily refresh those
   related objects assuming eager loading is not configured within the
-  :func:`_orm.relationship`, leaving them in an expired state.   A future
-  release may introduce the ability to indicate eager loader options when
-  invoking :meth:`.Session.refresh` and/or :meth:`.AsyncSession.refresh`.
+  :func:`_orm.relationship`, leaving them in an expired state.
 
 * Appropriate loader options should be employed for :func:`_orm.deferred`
   columns, if used at all, in addition to that of :func:`_orm.relationship`
-  constructs as noted above.  See :ref:`deferred` for background on
-  deferred column loading.
+  constructs as noted above.  See :ref:`orm_queryguide_column_deferral` for
+  background on deferred column loading.
 
 .. _dynamic_asyncio:
 
@@ -348,10 +343,12 @@ Other guidelines include:
 
       user = await session.get(User, 42)
       addresses = (await session.scalars(user.addresses.statement)).all()
-      stmt = user.addresses.statement.where(
-          Address.email_address.startswith("patrick")
-      )
+      stmt = user.addresses.statement.where(Address.email_address.startswith("patrick"))
       addresses_filter = (await session.scalars(stmt)).all()
+
+  The :ref:`write only <write_only_relationship>` technique, introduced in
+  version 2.0 of SQLAlchemy, is fully compatible with asyncio and should be
+  preferred.
 
   .. seealso::
 
@@ -509,6 +506,11 @@ asyncio-facing APIs:
   :class:`_asyncio.AsyncSession` class, use the :class:`_orm.Session` class as
   the target.
 
+* To register at the :class:`_orm.sessionmaker` level, combine an explicit
+  :class:`_orm.sessionmaker` with an :class:`_asyncio.async_sessionmaker`
+  using :paramref:`_asyncio.async_sessionmaker.sync_session_class`, and
+  associate events with the :class:`_orm.sessionmaker`.
+
 When working within an event handler that is within an asyncio context, objects
 like the :class:`_engine.Connection` continue to work in their usual
 "synchronous" way without requiring ``await`` or ``async`` usage; when messages
@@ -518,17 +520,24 @@ are passed a DBAPI level connection, such as :meth:`_events.PoolEvents.connect`,
 the object is a :term:`pep-249` compliant "connection" object which will adapt
 sync-style calls into the asyncio driver.
 
+Examples of Event Listeners with Async Engines / Sessions / Sessionmakers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 Some examples of sync style event handlers associated with async-facing API
-constructs are illustrated below::
+constructs are illustrated below:
+
+* **Core Events on AsyncEngine**
+
+  In this example, we access the :attr:`_asyncio.AsyncEngine.sync_engine`
+  attribute of :class:`_asyncio.AsyncEngine` as the target for
+  :class:`.ConnectionEvents` and :class:`.PoolEvents`::
 
     import asyncio
 
-    from sqlalchemy import event, text
+    from sqlalchemy import event
+    from sqlalchemy import text
     from sqlalchemy.engine import Engine
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-    from sqlalchemy.orm import Session
-
-    ## Core events ##
+    from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine("postgresql+asyncpg://scott:tiger@localhost:5432/test")
 
@@ -556,7 +565,37 @@ constructs are illustrated below::
         print("before execute!")
 
 
-    ## ORM events ##
+    async def go():
+        async with engine.connect() as conn:
+            await conn.execute(text("select 1"))
+        await engine.dispose()
+
+
+    asyncio.run(go())
+
+  Output:
+
+  .. sourcecode:: text
+
+    New DBAPI connection: <AdaptedConnection <asyncpg.connection.Connection object at 0x7f33f9b16960>>
+    execute from event
+    before execute!
+
+
+* **ORM Events on AsyncSession**
+
+  In this example, we access :attr:`_asyncio.AsyncSession.sync_session` as the
+  target for :class:`_orm.SessionEvents`::
+
+    import asyncio
+
+    from sqlalchemy import event
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.orm import Session
+
+    engine = create_async_engine("postgresql+asyncpg://scott:tiger@localhost:5432/test")
 
     session = AsyncSession(engine)
 
@@ -590,15 +629,50 @@ constructs are illustrated below::
 
     asyncio.run(go())
 
+  Output:
 
-The above example prints something along the lines of::
+  .. sourcecode:: text
 
-    New DBAPI connection: <AdaptedConnection <asyncpg.connection.Connection ...>>
-    execute from event
-    before execute!
     before commit!
     execute from event
     after commit!
+
+
+* **ORM Events on async_sessionmaker**
+
+  For this use case, we make a :class:`_orm.sessionmaker` as the event target,
+  then assign it to the :class:`_asyncio.async_sessionmaker` using
+  the :paramref:`_asyncio.async_sessionmaker.sync_session_class` parameter::
+
+    import asyncio
+
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from sqlalchemy.orm import sessionmaker
+
+    sync_maker = sessionmaker()
+    maker = async_sessionmaker(sync_session_class=sync_maker)
+
+
+    @event.listens_for(sync_maker, "before_commit")
+    def before_commit(session):
+        print("before commit")
+
+
+    async def main():
+        async_session = maker()
+
+        await async_session.commit()
+
+
+    asyncio.run(main())
+
+  Output:
+
+  .. sourcecode:: text
+
+    before commit
+
 
 .. topic:: asyncio and events, two opposites
 
@@ -611,7 +685,9 @@ The above example prints something along the lines of::
     place on the **exterior** of SQLAlchemy's usual flow from end-user API to
     DBAPI function.
 
-    The flow of messaging may be visualized as follows::
+    The flow of messaging may be visualized as follows:
+
+    .. sourcecode:: text
 
          SQLAlchemy    SQLAlchemy        SQLAlchemy          SQLAlchemy   plain
           asyncio      asyncio           ORM/Core            asyncio      asyncio
@@ -678,10 +754,12 @@ value will be invoked after being returned::
 
 
     @event.listens_for(engine.sync_engine, "connect")
-    def register_custom_types(dbapi_connection, ...):
+    def register_custom_types(dbapi_connection, *args):
         dbapi_connection.run_async(
             lambda connection: connection.set_type_codec(
-                "MyCustomType", encoder, decoder, ...
+                "MyCustomType",
+                encoder,
+                decoder,  # ...
             )
         )
 
@@ -780,14 +858,14 @@ the usual ``await`` keywords are necessary, including for the
 :meth:`_asyncio.async_scoped_session.remove` method::
 
     async def some_function(some_async_session, some_object):
-       # use the AsyncSession directly
-       some_async_session.add(some_object)
+        # use the AsyncSession directly
+        some_async_session.add(some_object)
 
-       # use the AsyncSession via the context-local proxy
-       await AsyncScopedSession.commit()
+        # use the AsyncSession via the context-local proxy
+        await AsyncScopedSession.commit()
 
-       # "remove" the current proxied AsyncSession for the local context
-       await AsyncScopedSession.remove()
+        # "remove" the current proxied AsyncSession for the local context
+        await AsyncScopedSession.remove()
 
 .. versionadded:: 1.4.19
 

@@ -30,6 +30,7 @@ from typing import Tuple
 from typing import Type
 
 
+py312 = sys.version_info >= (3, 12)
 py311 = sys.version_info >= (3, 11)
 py310 = sys.version_info >= (3, 10)
 py39 = sys.version_info >= (3, 9)
@@ -40,6 +41,7 @@ cpython = platform.python_implementation() == "CPython"
 win32 = sys.platform.startswith("win")
 osx = sys.platform.startswith("darwin")
 arm = "aarch" in platform.machine().lower()
+is64bit = platform.architecture()[0] == "64bit"
 
 has_refcount_gc = bool(cpython)
 
@@ -62,11 +64,11 @@ def inspect_getfullargspec(func: Callable[..., Any]) -> FullArgSpec:
     if inspect.ismethod(func):
         func = func.__func__
     if not inspect.isfunction(func):
-        raise TypeError("{!r} is not a Python function".format(func))
+        raise TypeError(f"{func!r} is not a Python function")
 
     co = func.__code__
     if not inspect.iscode(co):
-        raise TypeError("{!r} is not a code object".format(co))
+        raise TypeError(f"{co!r} is not a code object")
 
     nargs = co.co_argcount
     names = co.co_varnames
@@ -109,6 +111,29 @@ else:
         a = a.copy()
         a.update(b)
         return a
+
+
+if py310:
+    anext_ = anext
+else:
+
+    _NOT_PROVIDED = object()
+    from collections.abc import AsyncIterator
+
+    async def anext_(async_iterator, default=_NOT_PROVIDED):
+        """vendored from https://github.com/python/cpython/pull/8895"""
+
+        if not isinstance(async_iterator, AsyncIterator):
+            raise TypeError(
+                f"anext expected an AsyncIterator, got {type(async_iterator)}"
+            )
+        anxt = type(async_iterator).__anext__
+        try:
+            return await anxt(async_iterator)
+        except StopAsyncIteration:
+            if default is _NOT_PROVIDED:
+                raise
+            return default
 
 
 def importlib_metadata_get(group):

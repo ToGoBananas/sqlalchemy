@@ -1,4 +1,3 @@
-# coding: utf-8
 """Tests unitofwork operations."""
 
 import datetime
@@ -23,6 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.persistence import _sort_states
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
+from sqlalchemy.testing import config
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_true
@@ -31,6 +31,7 @@ from sqlalchemy.testing.assertsql import AllOf
 from sqlalchemy.testing.assertsql import CompiledSQL
 from sqlalchemy.testing.assertsql import Conditional
 from sqlalchemy.testing.fixtures import fixture_session
+from sqlalchemy.testing.provision import normalize_sequence
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 from sqlalchemy.util import OrderedDict
@@ -1110,7 +1111,7 @@ class DefaultTest(fixtures.MappedTest):
                 Column(
                     "secondary_id",
                     Integer,
-                    sa.Sequence("sec_id_seq"),
+                    normalize_sequence(config, sa.Sequence("sec_id_seq")),
                     unique=True,
                 )
             )
@@ -2563,7 +2564,7 @@ class ManyToManyTest(_fixtures.FixtureTest):
         session = fixture_session()
 
         objects = []
-        _keywords = dict([(k.name, k) for k in session.query(Keyword)])
+        _keywords = {k.name: k for k in session.query(Keyword)}
 
         for elem in data[1:]:
             item = Item(description=elem["description"])
@@ -2795,7 +2796,7 @@ class ManyToManyTest(_fixtures.FixtureTest):
         session = fixture_session()
 
         def fixture():
-            _kw = dict([(k.name, k) for k in session.query(Keyword)])
+            _kw = {k.name: k for k in session.query(Keyword)}
             for n in (
                 "big",
                 "green",
@@ -2868,12 +2869,14 @@ class SaveTest2(_fixtures.FixtureTest):
                 testing.db.dialect.insert_executemany_returning,
                 [
                     CompiledSQL(
-                        "INSERT INTO users (name) VALUES (:name)",
+                        "INSERT INTO users (name) VALUES (:name) "
+                        "RETURNING users.id",
                         [{"name": "u1"}, {"name": "u2"}],
                     ),
                     CompiledSQL(
                         "INSERT INTO addresses (user_id, email_address) "
-                        "VALUES (:user_id, :email_address)",
+                        "VALUES (:user_id, :email_address) "
+                        "RETURNING addresses.id",
                         [
                             {"user_id": 1, "email_address": "a1"},
                             {"user_id": 2, "email_address": "a2"},
@@ -3228,7 +3231,7 @@ class RowSwitchTest(fixtures.MappedTest):
                     t5t7.select(),
                 )
             ),
-            set([(1, 1), (1, 2)]),
+            {(1, 1), (1, 2)},
         )
         eq_(
             list(
@@ -3509,7 +3512,7 @@ class NoRowInsertedTest(fixtures.TestBase):
     @testing.fixture
     def null_server_default_fixture(self, registry, connection):
         @registry.mapped
-        class MyClass(object):
+        class MyClass:
             __tablename__ = "my_table"
 
             id = Column(Integer, primary_key=True)
@@ -3523,7 +3526,7 @@ class NoRowInsertedTest(fixtures.TestBase):
         ):
             if statement.startswith("INSERT"):
                 if statement.endswith("RETURNING my_table.id"):
-                    if executemany:
+                    if executemany and isinstance(parameters, list):
                         # remove some rows, so the count is wrong
                         parameters = parameters[0:1]
                     else:
@@ -3672,7 +3675,7 @@ class EnsurePKSortableTest(fixtures.MappedTest):
 
         class T3(cls.Basic):
             def __str__(self):
-                return "T3(id={})".format(self.id)
+                return f"T3(id={self.id})"
 
     @classmethod
     def setup_mappers(cls):

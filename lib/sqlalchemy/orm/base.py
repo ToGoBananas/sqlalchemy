@@ -31,7 +31,7 @@ from ._typing import insp_is_mapper
 from .. import exc as sa_exc
 from .. import inspection
 from .. import util
-from ..sql import roles
+from ..sql.elements import SQLColumnExpression
 from ..sql.elements import SQLCoreOperations
 from ..util import FastIntFlag
 from ..util.langhelpers import TypingOnly
@@ -42,14 +42,17 @@ if typing.TYPE_CHECKING:
     from ._typing import _ExternalEntityType
     from ._typing import _InternalEntityType
     from .attributes import InstrumentedAttribute
+    from .dynamic import AppenderQuery
     from .instrumentation import ClassManager
     from .interfaces import PropComparator
     from .mapper import Mapper
     from .state import InstanceState
     from .util import AliasedClass
+    from .writeonly import WriteOnlyCollection
     from ..sql._typing import _ColumnExpressionArgument
     from ..sql._typing import _InfoType
     from ..sql.elements import ColumnElement
+    from ..sql.operators import OperatorType
 
 _T = TypeVar("_T", bound=Any)
 
@@ -75,7 +78,7 @@ class LoaderCallableStatus(Enum):
     """
 
     ATTR_EMPTY = 3
-    """Symbol used internally to indicate an attribute had no callable.""",
+    """Symbol used internally to indicate an attribute had no callable."""
 
     NO_VALUE = 4
     """Symbol which may be placed as the 'previous' value of an attribute,
@@ -168,6 +171,13 @@ class PassiveFlag(FastIntFlag):
     PASSIVE_ONLY_PERSISTENT = PASSIVE_OFF ^ NON_PERSISTENT_OK
     "PASSIVE_OFF ^ NON_PERSISTENT_OK"
 
+    PASSIVE_MERGE = PASSIVE_OFF | NO_RAISE
+    """PASSIVE_OFF | NO_RAISE
+
+    Symbol used specifically for session.merge() and similar cases
+
+    """
+
 
 (
     NO_CHANGE,
@@ -186,7 +196,8 @@ class PassiveFlag(FastIntFlag):
     PASSIVE_NO_FETCH,
     PASSIVE_NO_FETCH_RELATED,
     PASSIVE_ONLY_PERSISTENT,
-) = tuple(PassiveFlag)
+    PASSIVE_MERGE,
+) = PassiveFlag.__members__.values()
 
 DEFAULT_MANAGER_ATTR = "_sa_class_manager"
 DEFAULT_STATE_ATTR = "_sa_instance_state"
@@ -210,11 +221,11 @@ EXT_CONTINUE, EXT_STOP, EXT_SKIP, NO_KEY = tuple(EventConstants)
 
 class RelationshipDirection(Enum):
     """enumeration which indicates the 'direction' of a
-    :class:`_orm.Relationship`.
+    :class:`_orm.RelationshipProperty`.
 
     :class:`.RelationshipDirection` is accessible from the
     :attr:`_orm.Relationship.direction` attribute of
-    :class:`_orm.Relationship`.
+    :class:`_orm.RelationshipProperty`.
 
     """
 
@@ -726,7 +737,45 @@ class ORMDescriptor(Generic[_T], TypingOnly):
             ...
 
 
-class Mapped(ORMDescriptor[_T], roles.TypedColumnsClauseRole[_T], TypingOnly):
+class _MappedAnnotationBase(Generic[_T], TypingOnly):
+    """common class for Mapped and similar ORM container classes.
+
+    these are classes that can appear on the left side of an ORM declarative
+    mapping, containing a mapped class or in some cases a collection
+    surrounding a mapped class.
+
+    """
+
+    __slots__ = ()
+
+
+class SQLORMExpression(
+    SQLORMOperations[_T], SQLColumnExpression[_T], TypingOnly
+):
+    """A type that may be used to indicate any ORM-level attribute or
+    object that acts in place of one, in the context of SQL expression
+    construction.
+
+    :class:`.SQLORMExpression` extends from the Core
+    :class:`.SQLColumnExpression` to add additional SQL methods that are ORM
+    specific, such as :meth:`.PropComparator.of_type`, and is part of the bases
+    for :class:`.InstrumentedAttribute`. It may be used in :pep:`484` typing to
+    indicate arguments or return values that should behave as ORM-level
+    attribute expressions.
+
+    .. versionadded:: 2.0.0b4
+
+
+    """
+
+    __slots__ = ()
+
+
+class Mapped(
+    SQLORMExpression[_T],
+    ORMDescriptor[_T],
+    _MappedAnnotationBase[_T],
+):
     """Represent an ORM mapped attribute on a mapped class.
 
     This class represents the complete descriptor interface for any class
@@ -795,10 +844,123 @@ class Mapped(ORMDescriptor[_T], roles.TypedColumnsClauseRole[_T], TypingOnly):
             ...
 
 
-class _MappedAttribute(Mapped[_T], TypingOnly):
+class _MappedAttribute(Generic[_T], TypingOnly):
     """Mixin for attributes which should be replaced by mapper-assigned
     attributes.
 
     """
 
     __slots__ = ()
+
+
+class _DeclarativeMapped(Mapped[_T], _MappedAttribute[_T]):
+    """Mixin for :class:`.MapperProperty` subclasses that allows them to
+    be compatible with ORM-annotated declarative mappings.
+
+    """
+
+    __slots__ = ()
+
+    # MappedSQLExpression, Relationship, Composite etc. dont actually do
+    # SQL expression behavior.  yet there is code that compares them with
+    # __eq__(), __ne__(), etc.   Since #8847 made Mapped even more full
+    # featured including ColumnOperators, we need to have those methods
+    # be no-ops for these objects, so return NotImplemented to fall back
+    # to normal comparison behavior.
+    def operate(self, op: OperatorType, *other: Any, **kwargs: Any) -> Any:
+        return NotImplemented
+
+    __sa_operate__ = operate
+
+    def reverse_operate(
+        self, op: OperatorType, other: Any, **kwargs: Any
+    ) -> Any:
+        return NotImplemented
+
+
+class DynamicMapped(_MappedAnnotationBase[_T]):
+    """Represent the ORM mapped attribute type for a "dynamic" relationship.
+
+    The :class:`_orm.DynamicMapped` type annotation may be used in an
+    :ref:`Annotated Declarative Table <orm_declarative_mapped_column>` mapping
+    to indicate that the ``lazy="dynamic"`` loader strategy should be used
+    for a particular :func:`_orm.relationship`.
+
+    .. legacy::  The "dynamic" lazy loader strategy is the legacy form of what
+       is now the "write_only" strategy described in the section
+       :ref:`write_only_relationship`.
+
+    E.g.::
+
+        class User(Base):
+            __tablename__ = "user"
+            id: Mapped[int] = mapped_column(primary_key=True)
+            addresses: DynamicMapped[Address] = relationship(
+                cascade="all,delete-orphan"
+            )
+
+    See the section :ref:`dynamic_relationship` for background.
+
+    .. versionadded:: 2.0
+
+    .. seealso::
+
+        :ref:`dynamic_relationship` - complete background
+
+        :class:`.WriteOnlyMapped` - fully 2.0 style version
+
+    """
+
+    __slots__ = ()
+
+    if TYPE_CHECKING:
+
+        def __get__(
+            self, instance: Optional[object], owner: Any
+        ) -> AppenderQuery[_T]:
+            ...
+
+        def __set__(self, instance: Any, value: typing.Collection[_T]) -> None:
+            ...
+
+
+class WriteOnlyMapped(_MappedAnnotationBase[_T]):
+    """Represent the ORM mapped attribute type for a "write only" relationship.
+
+    The :class:`_orm.WriteOnlyMapped` type annotation may be used in an
+    :ref:`Annotated Declarative Table <orm_declarative_mapped_column>` mapping
+    to indicate that the ``lazy="write_only"`` loader strategy should be used
+    for a particular :func:`_orm.relationship`.
+
+    E.g.::
+
+        class User(Base):
+            __tablename__ = "user"
+            id: Mapped[int] = mapped_column(primary_key=True)
+            addresses: WriteOnlyMapped[Address] = relationship(
+                cascade="all,delete-orphan"
+            )
+
+    See the section :ref:`write_only_relationship` for background.
+
+    .. versionadded:: 2.0
+
+    .. seealso::
+
+        :ref:`write_only_relationship` - complete background
+
+        :class:`.DynamicMapped` - includes legacy :class:`_orm.Query` support
+
+    """
+
+    __slots__ = ()
+
+    if TYPE_CHECKING:
+
+        def __get__(
+            self, instance: Optional[object], owner: Any
+        ) -> WriteOnlyCollection[_T]:
+            ...
+
+        def __set__(self, instance: Any, value: typing.Collection[_T]) -> None:
+            ...

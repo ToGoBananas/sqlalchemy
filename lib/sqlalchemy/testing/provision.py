@@ -167,7 +167,7 @@ def _generate_driver_urls(url, extra_drivers):
     extra_drivers.discard(main_driver)
 
     url = generate_driver_url(url, main_driver, "")
-    yield str(url)
+    yield url
 
     for drv in list(extra_drivers):
 
@@ -183,7 +183,7 @@ def _generate_driver_urls(url, extra_drivers):
         if new_url:
             extra_drivers.remove(drv)
 
-            yield str(new_url)
+            yield new_url
 
 
 @register.init
@@ -459,3 +459,29 @@ def set_default_schema_on_connection(cfg, dbapi_connection, schema_name):
         "backend does not implement a schema name set function: %s"
         % (cfg.db.url,)
     )
+
+
+@register.init
+def upsert(cfg, table, returning, set_lambda=None):
+    """return the backends insert..on conflict / on dupe etc. construct.
+
+    while we should add a backend-neutral upsert construct as well, such as
+    insert().upsert(), it's important that we continue to test the
+    backend-specific insert() constructs since if we do implement
+    insert().upsert(), that would be using a different codepath for the things
+    we need to test like insertmanyvalues, etc.
+
+    """
+    raise NotImplementedError(
+        f"backend does not include an upsert implementation: {cfg.db.url}"
+    )
+
+
+@register.init
+def normalize_sequence(cfg, sequence):
+    """Normalize sequence parameters for dialect that don't start with 1
+    by default.
+
+    The default implementation does nothing
+    """
+    return sequence

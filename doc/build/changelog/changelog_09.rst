@@ -1708,15 +1708,15 @@
         ad-hoc keyword arguments within the :attr:`.Index.kwargs` collection,
         after construction::
 
-            idx = Index('a', 'b')
-            idx.kwargs['mysql_someargument'] = True
+            idx = Index("a", "b")
+            idx.kwargs["mysql_someargument"] = True
 
         To suit the use case of allowing custom arguments at construction time,
         the :meth:`.DialectKWArgs.argument_for` method now allows this registration::
 
-            Index.argument_for('mysql', 'someargument', False)
+            Index.argument_for("mysql", "someargument", False)
 
-            idx = Index('a', 'b', mysql_someargument=True)
+            idx = Index("a", "b", mysql_someargument=True)
 
         .. seealso::
 
@@ -2647,11 +2647,11 @@
         :tags: bug, engine
         :tickets: 2873
 
-        The :func:`_sa.create_engine` routine and the related
-        :func:`.make_url` function no longer considers the ``+`` sign
-        to be a space within the password field.  The parsing has been
-        adjusted to match RFC 1738 exactly, in that both ``username``
-        and ``password`` expect only ``:``, ``@``, and ``/`` to be
+        The :func:`_sa.create_engine` routine and the related :func:`.make_url`
+        function no longer considers the ``+`` sign to be a space within the
+        password field. The parsing in this area has been adjusted to match
+        more closely to how RFC 1738 handles these tokens, in that both
+        ``username`` and ``password`` expect only ``:``, ``@``, and ``/`` to be
         encoded.
 
         .. seealso::

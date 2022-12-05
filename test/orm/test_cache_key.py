@@ -8,11 +8,14 @@ from sqlalchemy import Integer
 from sqlalchemy import literal_column
 from sqlalchemy import null
 from sqlalchemy import select
+from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy import testing
 from sqlalchemy import text
 from sqlalchemy import true
 from sqlalchemy import update
+from sqlalchemy import util
+from sqlalchemy.ext.declarative import ConcreteBase
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import Bundle
 from sqlalchemy.orm import defaultload
@@ -37,12 +40,15 @@ from sqlalchemy.sql.visitors import InternalTraversal
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
+from sqlalchemy.testing import int_within_variance
 from sqlalchemy.testing import ne_
+from sqlalchemy.testing.fixtures import DeclarativeMappedTest
 from sqlalchemy.testing.fixtures import fixture_session
+from sqlalchemy.testing.util import count_cache_key_tuples
+from sqlalchemy.testing.util import total_size
 from test.orm import _fixtures
 from .inheritance import _poly_fixtures
 from .test_query import QueryTest
-from ..sql.test_compare import CacheKeyFixture
 
 
 def stmt_20(*elements):
@@ -52,7 +58,7 @@ def stmt_20(*elements):
     )
 
 
-class CacheKeyTest(CacheKeyFixture, _fixtures.FixtureTest):
+class CacheKeyTest(fixtures.CacheKeyFixture, _fixtures.FixtureTest):
     run_setup_mappers = "once"
     run_inserts = None
     run_deletes = None
@@ -409,13 +415,13 @@ class CacheKeyTest(CacheKeyFixture, _fixtures.FixtureTest):
         """test for issue discovered in #7394"""
 
         @registry.mapped
-        class User2(object):
+        class User2:
             __table__ = self.tables.users
 
             name_syn = synonym("name")
 
         @registry.mapped
-        class Address2(object):
+        class Address2:
             __table__ = self.tables.addresses
 
             name_syn = synonym("email_address")
@@ -591,7 +597,7 @@ class CacheKeyTest(CacheKeyFixture, _fixtures.FixtureTest):
         )
 
 
-class PolyCacheKeyTest(CacheKeyFixture, _poly_fixtures._Polymorphic):
+class PolyCacheKeyTest(fixtures.CacheKeyFixture, _poly_fixtures._Polymorphic):
     run_setup_mappers = "once"
     run_inserts = None
     run_deletes = None
@@ -1038,3 +1044,86 @@ class CompositeTest(fixtures.MappedTest):
         )
 
         eq_(stmt._generate_cache_key(), stmt2._generate_cache_key())
+
+
+class EmbeddedSubqTest(
+    fixtures.RemoveORMEventsGlobally, DeclarativeMappedTest
+):
+    """test #8790.
+
+    it's expected that cache key structures will change, this test is here
+    testing something fairly similar to the issue we had (though vastly
+    smaller scale) so we mostly want to look for surprise jumps here.
+
+    """
+
+    @classmethod
+    def setup_classes(cls):
+        Base = cls.DeclarativeBasic
+
+        class Employee(ConcreteBase, Base):
+            __tablename__ = "employee"
+            id = Column(Integer, primary_key=True)
+            name = Column(String(50))
+
+            __mapper_args__ = {
+                "polymorphic_identity": "employee",
+                "concrete": True,
+            }
+
+        class Manager(Employee):
+            __tablename__ = "manager"
+            id = Column(Integer, primary_key=True)
+            name = Column(String(50))
+            manager_data = Column(String(40))
+
+            __mapper_args__ = {
+                "polymorphic_identity": "manager",
+                "concrete": True,
+            }
+
+        class Engineer(Employee):
+            __tablename__ = "engineer"
+            id = Column(Integer, primary_key=True)
+            name = Column(String(50))
+            engineer_info = Column(String(40))
+
+            __mapper_args__ = {
+                "polymorphic_identity": "engineer",
+                "concrete": True,
+            }
+
+        Base.registry.configure()
+
+    @testing.combinations(
+        "tuples", ("memory", testing.requires.is64bit), argnames="assert_on"
+    )
+    def test_cache_key_gen(self, assert_on):
+        Employee = self.classes.Employee
+
+        e1 = aliased(Employee)
+        e2 = aliased(Employee)
+
+        subq = select(e1).union_all(select(e2)).subquery()
+
+        anno = aliased(Employee, subq)
+
+        stmt = select(anno)
+
+        ck = stmt._generate_cache_key()
+
+        if assert_on == "tuples":
+            # before the fix for #8790 this was 700
+            int_within_variance(142, count_cache_key_tuples(ck), 0.05)
+
+        elif assert_on == "memory":
+            # before the fix for #8790 this was 55154
+
+            if util.py312:
+                testing.skip_test("python platform not available")
+            elif util.py311:
+                int_within_variance(39996, total_size(ck), 0.05)
+            elif util.py310:
+                int_within_variance(29796, total_size(ck), 0.05)
+            else:
+                testing.skip_test("python platform not available")

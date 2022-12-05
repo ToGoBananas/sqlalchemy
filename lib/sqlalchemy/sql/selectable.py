@@ -105,8 +105,8 @@ and_ = BooleanClauseList.and_
 _T = TypeVar("_T", bound=Any)
 
 if TYPE_CHECKING:
-    import sqlalchemy
     from ._typing import _ColumnExpressionArgument
+    from ._typing import _ColumnExpressionOrStrLabelArgument
     from ._typing import _FromClauseArgument
     from ._typing import _JoinTargetArgument
     from ._typing import _MAYBE_ENTITY
@@ -130,6 +130,7 @@ if TYPE_CHECKING:
     from .cache_key import _CacheKeyTraversalType
     from .compiler import SQLCompiler
     from .dml import Delete
+    from .dml import Insert
     from .dml import Update
     from .elements import KeyedColumnElement
     from .elements import Label
@@ -1301,12 +1302,12 @@ class Join(roles.DMLTableRole, FromClause):
         # run normal _copy_internals.  the clones for
         # left and right will come from the clone function's
         # cache
-        super(Join, self)._copy_internals(clone=clone, **kw)
+        super()._copy_internals(clone=clone, **kw)
 
         self._reset_memoizations()
 
     def _refresh_for_new_column(self, column: ColumnElement[Any]) -> None:
-        super(Join, self)._refresh_for_new_column(column)
+        super()._refresh_for_new_column(column)
         self.left._refresh_for_new_column(column)
         self.right._refresh_for_new_column(column)
 
@@ -1467,7 +1468,7 @@ class Join(roles.DMLTableRole, FromClause):
         # "consider_as_foreign_keys".
         if consider_as_foreign_keys:
             for const in list(constraints):
-                if set(f.parent for f in const.elements) != set(
+                if {f.parent for f in const.elements} != set(
                     consider_as_foreign_keys
                 ):
                     del constraints[const]
@@ -1475,7 +1476,7 @@ class Join(roles.DMLTableRole, FromClause):
         # if still multiple constraints, but
         # they all refer to the exact same end result, use it.
         if len(constraints) > 1:
-            dedupe = set(tuple(crit) for crit in constraints.values())
+            dedupe = {tuple(crit) for crit in constraints.values()}
             if len(dedupe) == 1:
                 key = list(constraints)[0]
                 constraints = {key: constraints[key]}
@@ -1621,7 +1622,7 @@ class AliasedReturnsRows(NoInit, NamedFromClause):
         self.name = name
 
     def _refresh_for_new_column(self, column: ColumnElement[Any]) -> None:
-        super(AliasedReturnsRows, self)._refresh_for_new_column(column)
+        super()._refresh_for_new_column(column)
         self.element._refresh_for_new_column(column)
 
     def _populate_column_collection(self):
@@ -1654,7 +1655,7 @@ class AliasedReturnsRows(NoInit, NamedFromClause):
     ) -> None:
         existing_element = self.element
 
-        super(AliasedReturnsRows, self)._copy_internals(clone=clone, **kw)
+        super()._copy_internals(clone=clone, **kw)
 
         # the element clone is usually against a Table that returns the
         # same object.  don't reset exported .c. collections and other
@@ -1752,7 +1753,7 @@ class TableValuedAlias(LateralFromClause, Alias):
         table_value_type=None,
         joins_implicitly=False,
     ):
-        super(TableValuedAlias, self)._init(selectable, name=name)
+        super()._init(selectable, name=name)
 
         self.joins_implicitly = joins_implicitly
         self._tableval_type = (
@@ -1959,7 +1960,7 @@ class TableSample(FromClauseAlias):
 
         self.sampling = sampling
         self.seed = seed
-        super(TableSample, self)._init(selectable, name=name)
+        super()._init(selectable, name=name)
 
     def _get_method(self):
         return self.sampling
@@ -2044,7 +2045,7 @@ class CTE(
             self._prefixes = _prefixes
         if _suffixes:
             self._suffixes = _suffixes
-        super(CTE, self)._init(selectable, name=name)
+        super()._init(selectable, name=name)
 
     def _populate_column_collection(self):
         if self._cte_alias is not None:
@@ -2052,9 +2053,7 @@ class CTE(
         else:
             self.element._generate_fromclause_column_proxies(self)
 
-    def alias(
-        self, name: Optional[str] = None, flat: bool = False
-    ) -> NamedFromClause:
+    def alias(self, name: Optional[str] = None, flat: bool = False) -> CTE:
         """Return an :class:`_expression.Alias` of this
         :class:`_expression.CTE`.
 
@@ -2078,7 +2077,7 @@ class CTE(
             _suffixes=self._suffixes,
         )
 
-    def union(self, *other):
+    def union(self, *other: _SelectStatementForCompoundArgument) -> CTE:
         r"""Return a new :class:`_expression.CTE` with a SQL ``UNION``
         of the original CTE against the given selectables provided
         as positional arguments.
@@ -2107,7 +2106,7 @@ class CTE(
             _suffixes=self._suffixes,
         )
 
-    def union_all(self, *other):
+    def union_all(self, *other: _SelectStatementForCompoundArgument) -> CTE:
         r"""Return a new :class:`_expression.CTE` with a SQL ``UNION ALL``
         of the original CTE against the given selectables provided
         as positional arguments.
@@ -2193,7 +2192,9 @@ class SelectsRows(ReturnsRows):
     _label_style: SelectLabelStyle = LABEL_STYLE_NONE
 
     def _generate_columns_plus_names(
-        self, anon_for_dupe_key: bool
+        self,
+        anon_for_dupe_key: bool,
+        cols: Optional[_SelectIterable] = None,
     ) -> List[_ColumnsPlusNames]:
         """Generate column names as rendered in a SELECT statement by
         the compiler.
@@ -2204,7 +2205,9 @@ class SelectsRows(ReturnsRows):
         _column_naming_convention as well.
 
         """
-        cols = self._all_selected_columns
+
+        if cols is None:
+            cols = self._all_selected_columns
 
         key_naming_convention = SelectState._column_naming_convention(
             self._label_style
@@ -2923,6 +2926,7 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
             InternalTraversal.dp_fromclause_canonical_column_collection,
         ),
         ("name", InternalTraversal.dp_string),
+        ("schema", InternalTraversal.dp_string),
     ]
 
     _is_table = True
@@ -2940,7 +2944,7 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
         return None
 
     def __init__(self, name: str, *columns: ColumnClause[Any], **kw: Any):
-        super(TableClause, self).__init__()
+        super().__init__()
         self.name = name
         self._columns = DedupeColumnCollection()
         self.primary_key = ColumnSet()  # type: ignore
@@ -2996,7 +3000,7 @@ class TableClause(roles.DMLTableRole, Immutable, NamedFromClause):
         c.table = self
 
     @util.preload_module("sqlalchemy.sql.dml")
-    def insert(self) -> sqlalchemy.sql.expression.Insert:
+    def insert(self) -> Insert:
         """Generate an :func:`_expression.insert` construct against this
         :class:`_expression.TableClause`.
 
@@ -3122,7 +3126,7 @@ class ForUpdateArg(ClauseElement):
 SelfValues = typing.TypeVar("SelfValues", bound="Values")
 
 
-class Values(Generative, LateralFromClause):
+class Values(roles.InElementRole, Generative, LateralFromClause):
     """Represent a ``VALUES`` construct that can be used as a FROM element
     in a statement.
 
@@ -3151,7 +3155,7 @@ class Values(Generative, LateralFromClause):
         name: Optional[str] = None,
         literal_binds: bool = False,
     ):
-        super(Values, self).__init__()
+        super().__init__()
         self._column_args = columns
         if name is None:
             self._unnamed = True
@@ -3223,8 +3227,7 @@ class Values(Generative, LateralFromClause):
     @_generative
     def data(self: SelfValues, values: List[Tuple[Any, ...]]) -> SelfValues:
         """Return a new :class:`_expression.Values` construct,
-        adding the given data
-        to the data list.
+        adding the given data to the data list.
 
         E.g.::
 
@@ -3239,6 +3242,15 @@ class Values(Generative, LateralFromClause):
         self._data += (values,)
         return self
 
+    def scalar_values(self) -> ScalarValues:
+        """Returns a scalar ``VALUES`` construct that can be used as a
+        COLUMN element in a statement.
+
+        .. versionadded:: 2.0.0b4
+
+        """
+        return ScalarValues(self._column_args, self._data, self.literal_binds)
+
     def _populate_column_collection(self) -> None:
         for c in self._column_args:
             self._columns.add(c)
@@ -3247,6 +3259,46 @@ class Values(Generative, LateralFromClause):
     @util.ro_non_memoized_property
     def _from_objects(self) -> List[FromClause]:
         return [self]
+
+
+class ScalarValues(roles.InElementRole, GroupedElement, ColumnElement[Any]):
+    """Represent a scalar ``VALUES`` construct that can be used as a
+    COLUMN element in a statement.
+
+    The :class:`_expression.ScalarValues` object is created from the
+    :meth:`_expression.Values.scalar_values` method. It's also
+    automatically generated when a :class:`_expression.Values` is used in
+    an ``IN`` or ``NOT IN`` condition.
+
+    .. versionadded:: 2.0.0b4
+
+    """
+
+    __visit_name__ = "scalar_values"
+
+    _traverse_internals: _TraverseInternalsType = [
+        ("_column_args", InternalTraversal.dp_clauseelement_list),
+        ("_data", InternalTraversal.dp_dml_multi_values),
+        ("literal_binds", InternalTraversal.dp_boolean),
+    ]
+
+    def __init__(
+        self,
+        columns: Sequence[ColumnClause[Any]],
+        data: Tuple[List[Tuple[Any, ...]], ...],
+        literal_binds: bool,
+    ):
+        super().__init__()
+        self._column_args = columns
+        self._data = data
+        self.literal_binds = literal_binds
+
+    @property
+    def _column_types(self):
+        return [col.type for col in self._column_args]
+
+    def __clause_element__(self):
+        return self
 
 
 SelfSelectBase = TypeVar("SelfSelectBase", bound=Any)
@@ -3309,6 +3361,15 @@ class SelectBase(
         .. versionadded:: 1.4
 
         """
+        raise NotImplementedError()
+
+    def _generate_fromclause_column_proxies(
+        self,
+        subquery: FromClause,
+        proxy_compound_columns: Optional[
+            Iterable[Sequence[ColumnElement[Any]]]
+        ] = None,
+    ) -> None:
         raise NotImplementedError()
 
     @util.ro_non_memoized_property
@@ -3616,9 +3677,15 @@ class SelectStatementGrouping(GroupedElement, SelectBase):
     #    return self.element._generate_columns_plus_names(anon_for_dupe_key)
 
     def _generate_fromclause_column_proxies(
-        self, subquery: FromClause
+        self,
+        subquery: FromClause,
+        proxy_compound_columns: Optional[
+            Iterable[Sequence[ColumnElement[Any]]]
+        ] = None,
     ) -> None:
-        self.element._generate_fromclause_column_proxies(subquery)
+        self.element._generate_fromclause_column_proxies(
+            subquery, proxy_compound_columns=proxy_compound_columns
+        )
 
     @util.ro_non_memoized_property
     def _all_selected_columns(self) -> _SelectIterable:
@@ -4080,9 +4147,10 @@ class GenerativeSelect(SelectBase, Generative):
     def order_by(
         self: SelfGenerativeSelect,
         __first: Union[
-            Literal[None, _NoArg.NO_ARG], _ColumnExpressionArgument[Any]
+            Literal[None, _NoArg.NO_ARG],
+            _ColumnExpressionOrStrLabelArgument[Any],
         ] = _NoArg.NO_ARG,
-        *clauses: _ColumnExpressionArgument[Any],
+        *clauses: _ColumnExpressionOrStrLabelArgument[Any],
     ) -> SelfGenerativeSelect:
         r"""Return a new selectable with the given list of ORDER BY
         criteria applied.
@@ -4091,9 +4159,10 @@ class GenerativeSelect(SelectBase, Generative):
 
             stmt = select(table).order_by(table.c.id, table.c.name)
 
-        All existing ORDER BY criteria may be cancelled by passing
-        ``None`` by itself.  New ORDER BY criteria may then be added by
-        invoking :meth:`_sql.Select.order_by` again, e.g.::
+        Calling this method multiple times is equivalent to calling it once
+        with all the clauses concatenated. All existing ORDER BY criteria may
+        be cancelled by passing ``None`` by itself.  New ORDER BY criteria may
+        then be added by invoking :meth:`_orm.Query.order_by` again, e.g.::
 
             # will erase all ORDER BY and ORDER BY new_col alone
             stmt = stmt.order_by(None).order_by(new_col)
@@ -4123,9 +4192,10 @@ class GenerativeSelect(SelectBase, Generative):
     def group_by(
         self: SelfGenerativeSelect,
         __first: Union[
-            Literal[None, _NoArg.NO_ARG], _ColumnExpressionArgument[Any]
+            Literal[None, _NoArg.NO_ARG],
+            _ColumnExpressionOrStrLabelArgument[Any],
         ] = _NoArg.NO_ARG,
-        *clauses: _ColumnExpressionArgument[Any],
+        *clauses: _ColumnExpressionOrStrLabelArgument[Any],
     ) -> SelfGenerativeSelect:
         r"""Return a new selectable with the given list of GROUP BY
         criterion applied.
@@ -4167,7 +4237,7 @@ class CompoundSelectState(CompileState):
         # TODO: this is hacky and slow
         hacky_subquery = self.statement.subquery()
         hacky_subquery.named_with_column = False
-        d = dict((c.key, c) for c in hacky_subquery.c)
+        d = {c.key: c for c in hacky_subquery.c}
         return d, d, d
 
 
@@ -4302,41 +4372,53 @@ class CompoundSelect(HasCompileState, GenerativeSelect, ExecutableReturnsRows):
         return self
 
     def _generate_fromclause_column_proxies(
-        self, subquery: FromClause
+        self,
+        subquery: FromClause,
+        proxy_compound_columns: Optional[
+            Iterable[Sequence[ColumnElement[Any]]]
+        ] = None,
     ) -> None:
 
         # this is a slightly hacky thing - the union exports a
         # column that resembles just that of the *first* selectable.
         # to get at a "composite" column, particularly foreign keys,
         # you have to dig through the proxies collection which we
-        # generate below.  We may want to improve upon this, such as
-        # perhaps _make_proxy can accept a list of other columns
-        # that are "shared" - schema.column can then copy all the
-        # ForeignKeys in. this would allow the union() to have all
-        # those fks too.
+        # generate below.
         select_0 = self.selects[0]
 
         if self._label_style is not LABEL_STYLE_DEFAULT:
             select_0 = select_0.set_label_style(self._label_style)
-        select_0._generate_fromclause_column_proxies(subquery)
 
         # hand-construct the "_proxies" collection to include all
         # derived columns place a 'weight' annotation corresponding
         # to how low in the list of select()s the column occurs, so
         # that the corresponding_column() operation can resolve
         # conflicts
-
-        for subq_col, select_cols in zip(
-            subquery.c._all_columns,
-            zip(*[s.selected_columns for s in self.selects]),
-        ):
-            subq_col._proxies = [
-                c._annotate({"weight": i + 1})
-                for (i, c) in enumerate(select_cols)
+        extra_col_iterator = zip(
+            *[
+                [
+                    c._annotate(dd)
+                    for c in stmt._all_selected_columns
+                    if is_column_element(c)
+                ]
+                for dd, stmt in [
+                    ({"weight": i + 1}, stmt)
+                    for i, stmt in enumerate(self.selects)
+                ]
             ]
+        )
+
+        # the incoming proxy_compound_columns can be present also if this is
+        # a compound embedded in a compound.  it's probably more appropriate
+        # that we generate new weights local to this nested compound, though
+        # i haven't tried to think what it means for compound nested in
+        # compound
+        select_0._generate_fromclause_column_proxies(
+            subquery, proxy_compound_columns=extra_col_iterator
+        )
 
     def _refresh_for_new_column(self, column):
-        super(CompoundSelect, self)._refresh_for_new_column(column)
+        super()._refresh_for_new_column(column)
         for select in self.selects:
             select._refresh_for_new_column(column)
 
@@ -4656,16 +4738,16 @@ class SelectState(util.MemoizedSlots, CompileState):
         Dict[str, ColumnElement[Any]],
         Dict[str, ColumnElement[Any]],
     ]:
-        with_cols: Dict[str, ColumnElement[Any]] = dict(
-            (c._tq_label or c.key, c)  # type: ignore
+        with_cols: Dict[str, ColumnElement[Any]] = {
+            c._tq_label or c.key: c  # type: ignore
             for c in self.statement._all_selected_columns
             if c._allow_label_resolve
-        )
-        only_froms: Dict[str, ColumnElement[Any]] = dict(
-            (c.key, c)  # type: ignore
+        }
+        only_froms: Dict[str, ColumnElement[Any]] = {
+            c.key: c  # type: ignore
             for c in _select_iterables(self.froms)
             if c._allow_label_resolve
-        )
+        }
         only_cols: Dict[str, ColumnElement[Any]] = with_cols.copy()
         for key, value in only_froms.items():
             with_cols.setdefault(key, value)
@@ -5067,7 +5149,7 @@ class Select(
     def filter(
         self: SelfSelect, *criteria: _ColumnExpressionArgument[bool]
     ) -> SelfSelect:
-        """A synonym for the :meth:`_future.Select.where` method."""
+        """A synonym for the :meth:`_sql.Select.where` method."""
 
         return self.where(*criteria)
 
@@ -5536,7 +5618,7 @@ class Select(
         # 2. copy FROM collections, adding in joins that we've created.
         existing_from_obj = [clone(f, **kw) for f in self._from_obj]
         add_froms = (
-            set(f for f in new_froms.values() if isinstance(f, Join))
+            {f for f in new_froms.values() if isinstance(f, Join)}
             .difference(all_the_froms)
             .difference(existing_from_obj)
         )
@@ -5556,15 +5638,13 @@ class Select(
         # correlate_except, setup_joins, these clone normally.  For
         # column-expression oriented things like raw_columns, where_criteria,
         # order by, we get this from the new froms.
-        super(Select, self)._copy_internals(
-            clone=clone, omit_attrs=("_from_obj",), **kw
-        )
+        super()._copy_internals(clone=clone, omit_attrs=("_from_obj",), **kw)
 
         self._reset_memoizations()
 
     def get_children(self, **kw: Any) -> Iterable[ClauseElement]:
         return itertools.chain(
-            super(Select, self).get_children(
+            super().get_children(
                 omit_attrs=("_from_obj", "_correlate", "_correlate_except"),
                 **kw,
             ),
@@ -5573,19 +5653,29 @@ class Select(
 
     @_generative
     def add_columns(
-        self, *columns: _ColumnsClauseArgument[Any]
+        self, *entities: _ColumnsClauseArgument[Any]
     ) -> Select[Any]:
-        """Return a new :func:`_expression.select` construct with
-        the given column expressions added to its columns clause.
+        r"""Return a new :func:`_expression.select` construct with
+        the given entities appended to its columns clause.
 
         E.g.::
 
             my_select = my_select.add_columns(table.c.new_column)
 
-        See the documentation for
-        :meth:`_expression.Select.with_only_columns`
-        for guidelines on adding /replacing the columns of a
-        :class:`_expression.Select` object.
+        The original expressions in the columns clause remain in place.
+        To replace the original expressions with new ones, see the method
+        :meth:`_expression.Select.with_only_columns`.
+
+        :param \*entities: column, table, or other entity expressions to be
+         added to the columns clause
+
+        .. seealso::
+
+            :meth:`_expression.Select.with_only_columns` - replaces existing
+            expressions rather than appending.
+
+            :ref:`orm_queryguide_select_multiple_entities` - ORM-centric
+            example
 
         """
         self._reset_memoizations()
@@ -5594,7 +5684,7 @@ class Select(
             coercions.expect(
                 roles.ColumnsClauseRole, column, apply_propagate_attrs=self
             )
-            for column in columns
+            for column in entities
         ]
         return self
 
@@ -5750,7 +5840,7 @@ class Select(
     @overload
     def with_only_columns(
         self,
-        *columns: _ColumnsClauseArgument[Any],
+        *entities: _ColumnsClauseArgument[Any],
         maintain_column_froms: bool = False,
         **__kw: Any,
     ) -> Select[Any]:
@@ -5759,16 +5849,16 @@ class Select(
     @_generative
     def with_only_columns(
         self,
-        *columns: _ColumnsClauseArgument[Any],
+        *entities: _ColumnsClauseArgument[Any],
         maintain_column_froms: bool = False,
         **__kw: Any,
     ) -> Select[Any]:
         r"""Return a new :func:`_expression.select` construct with its columns
-        clause replaced with the given columns.
+        clause replaced with the given entities.
 
         By default, this method is exactly equivalent to as if the original
-        :func:`_expression.select` had been called with the given columns
-        clause. E.g. a statement::
+        :func:`_expression.select` had been called with the given entities.
+        E.g. a statement::
 
             s = select(table1.c.a, table1.c.b)
             s = s.with_only_columns(table1.c.b)
@@ -5802,11 +5892,7 @@ class Select(
             s = select(table1.c.a, table2.c.b)
             s = s.select_from(*s.columns_clause_froms).with_only_columns(table1.c.a)
 
-        :param \*columns: column expressions to be used.
-
-         .. versionchanged:: 1.4 the :meth:`_sql.Select.with_only_columns`
-            method accepts the list of column expressions positionally;
-            passing the expressions as a list is deprecated.
+        :param \*entities: column expressions to be used.
 
         :param maintain_column_froms: boolean parameter that will ensure the
          FROM list implied from the current columns clause will be transferred
@@ -5835,7 +5921,7 @@ class Select(
         self._raw_columns = [
             coercions.expect(roles.ColumnsClauseRole, c)
             for c in coercions._expression_collection_was_a_list(
-                "columns", "Select.with_only_columns", columns
+                "entities", "Select.with_only_columns", entities
             )
         ]
         return self
@@ -6160,27 +6246,60 @@ class Select(
         return self
 
     def _generate_fromclause_column_proxies(
-        self, subquery: FromClause
+        self,
+        subquery: FromClause,
+        proxy_compound_columns: Optional[
+            Iterable[Sequence[ColumnElement[Any]]]
+        ] = None,
     ) -> None:
         """Generate column proxies to place in the exported ``.c``
         collection of a subquery."""
 
-        prox = [
-            c._make_proxy(
-                subquery,
-                key=proxy_key,
-                name=required_label_name,
-                name_is_truncatable=True,
-            )
-            for (
-                required_label_name,
-                proxy_key,
-                fallback_label_name,
-                c,
-                repeated,
-            ) in (self._generate_columns_plus_names(False))
-            if is_column_element(c)
-        ]
+        if proxy_compound_columns:
+            extra_col_iterator = proxy_compound_columns
+            prox = [
+                c._make_proxy(
+                    subquery,
+                    key=proxy_key,
+                    name=required_label_name,
+                    name_is_truncatable=True,
+                    compound_select_cols=extra_cols,
+                )
+                for (
+                    (
+                        required_label_name,
+                        proxy_key,
+                        fallback_label_name,
+                        c,
+                        repeated,
+                    ),
+                    extra_cols,
+                ) in (
+                    zip(
+                        self._generate_columns_plus_names(False),
+                        extra_col_iterator,
+                    )
+                )
+                if is_column_element(c)
+            ]
+        else:
+
+            prox = [
+                c._make_proxy(
+                    subquery,
+                    key=proxy_key,
+                    name=required_label_name,
+                    name_is_truncatable=True,
+                )
+                for (
+                    required_label_name,
+                    proxy_key,
+                    fallback_label_name,
+                    c,
+                    repeated,
+                ) in (self._generate_columns_plus_names(False))
+                if is_column_element(c)
+            ]
 
         subquery._columns._populate_separate_keys(prox)
 
@@ -6727,10 +6846,20 @@ class TextualSelect(SelectBase, Executable, Generative):
         self.element = self.element.bindparams(*binds, **bind_as_values)
         return self
 
-    def _generate_fromclause_column_proxies(self, fromclause):
-        fromclause._columns._populate_separate_keys(
-            c._make_proxy(fromclause) for c in self.column_args
-        )
+    def _generate_fromclause_column_proxies(
+        self, fromclause, proxy_compound_columns=None
+    ):
+        if proxy_compound_columns:
+            fromclause._columns._populate_separate_keys(
+                c._make_proxy(fromclause, compound_select_cols=extra_cols)
+                for c, extra_cols in zip(
+                    self.column_args, proxy_compound_columns
+                )
+            )
+        else:
+            fromclause._columns._populate_separate_keys(
+                c._make_proxy(fromclause) for c in self.column_args
+            )
 
     def _scalar_type(self):
         return self.column_args[0].type
@@ -6741,8 +6870,28 @@ TextAsFrom = TextualSelect
 
 
 class AnnotatedFromClause(Annotated):
-    def __init__(self, element, values):
-        # force FromClause to generate their internal
-        # collections into __dict__
-        element.c
-        Annotated.__init__(self, element, values)
+    def _copy_internals(self, **kw):
+        super()._copy_internals(**kw)
+        if kw.get("ind_cols_on_fromclause", False):
+            ee = self._Annotated__element  # type: ignore
+
+            self.c = ee.__class__.c.fget(self)  # type: ignore
+
+    @util.ro_memoized_property
+    def c(self) -> ReadOnlyColumnCollection[str, KeyedColumnElement[Any]]:
+        """proxy the .c collection of the underlying FromClause.
+
+        Originally implemented in 2008 as a simple load of the .c collection
+        when the annotated construct was created (see d3621ae961a), in modern
+        SQLAlchemy versions this can be expensive for statements constructed
+        with ORM aliases.   So for #8796 SQLAlchemy 2.0 we instead proxy
+        it, which works just as well.
+
+        Two different use cases seem to require the collection either copied
+        from the underlying one, or unique to this AnnotatedFromClause.
+
+        See test_selectable->test_annotated_corresponding_column
+
+        """
+        ee = self._Annotated__element  # type: ignore
+        return ee.c  # type: ignore

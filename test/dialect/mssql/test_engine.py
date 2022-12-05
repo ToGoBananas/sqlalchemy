@@ -1,5 +1,3 @@
-# -*- encoding: utf-8
-
 from decimal import Decimal
 import re
 from unittest.mock import Mock
@@ -402,7 +400,9 @@ class FastExecutemanyTest(fixtures.TestBase):
         )
         t.create(testing.db)
 
-        eng = engines.testing_engine(options={"fast_executemany": True})
+        eng = engines.testing_engine(
+            options={"fast_executemany": True, "use_insertmanyvalues": False}
+        )
 
         @event.listens_for(eng, "after_cursor_execute")
         def after_cursor_execute(
@@ -419,69 +419,55 @@ class FastExecutemanyTest(fixtures.TestBase):
 
             conn.execute(t.insert(), {"id": 200, "data": "data_200"})
 
-    @testing.fixture
-    def fe_engine(self, testing_engine):
-        def go(use_fastexecutemany, apply_setinputsizes_flag):
-            engine = testing_engine(
-                options={
-                    "fast_executemany": use_fastexecutemany,
-                    "use_setinputsizes": apply_setinputsizes_flag,
-                }
-            )
-            return engine
-
-        return go
-
-    @testing.combinations(
-        (
-            "setinputsizeshook",
-            True,
-        ),
-        (
-            "nosetinputsizeshook",
-            False,
-        ),
-        argnames="include_setinputsizes",
-        id_="ia",
-    )
-    @testing.combinations(
-        (
-            "setinputsizesflag",
-            True,
-        ),
-        (
-            "nosetinputsizesflag",
-            False,
-        ),
-        argnames="apply_setinputsizes_flag",
-        id_="ia",
-    )
-    @testing.combinations(
-        (
-            "fastexecutemany",
-            True,
-        ),
-        (
-            "nofastexecutemany",
-            False,
-        ),
-        argnames="use_fastexecutemany",
-        id_="ia",
-    )
-    def test_insert_floats(
+    @testing.variation("add_event", [True, False])
+    @testing.variation("setinputsizes", [True, False])
+    @testing.variation("fastexecutemany", [True, False])
+    @testing.variation("insertmanyvalues", [True, False])
+    @testing.variation("broken_types", [True, False])
+    def test_insert_typing(
         self,
         metadata,
-        fe_engine,
-        include_setinputsizes,
-        use_fastexecutemany,
-        apply_setinputsizes_flag,
+        testing_engine,
+        add_event,
+        fastexecutemany,
+        setinputsizes,
+        insertmanyvalues,
+        broken_types,
     ):
+        """tests for executemany + datatypes that are sensitive to
+        "setinputsizes"
+
+        Issues tested here include:
+
+        #6058 - turn off setinputsizes by default, since it breaks with
+                fast_executemany (version 1.4)
+
+        #8177 - turn setinputsizes back **on** by default, just skip it only
+                for cursor.executemany() calls when fast_executemany is set;
+                otherwise use it.  (version 2.0)
+
+        #8917 - oops, we added "insertmanyvalues" but forgot to adjust the
+                check in #8177 above to accommodate for this, so
+                setinputsizes was getting turned off for "insertmanyvalues"
+                if fast_executemany was still set
+
+        """
 
         # changes for issue #8177 have eliminated all current expected
         # failures, but we'll leave this here in case we need it again
-        expect_failure = False
+        # (... four months pass ...)
+        # surprise! we need it again.  woop!  for #8917
+        expect_failure = (
+            broken_types and not setinputsizes and insertmanyvalues
+        )
 
-        engine = fe_engine(use_fastexecutemany, apply_setinputsizes_flag)
+        engine = testing_engine(
+            options={
+                "fast_executemany": fastexecutemany,
+                "use_setinputsizes": setinputsizes,
+                "use_insertmanyvalues": insertmanyvalues,
+            }
+        )
 
         observations = Table(
             "Observations",
@@ -489,6 +475,7 @@ class FastExecutemanyTest(fixtures.TestBase):
             Column("id", Integer, nullable=False, primary_key=True),
             Column("obs1", Numeric(19, 15), nullable=True),
             Column("obs2", Numeric(19, 15), nullable=True),
+            Column("obs3", String(10)),
             schema="test_schema",
         )
         with engine.begin() as conn:
@@ -499,20 +486,33 @@ class FastExecutemanyTest(fixtures.TestBase):
                 "id": 1,
                 "obs1": Decimal("60.1722066045792"),
                 "obs2": Decimal("24.929289808227466"),
+                "obs3": "obs3",
             },
             {
                 "id": 2,
                 "obs1": Decimal("60.16325715615476"),
                 "obs2": Decimal("24.93886459535008"),
+                "obs3": 5 if broken_types else "obs3",
             },
             {
                 "id": 3,
                 "obs1": Decimal("60.16445165123469"),
                 "obs2": Decimal("24.949856300109516"),
+                "obs3": 7 if broken_types else "obs3",
             },
         ]
 
-        if include_setinputsizes:
+        assert_records = [
+            {
+                "id": rec["id"],
+                "obs1": rec["obs1"],
+                "obs2": rec["obs2"],
+                "obs3": str(rec["obs3"]),
+            }
+            for rec in records
+        ]
+
+        if add_event:
             canary = mock.Mock()
 
             @event.listens_for(engine, "do_setinputsizes")
@@ -543,16 +543,23 @@ class FastExecutemanyTest(fixtures.TestBase):
                     )
                     .mappings()
                     .all(),
-                    records,
+                    assert_records,
                 )
 
-        if include_setinputsizes:
-            if apply_setinputsizes_flag:
+        if add_event:
+            if setinputsizes:
                 eq_(
                     canary.mock_calls,
                     [
                         # float for int?  this seems wrong
-                        mock.call([float, float, float]),
+                        mock.call(
+                            [
+                                float,
+                                float,
+                                float,
+                                engine.dialect.dbapi.SQL_VARCHAR,
+                            ]
+                        ),
                         mock.call([]),
                     ],
                 )
@@ -647,7 +654,12 @@ class RealIsolationLevelTest(fixtures.TestBase):
 
 
 class IsolationLevelDetectTest(fixtures.TestBase):
-    def _fixture(self, view_result):
+    def _fixture(
+        self,
+        view_result,
+        simulate_perm_failure=False,
+        simulate_no_system_views=False,
+    ):
         class Error(Exception):
             pass
 
@@ -662,14 +674,23 @@ class IsolationLevelDetectTest(fixtures.TestBase):
         ):
             result.clear()
             if "SELECT name FROM sys.system_views" in stmt:
-                if view_result:
-                    result.append((view_result,))
+                if simulate_no_system_views:
+                    raise dialect.dbapi.Error(
+                        "SQL Server simulated no system_views error"
+                    )
+                else:
+                    if view_result:
+                        result.append((view_result,))
             elif re.match(
                 ".*SELECT CASE transaction_isolation_level.*FROM sys.%s"
                 % (view_result,),
                 stmt,
                 re.S,
             ):
+                if simulate_perm_failure:
+                    raise dialect.dbapi.Error(
+                        "SQL Server simulated permission error"
+                    )
                 result.append(("SERIALIZABLE",))
             else:
                 assert False
@@ -701,6 +722,37 @@ class IsolationLevelDetectTest(fixtures.TestBase):
         assert_raises_message(
             NotImplementedError,
             "Can't fetch isolation level on this particular ",
+            dialect.get_isolation_level,
+            connection,
+        )
+
+    @testing.combinations(True, False)
+    def test_no_system_views(self, simulate_perm_failure_also):
+        dialect, connection = self._fixture(
+            "dm_pdw_nodes_exec_sessions",
+            simulate_perm_failure=simulate_perm_failure_also,
+            simulate_no_system_views=True,
+        )
+
+        assert_raises_message(
+            NotImplementedError,
+            r"Can\'t fetch isolation level;  encountered error SQL Server "
+            r"simulated no system_views error when attempting to query the "
+            r'"sys.system_views" view.',
+            dialect.get_isolation_level,
+            connection,
+        )
+
+    def test_dont_have_table_perms(self):
+        dialect, connection = self._fixture(
+            "dm_pdw_nodes_exec_sessions", simulate_perm_failure=True
+        )
+
+        assert_raises_message(
+            NotImplementedError,
+            r"Can\'t fetch isolation level;  encountered error SQL Server "
+            r"simulated permission error when attempting to query the "
+            r'"sys.dm_pdw_nodes_exec_sessions" view.',
             dialect.get_isolation_level,
             connection,
         )

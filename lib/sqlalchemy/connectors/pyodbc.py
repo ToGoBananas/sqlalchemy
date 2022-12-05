@@ -29,7 +29,7 @@ from ..engine import URL
 from ..sql.type_api import TypeEngine
 
 if typing.TYPE_CHECKING:
-    from ..engine.interfaces import _IsolationLevel
+    from ..engine.interfaces import IsolationLevel
 
 
 class PyODBCConnector(Connector):
@@ -51,7 +51,7 @@ class PyODBCConnector(Connector):
     dbapi: ModuleType
 
     def __init__(self, use_setinputsizes: bool = False, **kw: Any):
-        super(PyODBCConnector, self).__init__(**kw)
+        super().__init__(**kw)
         if use_setinputsizes:
             self.bind_typing = interfaces.BindTyping.SETINPUTSIZES
 
@@ -83,7 +83,7 @@ class PyODBCConnector(Connector):
                     token = "{%s}" % token.replace("}", "}}")
                 return token
 
-            keys = dict((k, check_quote(v)) for k, v in keys.items())
+            keys = {k: check_quote(v) for k, v in keys.items()}
 
             dsn_connection = "dsn" in keys or (
                 "host" in keys and "database" not in keys
@@ -209,7 +209,10 @@ class PyODBCConnector(Connector):
         # omit the setinputsizes calls for .executemany() with
         # fast_executemany=True
 
-        if context.executemany and self.fast_executemany:
+        if (
+            context.execute_style is interfaces.ExecuteStyle.EXECUTEMANY
+            and self.fast_executemany
+        ):
             return
 
         cursor.setinputsizes(
@@ -223,7 +226,7 @@ class PyODBCConnector(Connector):
 
     def get_isolation_level_values(
         self, dbapi_connection: interfaces.DBAPIConnection
-    ) -> List[_IsolationLevel]:
+    ) -> List[IsolationLevel]:
         return super().get_isolation_level_values(dbapi_connection) + [  # type: ignore  # noqa: E501
             "AUTOCOMMIT"
         ]
@@ -231,7 +234,7 @@ class PyODBCConnector(Connector):
     def set_isolation_level(
         self,
         dbapi_connection: interfaces.DBAPIConnection,
-        level: _IsolationLevel,
+        level: IsolationLevel,
     ) -> None:
         # adjust for ConnectionFairy being present
         # allows attribute set e.g. "connection.autocommit = True"

@@ -291,6 +291,28 @@ class BindIntegrationTest(_fixtures.FixtureTest):
 
         sess.close()
 
+    @testing.combinations(True, False)
+    def test_dont_mutate_binds(self, empty_dict):
+        users, User = (
+            self.tables.users,
+            self.classes.User,
+        )
+
+        mp = self.mapper_registry.map_imperatively(User, users)
+
+        sess = fixture_session()
+
+        if empty_dict:
+            bind_arguments = {}
+        else:
+            bind_arguments = {"mapper": mp}
+        sess.execute(select(1), bind_arguments=bind_arguments)
+
+        if empty_dict:
+            eq_(bind_arguments, {})
+        else:
+            eq_(bind_arguments, {"mapper": mp})
+
     @testing.combinations(
         (
             lambda session, Address: session.query(Address).statement,
@@ -326,6 +348,7 @@ class BindIntegrationTest(_fixtures.FixtureTest):
         ),
         (
             lambda User: update(User)
+            .execution_options(synchronize_session=False)
             .values(name="not ed")
             .where(User.name == "ed"),
             lambda User: {"clause": mock.ANY, "mapper": inspect(User)},
@@ -392,7 +415,15 @@ class BindIntegrationTest(_fixtures.FixtureTest):
         engine = {"e1": e1, "e2": e2, "e3": e3}[expected_engine_name]
 
         with mock.patch(
-            "sqlalchemy.orm.context.ORMCompileState.orm_setup_cursor_result"
+            "sqlalchemy.orm.context." "ORMCompileState.orm_setup_cursor_result"
+        ), mock.patch(
+            "sqlalchemy.orm.context.ORMCompileState.orm_execute_statement"
+        ), mock.patch(
+            "sqlalchemy.orm.bulk_persistence."
+            "BulkORMInsert.orm_execute_statement"
+        ), mock.patch(
+            "sqlalchemy.orm.bulk_persistence."
+            "BulkUDCompileState.orm_setup_cursor_result"
         ):
             sess.execute(statement)
 

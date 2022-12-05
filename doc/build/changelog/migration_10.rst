@@ -71,15 +71,16 @@ once, a query as a pre-compiled unit begins to be feasible::
 
     bakery = baked.bakery()
 
+
     def search_for_user(session, username, email=None):
 
         baked_query = bakery(lambda session: session.query(User))
-        baked_query += lambda q: q.filter(User.name == bindparam('username'))
+        baked_query += lambda q: q.filter(User.name == bindparam("username"))
 
         baked_query += lambda q: q.order_by(User.id)
 
         if email:
-            baked_query += lambda q: q.filter(User.email == bindparam('email'))
+            baked_query += lambda q: q.filter(User.email == bindparam("email"))
 
         result = baked_query(session).params(username=username, email=email).all()
 
@@ -109,10 +110,11 @@ call upon mixin-established columns and will receive a reference to the correct
 
         @declared_attr
         def foobar_prop(cls):
-            return column_property('foobar: ' + cls.foobar)
+            return column_property("foobar: " + cls.foobar)
+
 
     class SomeClass(HasFooBar, Base):
-        __tablename__ = 'some_table'
+        __tablename__ = "some_table"
         id = Column(Integer, primary_key=True)
 
 Above, ``SomeClass.foobar_prop`` will be invoked against ``SomeClass``,
@@ -132,10 +134,11 @@ this::
 
         @declared_attr
         def foobar_prop(cls):
-            return column_property('foobar: ' + cls.foobar)
+            return column_property("foobar: " + cls.foobar)
+
 
     class SomeClass(HasFooBar, Base):
-        __tablename__ = 'some_table'
+        __tablename__ = "some_table"
         id = Column(Integer, primary_key=True)
 
 Previously, ``SomeClass`` would be mapped with one particular copy of
@@ -167,16 +170,19 @@ applied::
         @declared_attr.cascading
         def id(cls):
             if has_inherited_table(cls):
-                return Column(ForeignKey('myclass.id'), primary_key=True)
+                return Column(ForeignKey("myclass.id"), primary_key=True)
             else:
                 return Column(Integer, primary_key=True)
 
+
     class MyClass(HasIdMixin, Base):
-        __tablename__ = 'myclass'
+        __tablename__ = "myclass"
         # ...
 
+
     class MySubClass(MyClass):
-        ""
+        """ """
+
         # ...
 
 .. seealso::
@@ -189,13 +195,17 @@ on the abstract base::
 
     from sqlalchemy import Column, Integer, ForeignKey
     from sqlalchemy.orm import relationship
-    from sqlalchemy.ext.declarative import (declarative_base, declared_attr,
-        AbstractConcreteBase)
+    from sqlalchemy.ext.declarative import (
+        declarative_base,
+        declared_attr,
+        AbstractConcreteBase,
+    )
 
     Base = declarative_base()
 
+
     class Something(Base):
-        __tablename__ = u'something'
+        __tablename__ = "something"
         id = Column(Integer, primary_key=True)
 
 
@@ -212,9 +222,8 @@ on the abstract base::
 
 
     class Concrete(Abstract):
-        __tablename__ = u'cca'
-        __mapper_args__ = {'polymorphic_identity': 'cca', 'concrete': True}
-
+        __tablename__ = "cca"
+        __mapper_args__ = {"polymorphic_identity": "cca", "concrete": True}
 
 The above mapping will set up a table ``cca`` with both an ``id`` and
 a ``something_id`` column, and ``Concrete`` will also have a relationship
@@ -240,17 +249,19 @@ of load that's improved the most::
 
     Base = declarative_base()
 
+
     class Foo(Base):
         __table__ = Table(
-            'foo', Base.metadata,
-            Column('id', Integer, primary_key=True),
-            Column('a', Integer(), nullable=False),
-            Column('b', Integer(), nullable=False),
-            Column('c', Integer(), nullable=False),
+            "foo",
+            Base.metadata,
+            Column("id", Integer, primary_key=True),
+            Column("a", Integer(), nullable=False),
+            Column("b", Integer(), nullable=False),
+            Column("c", Integer(), nullable=False),
         )
 
-    engine = create_engine(
-        'mysql+mysqldb://scott:tiger@localhost/test', echo=True)
+
+    engine = create_engine("mysql+mysqldb://scott:tiger@localhost/test", echo=True)
 
     sess = Session(engine)
 
@@ -293,7 +304,9 @@ all three types for "size" (number of rows returned) and "num"
 outperforms both, or lags very slightly behind the faster object, based on
 which scenario.  In the "sweet spot", where we are both creating a good number
 of new types as well as fetching a good number of rows, the lightweight
-object totally smokes both namedtuple and KeyedTuple::
+object totally smokes both namedtuple and KeyedTuple:
+
+.. sourcecode:: text
 
     -----------------
     size=10 num=10000                 # few rows, lots of queries
@@ -335,7 +348,9 @@ loader strategy system.
 A bench that makes use of heapy measure the startup size of Nova
 illustrates a difference of about 3.7 fewer megs, or 46%,
 taken up by SQLAlchemy's objects, associated dictionaries, as
-well as weakrefs, within a basic import of "nova.db.sqlalchemy.models"::
+well as weakrefs, within a basic import of "nova.db.sqlalchemy.models":
+
+.. sourcecode:: text
 
     # reported by heapy, summation of SQLAlchemy objects +
     # associated dicts + weakref-related objects with core of Nova imported:
@@ -385,32 +400,29 @@ of inheritance-oriented scenarios, including:
 * Binding to a Mixin or Abstract Class::
 
         class MyClass(SomeMixin, Base):
-            __tablename__ = 'my_table'
+            __tablename__ = "my_table"
             # ...
 
-        session = Session(binds={SomeMixin: some_engine})
 
+        session = Session(binds={SomeMixin: some_engine})
 
 * Binding to inherited concrete subclasses individually based on table::
 
         class BaseClass(Base):
-            __tablename__ = 'base'
+            __tablename__ = "base"
 
             # ...
+
 
         class ConcreteSubClass(BaseClass):
-            __tablename__ = 'concrete'
+            __tablename__ = "concrete"
 
             # ...
 
-            __mapper_args__ = {'concrete': True}
+            __mapper_args__ = {"concrete": True}
 
 
-        session = Session(binds={
-            base_table: some_engine,
-            concrete_table: some_other_engine
-        })
-
+        session = Session(binds={base_table: some_engine, concrete_table: some_other_engine})
 
 :ticket:`3035`
 
@@ -446,10 +458,10 @@ These scenarios include:
   statement as well as for the SELECT used by the "fetch" strategy::
 
         session.query(User).filter(User.id == 15).update(
-                {"name": "foob"}, synchronize_session='fetch')
+            {"name": "foob"}, synchronize_session="fetch"
+        )
 
-        session.query(User).filter(User.id == 15).delete(
-                synchronize_session='fetch')
+        session.query(User).filter(User.id == 15).delete(synchronize_session="fetch")
 
 * Queries against individual columns::
 
@@ -459,9 +471,10 @@ These scenarios include:
   :obj:`.column_property`::
 
         class User(Base):
-            # ...
+            ...
 
-            score = column_property(func.coalesce(self.tables.users.c.name, None)))
+            score = column_property(func.coalesce(self.tables.users.c.name, None))
+
 
         session.query(func.max(User.score)).scalar()
 
@@ -488,7 +501,7 @@ at the attribute.  Below this is illustrated using the
             return self.value + 5
 
 
-    inspect(SomeObject).all_orm_descriptors.some_prop.info['foo'] = 'bar'
+    inspect(SomeObject).all_orm_descriptors.some_prop.info["foo"] = "bar"
 
 It is also available as a constructor argument for all :class:`.SchemaItem`
 objects (e.g. :class:`_schema.ForeignKey`, :class:`.UniqueConstraint` etc.) as well
@@ -510,27 +523,28 @@ as the "order by label" logic introduced in 0.9 (see :ref:`migration_1068`).
 Given a mapping like the following::
 
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
 
         id = Column(Integer, primary_key=True)
+
 
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
 
         id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('a.id'))
+        a_id = Column(ForeignKey("a.id"))
 
 
-    A.b = column_property(
-            select([func.max(B.id)]).where(B.a_id == A.id).correlate(A)
-        )
+    A.b = column_property(select([func.max(B.id)]).where(B.a_id == A.id).correlate(A))
 
 A simple scenario that included "A.b" twice would fail to render
 correctly::
 
     print(sess.query(A, a1).order_by(a1.b))
 
-This would order by the wrong column::
+This would order by the wrong column:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, (SELECT max(b.id) AS max_1 FROM b
     WHERE b.a_id = a.id) AS anon_1, a_1.id AS a_1_id,
@@ -538,7 +552,9 @@ This would order by the wrong column::
     FROM b WHERE b.a_id = a_1.id) AS anon_2
     FROM a, a AS a_1 ORDER BY anon_1
 
-New output::
+New output:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, (SELECT max(b.id) AS max_1
     FROM b WHERE b.a_id = a.id) AS anon_1, a_1.id AS a_1_id,
@@ -550,22 +566,26 @@ There were also many scenarios where the "order by" logic would fail
 to order by label, for example if the mapping were "polymorphic"::
 
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
 
         id = Column(Integer, primary_key=True)
         type = Column(String)
 
-        __mapper_args__ = {'polymorphic_on': type, 'with_polymorphic': '*'}
+        __mapper_args__ = {"polymorphic_on": type, "with_polymorphic": "*"}
 
 The order_by would fail to use the label, as it would be anonymized due
-to the polymorphic loading::
+to the polymorphic loading:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.type AS a_type, (SELECT max(b.id) AS max_1
     FROM b WHERE b.a_id = a.id) AS anon_1
     FROM a ORDER BY (SELECT max(b.id) AS max_2
     FROM b WHERE b.a_id = a.id)
 
-Now that the order by label tracks the anonymized label, this now works::
+Now that the order by label tracks the anonymized label, this now works:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.type AS a_type, (SELECT max(b.id) AS max_1
     FROM b WHERE b.a_id = a.id) AS anon_1
@@ -592,7 +612,7 @@ any SQL expression, in addition to integer values, as arguments.  The ORM
 this is used to allow a bound parameter to be passed, which can be substituted
 with a value later::
 
-    sel = select([table]).limit(bindparam('mylimit')).offset(bindparam('myoffset'))
+    sel = select([table]).limit(bindparam("mylimit")).offset(bindparam("myoffset"))
 
 Dialects which don't support non-integer LIMIT or OFFSET expressions may continue
 to not support this behavior; third party dialects may also need modification
@@ -702,17 +722,15 @@ CHECK Constraints now support the ``%(column_0_name)s`` token in naming conventi
 The ``%(column_0_name)s`` will derive from the first column found in the
 expression of a :class:`.CheckConstraint`::
 
-    metadata = MetaData(
-        naming_convention={"ck": "ck_%(table_name)s_%(column_0_name)s"}
-    )
+    metadata = MetaData(naming_convention={"ck": "ck_%(table_name)s_%(column_0_name)s"})
 
-    foo = Table('foo', metadata,
-        Column('value', Integer),
-    )
+    foo = Table("foo", metadata, Column("value", Integer))
 
     CheckConstraint(foo.c.value > 5)
 
-Will render::
+Will render:
+
+.. sourcecode:: sql
 
     CREATE TABLE foo (
         value INTEGER,
@@ -743,10 +761,7 @@ Since at least version 0.8, a :class:`.Constraint` has had the ability to
 
     m = MetaData()
 
-    t = Table('t', m,
-        Column('a', Integer),
-        Column('b', Integer)
-    )
+    t = Table("t", m, Column("a", Integer), Column("b", Integer))
 
     uq = UniqueConstraint(t.c.a, t.c.b)  # will auto-attach to Table
 
@@ -762,12 +777,12 @@ the :class:`.Constraint` is also added::
 
     m = MetaData()
 
-    a = Column('a', Integer)
-    b = Column('b', Integer)
+    a = Column("a", Integer)
+    b = Column("b", Integer)
 
     uq = UniqueConstraint(a, b)
 
-    t = Table('t', m, a, b)
+    t = Table("t", m, a, b)
 
     assert uq in t.constraints  # constraint auto-attached
 
@@ -781,12 +796,12 @@ tracking for the addition of names to a :class:`_schema.Table`::
 
     m = MetaData()
 
-    a = Column('a', Integer)
-    b = Column('b', Integer)
+    a = Column("a", Integer)
+    b = Column("b", Integer)
 
-    uq = UniqueConstraint(a, 'b')
+    uq = UniqueConstraint(a, "b")
 
-    t = Table('t', m, a, b)
+    t = Table("t", m, a, b)
 
     # constraint *not* auto-attached, as we do not have tracking
     # to locate when a name 'b' becomes available on the table
@@ -806,17 +821,16 @@ the :class:`.Constraint` is constructed::
 
     m = MetaData()
 
-    a = Column('a', Integer)
-    b = Column('b', Integer)
+    a = Column("a", Integer)
+    b = Column("b", Integer)
 
 
-    t = Table('t', m, a, b)
+    t = Table("t", m, a, b)
 
-    uq = UniqueConstraint(a, 'b')
+    uq = UniqueConstraint(a, "b")
 
     # constraint auto-attached normally as in older versions
     assert uq in t.constraints
-
 
 :ticket:`3341`
 :ticket:`3411`
@@ -838,14 +852,15 @@ expressions are rendered as constants into the SELECT statement::
     m = MetaData()
 
     t = Table(
-        't', m,
-        Column('x', Integer),
-        Column('y', Integer, default=func.somefunction()))
+        "t", m, Column("x", Integer), Column("y", Integer, default=func.somefunction())
+    )
 
     stmt = select([t.c.x])
-    print(t.insert().from_select(['x'], stmt))
+    print(t.insert().from_select(["x"], stmt))
 
-Will render::
+Will render:
+
+.. sourcecode:: sql
 
     INSERT INTO t (x, y) SELECT t.x, somefunction() AS somefunction_1
     FROM t
@@ -870,14 +885,17 @@ embedded in SQL to render correctly, such as::
 
     metadata = MetaData()
 
-    tbl = Table("derp", metadata,
-        Column("arr", ARRAY(Text),
-                    server_default=array(["foo", "bar", "baz"])),
+    tbl = Table(
+        "derp",
+        metadata,
+        Column("arr", ARRAY(Text), server_default=array(["foo", "bar", "baz"])),
     )
 
     print(CreateTable(tbl).compile(dialect=postgresql.dialect()))
 
-Now renders::
+Now renders:
+
+.. sourcecode:: sql
 
     CREATE TABLE derp (
         arr TEXT[] DEFAULT ARRAY['foo', 'bar', 'baz']
@@ -981,10 +999,13 @@ emitted for ten of the parameter sets, out of a total of 1000::
     warnings.filterwarnings("once")
 
     for i in range(1000):
-        e.execute(select([cast(
-            ('foo_%d' % random.randint(0, 1000000)).encode('ascii'), Unicode)]))
+        e.execute(
+            select([cast(("foo_%d" % random.randint(0, 1000000)).encode("ascii"), Unicode)])
+        )
 
-The format of the warning here is::
+The format of the warning here is:
+
+.. sourcecode:: text
 
     /path/lib/sqlalchemy/sql/sqltypes.py:186: SAWarning: Unicode type received
       non-unicode bind param value 'foo_4852'. (this warning may be
@@ -1015,40 +1036,41 @@ onto the class.
 The string names are now resolved as attribute names in earnest::
 
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
         id = Column(Integer, primary_key=True)
-        name = Column('user_name', String(50))
+        name = Column("user_name", String(50))
 
 Above, the column ``user_name`` is mapped as ``name``.  Previously,
 a call to :meth:`_query.Query.update` that was passed strings would have to
 have been called as follows::
 
-    session.query(User).update({'user_name': 'moonbeam'})
+    session.query(User).update({"user_name": "moonbeam"})
 
 The given string is now resolved against the entity::
 
-    session.query(User).update({'name': 'moonbeam'})
+    session.query(User).update({"name": "moonbeam"})
 
 It is typically preferable to use the attribute directly, to avoid any
 ambiguity::
 
-    session.query(User).update({User.name: 'moonbeam'})
+    session.query(User).update({User.name: "moonbeam"})
 
 The change also indicates that synonyms and hybrid attributes can be referred
 to by string name as well::
 
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
         id = Column(Integer, primary_key=True)
-        name = Column('user_name', String(50))
+        name = Column("user_name", String(50))
 
         @hybrid_property
         def fullname(self):
             return self.name
 
-    session.query(User).update({'fullname': 'moonbeam'})
+
+    session.query(User).update({"fullname": "moonbeam"})
 
 :ticket:`3228`
 
@@ -1063,7 +1085,9 @@ queries that are essentially of this form::
     session.query(Address).filter(Address.user == User(id=None))
 
 This pattern is not currently supported in SQLAlchemy.  For all versions,
-it emits SQL resembling::
+it emits SQL resembling:
+
+.. sourcecode:: sql
 
     SELECT address.id AS address_id, address.user_id AS address_user_id,
     address.email_address AS address_email_address
@@ -1073,7 +1097,9 @@ it emits SQL resembling::
 Note above, there is a comparison ``WHERE ? = address.user_id`` where the
 bound value ``?`` is receiving ``None``, or ``NULL`` in SQL.  **This will
 always return False in SQL**.  The comparison here would in theory
-generate SQL as follows::
+generate SQL as follows:
+
+.. sourcecode:: sql
 
     SELECT address.id AS address_id, address.user_id AS address_user_id,
     address.email_address AS address_email_address
@@ -1083,7 +1109,9 @@ But right now, **it does not**.   Applications which are relying upon the
 fact that "NULL = NULL" produces False in all cases run the risk that
 someday, SQLAlchemy might fix this issue to generate "IS NULL", and the queries
 will then produce different results.  Therefore with this kind of operation,
-you will see a warning::
+you will see a warning:
+
+.. sourcecode:: text
 
     SAWarning: Got None for value of column user.id; this is unsupported
     for a relationship comparison and will not currently produce an
@@ -1108,13 +1136,14 @@ it only became apparent as a result of :ticket:`3371`.
 Given a mapping::
 
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
         id = Column(Integer, primary_key=True)
 
+
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
         id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('a.id'))
+        a_id = Column(ForeignKey("a.id"))
         a = relationship("A")
 
 Given ``A``, with primary key of 7, but which we changed to be 10
@@ -1132,7 +1161,9 @@ will use the value 10 in the bound parameters::
 
     s.query(B).filter(B.a == a1)
 
-Produces::
+Produces:
+
+.. sourcecode:: sql
 
     SELECT b.id AS b_id, b.a_id AS b_a_id
     FROM b
@@ -1144,19 +1175,23 @@ However, before this change, the negation of this criteria would **not** use
 
     s.query(B).filter(B.a != a1)
 
-Produces (in 0.9 and all versions prior to 1.0.1)::
+Produces (in 0.9 and all versions prior to 1.0.1):
+
+.. sourcecode:: sql
 
     SELECT b.id AS b_id, b.a_id AS b_a_id
     FROM b
     WHERE b.a_id != ? OR b.a_id IS NULL
     (7,)
 
-For a transient object, it would produce a broken query::
+For a transient object, it would produce a broken query:
+
+.. sourcecode:: sql
 
     SELECT b.id, b.a_id
     FROM b
     WHERE b.a_id != :a_id_1 OR b.a_id IS NULL
-    {u'a_id_1': symbol('NEVER_SET')}
+    -- {u'a_id_1': symbol('NEVER_SET')}
 
 This inconsistency has been repaired, and in all queries the current attribute
 value, in this example ``10``, will now be used.
@@ -1254,15 +1289,16 @@ attributes, a change in behavior can be seen here when assigning None.
 Given a mapping::
 
     class A(Base):
-        __tablename__ = 'table_a'
+        __tablename__ = "table_a"
 
         id = Column(Integer, primary_key=True)
+
 
     class B(Base):
-        __tablename__ = 'table_b'
+        __tablename__ = "table_b"
 
         id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('table_a.id'))
+        a_id = Column(ForeignKey("table_a.id"))
         a = relationship(A)
 
 In 1.0, the relationship-bound attribute takes precedence over the FK-bound
@@ -1277,7 +1313,7 @@ only takes effect if a value is assigned; the None is not considered::
     session.flush()
 
     b1 = B()
-    b1.a = a1   # we expect a_id to be '1'; takes precedence in 0.9 and 1.0
+    b1.a = a1  # we expect a_id to be '1'; takes precedence in 0.9 and 1.0
 
     b2 = B()
     b2.a = None  # we expect a_id to be None; takes precedence only in 1.0
@@ -1339,7 +1375,7 @@ with yield-per (subquery loading could be in theory, however).
 When this error is raised, the :func:`.lazyload` option can be sent with
 an asterisk::
 
-    q = sess.query(Object).options(lazyload('*')).yield_per(100)
+    q = sess.query(Object).options(lazyload("*")).yield_per(100)
 
 or use :meth:`_query.Query.enable_eagerloads`::
 
@@ -1348,8 +1384,11 @@ or use :meth:`_query.Query.enable_eagerloads`::
 The :func:`.lazyload` option has the advantage that additional many-to-one
 joined loader options can still be used::
 
-    q = sess.query(Object).options(
-        lazyload('*'), joinedload("some_manytoone")).yield_per(100)
+    q = (
+        sess.query(Object)
+        .options(lazyload("*"), joinedload("some_manytoone"))
+        .yield_per(100)
+    )
 
 .. _bug_3233:
 
@@ -1370,21 +1409,25 @@ Starting with a mapping as::
 
     Base = declarative_base()
 
+
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
         id = Column(Integer, primary_key=True)
         bs = relationship("B")
 
+
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
         id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('a.id'))
+        a_id = Column(ForeignKey("a.id"))
 
 A query that joins to ``A.bs`` twice::
 
     print(s.query(A).join(A.bs).join(A.bs))
 
-Will render::
+Will render:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id
     FROM a JOIN b ON a.id = b.a_id
@@ -1392,13 +1435,15 @@ Will render::
 The query deduplicates the redundant ``A.bs`` because it is attempting
 to support a case like the following::
 
-    s.query(A).join(A.bs).\
-        filter(B.foo == 'bar').\
-        reset_joinpoint().join(A.bs, B.cs).filter(C.bar == 'bat')
+    s.query(A).join(A.bs).filter(B.foo == "bar").reset_joinpoint().join(A.bs, B.cs).filter(
+        C.bar == "bat"
+    )
 
 That is, the ``A.bs`` is part of a "path".  As part of :ticket:`3367`,
 arriving at the same endpoint twice without it being part of a
-larger path will now emit a warning::
+larger path will now emit a warning:
+
+.. sourcecode:: text
 
     SAWarning: Pathed join target A.bs has already been joined to; skipping
 
@@ -1407,7 +1452,9 @@ relationship-bound path.  If we join to ``B`` twice::
 
     print(s.query(A).join(B, B.a_id == A.id).join(B, B.a_id == A.id))
 
-In 0.9, this would render as follows::
+In 0.9, this would render as follows:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id
     FROM a JOIN b ON b.a_id = a.id JOIN b AS b_1 ON b_1.a_id = a.id
@@ -1415,7 +1462,9 @@ In 0.9, this would render as follows::
 This is problematic since the aliasing is implicit and in the case of different
 ON clauses can lead to unpredictable results.
 
-In 1.0, no automatic aliasing is applied and we get::
+In 1.0, no automatic aliasing is applied and we get:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id
     FROM a JOIN b ON b.a_id = a.id JOIN b ON b.a_id = a.id
@@ -1437,31 +1486,33 @@ a mapping as follows::
 
     Base = declarative_base()
 
+
     class A(Base):
         __tablename__ = "a"
 
         id = Column(Integer, primary_key=True)
         type = Column(String)
 
-        __mapper_args__ = {'polymorphic_on': type, 'polymorphic_identity': 'a'}
+        __mapper_args__ = {"polymorphic_on": type, "polymorphic_identity": "a"}
 
 
     class ASub1(A):
-        __mapper_args__ = {'polymorphic_identity': 'asub1'}
+        __mapper_args__ = {"polymorphic_identity": "asub1"}
 
 
     class ASub2(A):
-        __mapper_args__ = {'polymorphic_identity': 'asub2'}
+        __mapper_args__ = {"polymorphic_identity": "asub2"}
 
 
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
 
         id = Column(Integer, primary_key=True)
 
         a_id = Column(Integer, ForeignKey("a.id"))
 
-        a = relationship("A", primaryjoin="B.a_id == A.id", backref='b')
+        a = relationship("A", primaryjoin="B.a_id == A.id", backref="b")
+
 
     s = Session()
 
@@ -1470,7 +1521,9 @@ a mapping as follows::
     print(s.query(ASub1).join(B, ASub1.b).join(ASub2, ASub2.id == B.a_id))
 
 The two queries at the bottom are equivalent, and should both render
-the identical SQL::
+the identical SQL:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.type AS a_type
     FROM a JOIN b ON b.a_id = a.id JOIN a ON b.a_id = a.id AND a.type IN (:type_1)
@@ -1478,7 +1531,9 @@ the identical SQL::
 
 The above SQL is invalid, as it renders "a" within the FROM list twice.
 However, the implicit aliasing bug would occur with the second query only
-and render this instead::
+and render this instead:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.type AS a_type
     FROM a JOIN b ON b.a_id = a.id JOIN a AS a_1
@@ -1543,26 +1598,28 @@ Previously, the sample code looked like::
 
     from sqlalchemy.orm import Bundle
 
+
     class DictBundle(Bundle):
         def create_row_processor(self, query, procs, labels):
             """Override create_row_processor to return values as dictionaries"""
+
             def proc(row, result):
-                return dict(
-                            zip(labels, (proc(row, result) for proc in procs))
-                        )
+                return dict(zip(labels, (proc(row, result) for proc in procs)))
+
             return proc
 
 The unused ``result`` member is now removed::
 
     from sqlalchemy.orm import Bundle
 
+
     class DictBundle(Bundle):
         def create_row_processor(self, query, procs, labels):
             """Override create_row_processor to return values as dictionaries"""
+
             def proc(row):
-                return dict(
-                            zip(labels, (proc(row) for proc in procs))
-                        )
+                return dict(zip(labels, (proc(row) for proc in procs)))
+
             return proc
 
 .. seealso::
@@ -1587,9 +1644,12 @@ join eager load will use a right-nested join.  ``"nested"`` is now implied
 when using ``innerjoin=True``::
 
     query(User).options(
-        joinedload("orders", innerjoin=False).joinedload("items", innerjoin=True))
+        joinedload("orders", innerjoin=False).joinedload("items", innerjoin=True)
+    )
 
-With the new default, this will render the FROM clause in the form::
+With the new default, this will render the FROM clause in the form:\
+
+.. sourcecode:: text
 
     FROM users LEFT OUTER JOIN (orders JOIN items ON <onclause>) ON <onclause>
 
@@ -1601,10 +1661,13 @@ optimization parameter to take effect in all cases.
 To get the older behavior, use ``innerjoin="unnested"``::
 
     query(User).options(
-        joinedload("orders", innerjoin=False).joinedload("items", innerjoin="unnested"))
+        joinedload("orders", innerjoin=False).joinedload("items", innerjoin="unnested")
+    )
 
 This will avoid right-nested joins and chain the joins together using all
-OUTER joins despite the innerjoin directive::
+OUTER joins despite the innerjoin directive:
+
+.. sourcecode:: text
 
     FROM users LEFT OUTER JOIN orders ON <onclause> LEFT OUTER JOIN items ON <onclause>
 
@@ -1626,15 +1689,16 @@ Subqueries no longer applied to uselist=False joined eager loads
 Given a joined eager load like the following::
 
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
         id = Column(Integer, primary_key=True)
         b = relationship("B", uselist=False)
 
 
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
         id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('a.id'))
+        a_id = Column(ForeignKey("a.id"))
+
 
     s = Session()
     print(s.query(A).options(joinedload(A.b)).limit(5))
@@ -1644,7 +1708,9 @@ loaded as a single value", which is essentially a "one to one"
 relationship.  However, joined eager loading has always treated the
 above as a situation where the main query needs to be inside a
 subquery, as would normally be needed for a collection of B objects
-where the main query has a LIMIT applied::
+where the main query has a LIMIT applied:
+
+.. sourcecode:: sql
 
     SELECT anon_1.a_id AS anon_1_a_id, b_1.id AS b_1_id, b_1.a_id AS b_1_a_id
     FROM (SELECT a.id AS a_id
@@ -1654,7 +1720,9 @@ where the main query has a LIMIT applied::
 However, since the relationship of the inner query to the outer one is
 that at most only one row is shared in the case of ``uselist=False``
 (in the same way as a many-to-one), the "subquery" used with LIMIT +
-joined eager loading is now dropped in this case::
+joined eager loading is now dropped in this case:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, b_1.id AS b_1_id, b_1.a_id AS b_1_a_id
     FROM a LEFT OUTER JOIN b AS b_1 ON a.id = b_1.a_id
@@ -1709,7 +1777,8 @@ Change to single-table-inheritance criteria when using from_self(), count()
 Given a single-table inheritance mapping, such as::
 
     class Widget(Base):
-        __table__ = 'widget_table'
+        __table__ = "widget_table"
+
 
     class FooWidget(Widget):
         pass
@@ -1720,7 +1789,9 @@ to the outside::
 
     sess.query(FooWidget).from_self().all()
 
-rendering::
+rendering:
+
+.. sourcecode:: sql
 
     SELECT
         anon_1.widgets_id AS anon_1_widgets_id,
@@ -1734,7 +1805,9 @@ columns, then we can't add the WHERE clause on the outside (it actually tries,
 and produces a bad query).  This decision
 apparently goes way back to 0.6.5 with the note "may need to make more
 adjustments to this".   Well, those adjustments have arrived!  So now the
-above query will render::
+above query will render:
+
+.. sourcecode:: sql
 
     SELECT
         anon_1.widgets_id AS anon_1_widgets_id,
@@ -1747,7 +1820,9 @@ So that queries that don't include "type" will still work!::
 
     sess.query(FooWidget.id).count()
 
-Renders::
+Renders:
+
+.. sourcecode:: sql
 
     SELECT count(*) AS count_1
     FROM (SELECT widgets.id AS widgets_id
@@ -1769,20 +1844,20 @@ the "single table criteria" when joining on a relationship.  Given a
 mapping as::
 
     class Widget(Base):
-        __tablename__ = 'widget'
+        __tablename__ = "widget"
         id = Column(Integer, primary_key=True)
         type = Column(String)
-        related_id = Column(ForeignKey('related.id'))
+        related_id = Column(ForeignKey("related.id"))
         related = relationship("Related", backref="widget")
-        __mapper_args__ = {'polymorphic_on': type}
+        __mapper_args__ = {"polymorphic_on": type}
 
 
     class FooWidget(Widget):
-        __mapper_args__ = {'polymorphic_identity': 'foo'}
+        __mapper_args__ = {"polymorphic_identity": "foo"}
 
 
     class Related(Base):
-        __tablename__ = 'related'
+        __tablename__ = "related"
         id = Column(Integer, primary_key=True)
 
 It's been the behavior for quite some time that a JOIN on the relationship
@@ -1790,7 +1865,9 @@ will render a "single inheritance" clause for the type::
 
     s.query(Related).join(FooWidget, Related.widget).all()
 
-SQL output::
+SQL output:
+
+.. sourcecode:: sql
 
     SELECT related.id AS related_id
     FROM related JOIN widget ON related.id = widget.related_id AND widget.type IN (:type_1)
@@ -1850,7 +1927,7 @@ behavior of passing string values that become parameterized::
 
     # This is a normal Core expression with a string argument -
     # we aren't talking about this!!
-    stmt = select([sometable]).where(sometable.c.somecolumn == 'value')
+    stmt = select([sometable]).where(sometable.c.somecolumn == "value")
 
 The Core tutorial has long featured an example of the use of this technique,
 using a :func:`_expression.select` construct where virtually all components of it
@@ -1867,7 +1944,9 @@ When composing a select as below::
     stmt = select(["a", "b"]).where("a = b").select_from("sometable")
 
 The statement is built up normally, with all the same coercions as before.
-However, one will see the following warnings emitted::
+However, one will see the following warnings emitted:
+
+.. sourcecode:: text
 
     SAWarning: Textual column expression 'a' should be explicitly declared
     with text('a'), or use column('a') for more specificity
@@ -1893,24 +1972,28 @@ one wishes the warnings to be exceptions, the
 should be used::
 
     import warnings
-    warnings.simplefilter("error")   # all warnings raise an exception
+
+    warnings.simplefilter("error")  # all warnings raise an exception
 
 Given the above warnings, our statement works just fine, but
 to get rid of the warnings we would rewrite our statement as follows::
 
     from sqlalchemy import select, text
-    stmt = select([
-            text("a"),
-            text("b")
-        ]).where(text("a = b")).select_from(text("sometable"))
+
+    stmt = (
+        select([text("a"), text("b")]).where(text("a = b")).select_from(text("sometable"))
+    )
 
 and as the warnings suggest, we can give our statement more specificity
 about the text if we use :func:`_expression.column` and :func:`.table`::
 
     from sqlalchemy import select, text, column, table
 
-    stmt = select([column("a"), column("b")]).\
-        where(text("a = b")).select_from(table("sometable"))
+    stmt = (
+        select([column("a"), column("b")])
+        .where(text("a = b"))
+        .select_from(table("sometable"))
+    )
 
 Where note also that :func:`.table` and :func:`_expression.column` can now
 be imported from "sqlalchemy" without the "sql" part.
@@ -1927,16 +2010,19 @@ of this change we have enhanced its functionality.  When we have a
 :func:`_expression.select` or :class:`_query.Query` that refers to some column name or named
 label, we might want to GROUP BY and/or ORDER BY known columns or labels::
 
-    stmt = select([
-        user.c.name,
-        func.count(user.c.id).label("id_count")
-    ]).group_by("name").order_by("id_count")
+    stmt = (
+        select([user.c.name, func.count(user.c.id).label("id_count")])
+        .group_by("name")
+        .order_by("id_count")
+    )
 
 In the above statement we expect to see "ORDER BY id_count", as opposed to a
 re-statement of the function.   The string argument given is actively
 matched to an entry in the columns clause during compilation, so the above
 statement would produce as we expect, without warnings (though note that
-the ``"name"`` expression has been resolved to ``users.name``!)::
+the ``"name"`` expression has been resolved to ``users.name``!):
+
+.. sourcecode:: sql
 
     SELECT users.name, count(users.id) AS id_count
     FROM users GROUP BY users.name ORDER BY id_count
@@ -1944,15 +2030,18 @@ the ``"name"`` expression has been resolved to ``users.name``!)::
 However, if we refer to a name that cannot be located, then we get
 the warning again, as below::
 
-    stmt = select([
-            user.c.name,
-            func.count(user.c.id).label("id_count")
-        ]).order_by("some_label")
+    stmt = select([user.c.name, func.count(user.c.id).label("id_count")]).order_by(
+        "some_label"
+    )
 
-The output does what we say, but again it warns us::
+The output does what we say, but again it warns us:
+
+.. sourcecode:: text
 
     SAWarning: Can't resolve label reference 'some_label'; converting to
     text() (this warning may be suppressed after 10 occurrences)
+
+.. sourcecode:: sql
 
     SELECT users.name, count(users.id) AS id_count
     FROM users ORDER BY some_label
@@ -1995,25 +2084,34 @@ that of an "executemany" style of invocation::
 
     counter = itertools.count(1)
     t = Table(
-        'my_table', metadata,
-        Column('id', Integer, default=lambda: next(counter)),
-        Column('data', String)
+        "my_table",
+        metadata,
+        Column("id", Integer, default=lambda: next(counter)),
+        Column("data", String),
     )
 
-    conn.execute(t.insert().values([
-        {"data": "d1"},
-        {"data": "d2"},
-        {"data": "d3"},
-    ]))
+    conn.execute(
+        t.insert().values(
+            [
+                {"data": "d1"},
+                {"data": "d2"},
+                {"data": "d3"},
+            ]
+        )
+    )
 
 The above example will invoke ``next(counter)`` for each row individually
-as would be expected::
+as would be expected:
+
+.. sourcecode:: sql
 
     INSERT INTO my_table (id, data) VALUES (?, ?), (?, ?), (?, ?)
     (1, 'd1', 2, 'd2', 3, 'd3')
 
 Previously, a positional dialect would fail as a bind would not be generated
-for additional positions::
+for additional positions:
+
+.. sourcecode:: text
 
     Incorrect number of bindings supplied. The current statement uses 6,
     and there are 4 supplied.
@@ -2022,10 +2120,12 @@ for additional positions::
 
 And with a "named" dialect, the same value for "id" would be re-used in
 each row (hence this change is backwards-incompatible with a system that
-relied on this)::
+relied on this):
+
+.. sourcecode:: sql
 
     INSERT INTO my_table (id, data) VALUES (:id, :data_0), (:id, :data_1), (:id, :data_2)
-    {u'data_2': 'd3', u'data_1': 'd2', u'data_0': 'd1', 'id': 1}
+    -- {u'data_2': 'd3', u'data_1': 'd2', u'data_0': 'd1', 'id': 1}
 
 The system will also refuse to invoke a "server side" default as inline-rendered
 SQL, since it cannot be guaranteed that a server side default is compatible
@@ -2034,28 +2134,37 @@ value is required; if an omitted value only refers to a server-side default,
 an exception is raised::
 
     t = Table(
-        'my_table', metadata,
-        Column('id', Integer, primary_key=True),
-        Column('data', String, server_default='some default')
+        "my_table",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("data", String, server_default="some default"),
     )
 
-    conn.execute(t.insert().values([
-        {"data": "d1"},
-        {"data": "d2"},
-        {},
-    ]))
+    conn.execute(
+        t.insert().values(
+            [
+                {"data": "d1"},
+                {"data": "d2"},
+                {},
+            ]
+        )
+    )
 
-will raise::
+will raise:
+
+.. sourcecode:: text
 
     sqlalchemy.exc.CompileError: INSERT value for column my_table.data is
     explicitly rendered as a boundparameter in the VALUES clause; a
     Python-side value or SQL expression is required
 
 Previously, the value "d1" would be copied into that of the third
-row (but again, only with named format!)::
+row (but again, only with named format!):
+
+.. sourcecode:: sql
 
     INSERT INTO my_table (data) VALUES (:data_0), (:data_1), (:data_0)
-    {u'data_1': 'd2', u'data_0': 'd1'}
+    -- {u'data_1': 'd2', u'data_0': 'd1'}
 
 :ticket:`3288`
 
@@ -2109,7 +2218,7 @@ data is needed.
 A :class:`_schema.Table` can be set up for reflection by passing
 :paramref:`_schema.Table.autoload_with` alone::
 
-    my_table = Table('my_table', metadata, autoload_with=some_engine)
+    my_table = Table("my_table", metadata, autoload_with=some_engine)
 
 :ticket:`3027`
 
@@ -2224,8 +2333,8 @@ An :class:`_postgresql.ENUM` that is created **without** being explicitly
 associated with a :class:`_schema.MetaData` object will be created *and* dropped
 corresponding to :meth:`_schema.Table.create` and :meth:`_schema.Table.drop`::
 
-    table = Table('sometable', metadata,
-        Column('some_enum', ENUM('a', 'b', 'c', name='myenum'))
+    table = Table(
+        "sometable", metadata, Column("some_enum", ENUM("a", "b", "c", name="myenum"))
     )
 
     table.create(engine)  # will emit CREATE TYPE and CREATE TABLE
@@ -2242,11 +2351,9 @@ corresponding to :meth:`_schema.Table.create` and :meth:`_schema.Table.drop`, wi
 the exception of :meth:`_schema.Table.create` called with the ``checkfirst=True``
 flag::
 
-    my_enum = ENUM('a', 'b', 'c', name='myenum', metadata=metadata)
+    my_enum = ENUM("a", "b", "c", name="myenum", metadata=metadata)
 
-    table = Table('sometable', metadata,
-        Column('some_enum', my_enum)
-    )
+    table = Table("sometable", metadata, Column("some_enum", my_enum))
 
     # will fail: ENUM 'my_enum' does not exist
     table.create(engine)
@@ -2256,10 +2363,9 @@ flag::
 
     table.drop(engine)  # will emit DROP TABLE, *not* DROP TYPE
 
-    metadata.drop_all(engine) # will emit DROP TYPE
+    metadata.drop_all(engine)  # will emit DROP TYPE
 
-    metadata.create_all(engine) # will emit CREATE TYPE
-
+    metadata.create_all(engine)  # will emit CREATE TYPE
 
 :ticket:`3319`
 
@@ -2334,13 +2440,14 @@ so that code like the following may proceed::
 
     metadata = MetaData()
     user_tmp = Table(
-        "user_tmp", metadata,
+        "user_tmp",
+        metadata,
         Column("id", INT, primary_key=True),
-        Column('name', VARCHAR(50)),
-        prefixes=['TEMPORARY']
+        Column("name", VARCHAR(50)),
+        prefixes=["TEMPORARY"],
     )
 
-    e = create_engine("postgresql://scott:tiger@localhost/test", echo='debug')
+    e = create_engine("postgresql://scott:tiger@localhost/test", echo="debug")
     with e.begin() as conn:
         user_tmp.create(conn, checkfirst=True)
 
@@ -2357,21 +2464,23 @@ the temporary table::
 
     metadata = MetaData()
     user_tmp = Table(
-        "user_tmp", metadata,
+        "user_tmp",
+        metadata,
         Column("id", INT, primary_key=True),
-        Column('name', VARCHAR(50)),
-        prefixes=['TEMPORARY']
+        Column("name", VARCHAR(50)),
+        prefixes=["TEMPORARY"],
     )
 
-    e = create_engine("postgresql://scott:tiger@localhost/test", echo='debug')
+    e = create_engine("postgresql://scott:tiger@localhost/test", echo="debug")
     with e.begin() as conn:
         user_tmp.create(conn, checkfirst=True)
 
         m2 = MetaData()
         user = Table(
-            "user_tmp", m2,
+            "user_tmp",
+            m2,
             Column("id", INT, primary_key=True),
-            Column('name', VARCHAR(50)),
+            Column("name", VARCHAR(50)),
         )
 
         # in 0.9, *will create* the new table, overwriting the old one.
@@ -2548,11 +2657,13 @@ Code like the following will now function correctly and return floating points
 on MySQL::
 
     >>> connection.execute(
-    ...    select([
-    ...        matchtable.c.title.match('Agile Ruby Programming').label('ruby'),
-    ...        matchtable.c.title.match('Dive Python').label('python'),
-    ...        matchtable.c.title
-    ...    ]).order_by(matchtable.c.id)
+    ...     select(
+    ...         [
+    ...             matchtable.c.title.match("Agile Ruby Programming").label("ruby"),
+    ...             matchtable.c.title.match("Dive Python").label("python"),
+    ...             matchtable.c.title,
+    ...         ]
+    ...     ).order_by(matchtable.c.id)
     ... )
     [
         (2.0, 0.0, 'Agile Web Development with Ruby On Rails'),
@@ -2614,7 +2725,9 @@ Connecting to SQL Server with PyODBC using a DSN-less connection, e.g.
 with an explicit hostname, now requires a driver name - SQLAlchemy will no
 longer attempt to guess a default::
 
-    engine = create_engine("mssql+pyodbc://scott:tiger@myhost:port/databasename?driver=SQL+Server+Native+Client+10.0")
+    engine = create_engine(
+        "mssql+pyodbc://scott:tiger@myhost:port/databasename?driver=SQL+Server+Native+Client+10.0"
+    )
 
 SQLAlchemy's previously hardcoded default of "SQL Server" is obsolete on
 Windows, and SQLAlchemy cannot be tasked with guessing the best driver
@@ -2642,13 +2755,16 @@ Improved support for CTEs in Oracle
 CTE support has been fixed up for Oracle, and there is also a new feature
 :meth:`_expression.CTE.with_suffixes` that can assist with Oracle's special directives::
 
-    included_parts = select([
-        part.c.sub_part, part.c.part, part.c.quantity
-    ]).where(part.c.part == "p1").\
-        cte(name="included_parts", recursive=True).\
-        suffix_with(
+    included_parts = (
+        select([part.c.sub_part, part.c.part, part.c.quantity])
+        .where(part.c.part == "p1")
+        .cte(name="included_parts", recursive=True)
+        .suffix_with(
             "search depth first by part set ord1",
-            "cycle part set y_cycle to 1 default 0", dialect='oracle')
+            "cycle part set y_cycle to 1 default 0",
+            dialect="oracle",
+        )
+    )
 
 :ticket:`3220`
 

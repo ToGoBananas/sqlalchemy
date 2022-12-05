@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import doctest
 import logging
 import os
@@ -10,7 +12,8 @@ from sqlalchemy.testing import requires
 
 
 class DocTest(fixtures.TestBase):
-    __requires__ = ("python39",)
+    __requires__ = ("python310", "insert_returning", "insertmanyvalues")
+    __only_on__ = "sqlite+pysqlite"
 
     def _setup_logger(self):
         rootlogger = logging.getLogger("sqlalchemy.engine.Engine")
@@ -76,14 +79,59 @@ class DocTest(fixtures.TestBase):
             path = os.path.join(sqla_base, "doc/build", fname)
             if not os.path.exists(path):
                 config.skip_test("Can't find documentation file %r" % path)
-            with open(path, encoding="utf-8") as file_:
-                content = file_.read()
-                content = re.sub(r"{(?:stop|sql|opensql)}", "", content)
 
-                test = parser.get_doctest(content, globs, fname, fname, 0)
-                runner.run(test, clear_globs=False)
+            buf = []
+
+            with open(path, encoding="utf-8") as file_:
+
+                def load_include(m):
+                    fname = m.group(1)
+                    sub_path = os.path.join(os.path.dirname(path), fname)
+                    with open(sub_path, encoding="utf-8") as file_:
+                        for i, line in enumerate(file_, 1):
+                            buf.append((i, line))
+                    return fname
+
+                def run_buf(fname, is_include):
+                    if not buf:
+                        return
+
+                    test = parser.get_doctest(
+                        "".join(line for _, line in buf),
+                        globs,
+                        fname,
+                        fname,
+                        buf[0][0],
+                    )
+                    buf[:] = []
+                    runner.run(test, clear_globs=False)
+                    globs.update(test.globs)
+
+                doctest_enabled = True
+
+                for line_counter, line in enumerate(file_, 1):
+                    line = re.sub(r"{(?:stop|sql|opensql)}", "", line)
+
+                    include = re.match(r"\.\. doctest-include (.+\.rst)", line)
+                    if include:
+                        run_buf(fname, False)
+                        include_fname = load_include(include)
+                        run_buf(include_fname, True)
+
+                    doctest_disable = re.match(
+                        r"\.\. doctest-(enable|disable)", line
+                    )
+                    if doctest_disable:
+                        doctest_enabled = doctest_disable.group(1) == "enable"
+
+                    if doctest_enabled:
+                        buf.append((line_counter, line))
+                    else:
+                        buf.append((line_counter, "\n"))
+
+                run_buf(fname, False)
+
                 runner.summarize()
-                globs.update(test.globs)
                 assert not runner.failures
 
     @requires.has_json_each
@@ -104,8 +152,34 @@ class DocTest(fixtures.TestBase):
     def test_core_operators(self):
         self._run_doctest("core/operators.rst")
 
-    def test_orm_queryguide(self):
-        self._run_doctest("orm/queryguide.rst")
+    def test_orm_queryguide_select(self):
+        self._run_doctest(
+            "orm/queryguide/_plain_setup.rst",
+            "orm/queryguide/select.rst",
+            "orm/queryguide/api.rst",
+            "orm/queryguide/_end_doctest.rst",
+        )
+
+    def test_orm_queryguide_inheritance(self):
+        self._run_doctest(
+            "orm/queryguide/inheritance.rst",
+        )
+
+    @requires.update_from
+    def test_orm_queryguide_dml(self):
+        self._run_doctest(
+            "orm/queryguide/dml.rst",
+        )
+
+    def test_orm_large_collections(self):
+        self._run_doctest(
+            "orm/large_collections.rst",
+        )
+
+    def test_orm_queryguide_columns(self):
+        self._run_doctest(
+            "orm/queryguide/columns.rst",
+        )
 
     def test_orm_quickstart(self):
         self._run_doctest("orm/quickstart.rst")

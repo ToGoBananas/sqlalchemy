@@ -111,7 +111,7 @@ class InstrumentationEvents(event.Events):
 
     @classmethod
     def _clear(cls):
-        super(InstrumentationEvents, cls)._clear()
+        super()._clear()
         instrumentation._instrumentation_factory.dispatch._clear()
 
     def class_instrument(self, cls):
@@ -266,7 +266,7 @@ class InstanceEvents(event.Events):
 
     @classmethod
     def _clear(cls):
-        super(InstanceEvents, cls)._clear()
+        super()._clear()
         _InstanceEventsHold._clear()
 
     def first_init(self, manager, cls):
@@ -340,6 +340,23 @@ class InstanceEvents(event.Events):
             :meth:`.InstanceEvents.init`
 
             :meth:`.InstanceEvents.load`
+
+        """
+
+    def _sa_event_merge_wo_load(self, target, context):
+        """receive an object instance after it was the subject of a merge()
+        call, when load=False was passed.
+
+        The target would be the already-loaded object in the Session which
+        would have had its attributes overwritten by the incoming object. This
+        overwrite operation does not use attribute events, instead just
+        populating dict directly. Therefore the purpose of this event is so
+        that extensions like sqlalchemy.ext.mutable know that object state has
+        changed and incoming state needs to be set up for "parents" etc.
+
+        This functionality is acceptable to be made public in a later release.
+
+        .. versionadded:: 1.4.41
 
         """
 
@@ -781,7 +798,7 @@ class MapperEvents(event.Events):
 
     @classmethod
     def _clear(cls):
-        super(MapperEvents, cls)._clear()
+        super()._clear()
         _MapperEventsHold._clear()
 
     def instrument_class(self, mapper, class_):
@@ -1859,10 +1876,16 @@ class SessionEvents(event.Events[Session]):
         ),
     )
     def after_bulk_update(self, update_context):
-        """Execute after an ORM UPDATE against a WHERE expression has been
-        invoked.
+        """Event for after the legacy :meth:`_orm.Query.update` method
+        has been called.
 
-        This is called as a result of the :meth:`_query.Query.update` method.
+        .. legacy:: The :meth:`_orm.SessionEvents.after_bulk_update` method
+           is a legacy event hook as of SQLAlchemy 2.0.   The event
+           **does not participate** in :term:`2.0 style` invocations
+           using :func:`_dml.update` documented at
+           :ref:`orm_queryguide_update_delete_where`.  For 2.0 style use,
+           the :meth:`_orm.SessionEvents.do_orm_execute` hook will intercept
+           these calls.
 
         :param update_context: an "update context" object which contains
          details about the update, including these attributes:
@@ -1899,10 +1922,16 @@ class SessionEvents(event.Events[Session]):
         ),
     )
     def after_bulk_delete(self, delete_context):
-        """Execute after ORM DELETE against a WHERE expression has been
-        invoked.
+        """Event for after the legacy :meth:`_orm.Query.delete` method
+        has been called.
 
-        This is called as a result of the :meth:`_query.Query.delete` method.
+        .. legacy:: The :meth:`_orm.SessionEvents.after_bulk_delete` method
+           is a legacy event hook as of SQLAlchemy 2.0.   The event
+           **does not participate** in :term:`2.0 style` invocations
+           using :func:`_dml.delete` documented at
+           :ref:`orm_queryguide_update_delete_where`.  For 2.0 style use,
+           the :meth:`_orm.SessionEvents.do_orm_execute` hook will intercept
+           these calls.
 
         :param delete_context: a "delete context" object which contains
          details about the update, including these attributes:
@@ -2772,6 +2801,13 @@ class AttributeEvents(event.Events):
 class QueryEvents(event.Events):
     """Represent events within the construction of a :class:`_query.Query`
     object.
+
+    .. legacy:: The :class:`_orm.QueryEvents` event methods are legacy
+        as of SQLAlchemy 2.0, and only apply to direct use of the
+        :class:`_orm.Query` object. They are not used for :term:`2.0 style`
+        statements. For events to intercept and modify 2.0 style ORM use,
+        use the :meth:`_orm.SessionEvents.do_orm_execute` hook.
+
 
     The :class:`_orm.QueryEvents` hooks are now superseded by the
     :meth:`_orm.SessionEvents.do_orm_execute` event hook.

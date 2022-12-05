@@ -52,6 +52,7 @@ from .pool import (
 from .pool import NullPool as NullPool
 from .pool import Pool as Pool
 from .pool import PoolProxiedConnection as PoolProxiedConnection
+from .pool import PoolResetState as PoolResetState
 from .pool import QueuePool as QueuePool
 from .pool import SingletonThreadPool as SingleonThreadPool
 from .pool import StaticPool as StaticPool
@@ -178,6 +179,7 @@ from .sql.expression import Select as Select
 from .sql.expression import select as select
 from .sql.expression import Selectable as Selectable
 from .sql.expression import SelectBase as SelectBase
+from .sql.expression import SQLColumnExpression as SQLColumnExpression
 from .sql.expression import StatementLambdaElement as StatementLambdaElement
 from .sql.expression import Subquery as Subquery
 from .sql.expression import table as table
@@ -257,7 +259,7 @@ from .types import Uuid as Uuid
 from .types import VARBINARY as VARBINARY
 from .types import VARCHAR as VARCHAR
 
-__version__ = "2.0.0b1"
+__version__ = "2.0.0b4"
 
 
 def __go(lcls: Any) -> None:

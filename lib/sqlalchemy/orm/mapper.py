@@ -95,13 +95,13 @@ if TYPE_CHECKING:
     from ._typing import _RegistryType
     from .decl_api import registry
     from .dependency import DependencyProcessor
-    from .descriptor_props import Composite
-    from .descriptor_props import Synonym
+    from .descriptor_props import CompositeProperty
+    from .descriptor_props import SynonymProperty
     from .events import MapperEvents
     from .instrumentation import ClassManager
     from .path_registry import CachingEntityRegistry
     from .properties import ColumnProperty
-    from .relationships import Relationship
+    from .relationships import RelationshipProperty
     from .state import InstanceState
     from ..engine import Row
     from ..engine import RowMapping
@@ -118,6 +118,8 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T", bound=Any)
 _MP = TypeVar("_MP", bound="MapperProperty[Any]")
+_Fn = TypeVar("_Fn", bound="Callable[..., Any]")
+
 
 _WithPolymorphicArg = Union[
     Literal["*"],
@@ -141,8 +143,7 @@ def _all_registries() -> Set[registry]:
 
 def _unconfigured_mappers() -> Iterator[Mapper[Any]]:
     for reg in _all_registries():
-        for mapper in reg._mappers_to_configure():
-            yield mapper
+        yield from reg._mappers_to_configure()
 
 
 _already_compiling = False
@@ -473,17 +474,17 @@ class Mapper(
                CASCADE for joined-table inheritance mappers
 
         :param polymorphic_load: Specifies "polymorphic loading" behavior
-          for a subclass in an inheritance hierarchy (joined and single
-          table inheritance only).   Valid values are:
+         for a subclass in an inheritance hierarchy (joined and single
+         table inheritance only).   Valid values are:
 
-            * "'inline'" - specifies this class should be part of the
-              "with_polymorphic" mappers, e.g. its columns will be included
-              in a SELECT query against the base.
+          * "'inline'" - specifies this class should be part of
+            the "with_polymorphic" mappers, e.g. its columns will be included
+            in a SELECT query against the base.
 
-            * "'selectin'" - specifies that when instances of this class
-              are loaded, an additional SELECT will be emitted to retrieve
-              the columns specific to this subclass.  The SELECT uses
-              IN to fetch multiple subclasses at once.
+          * "'selectin'" - specifies that when instances of this class
+            are loaded, an additional SELECT will be emitted to retrieve
+            the columns specific to this subclass.  The SELECT uses
+            IN to fetch multiple subclasses at once.
 
          .. versionadded:: 1.2
 
@@ -667,10 +668,14 @@ class Mapper(
             indicates a selectable that will be used to query for multiple
             classes.
 
+            The :paramref:`_orm.Mapper.polymorphic_load` parameter may be
+            preferable over the use of :paramref:`_orm.Mapper.with_polymorphic`
+            in modern mappings to indicate a per-subclass technique of
+            indicating polymorphic loading styles.
+
             .. seealso::
 
-              :ref:`with_polymorphic` - discussion of polymorphic querying
-              techniques.
+                :ref:`with_polymorphic_mapper_config`
 
         """
         self.class_ = util.assert_arg_type(class_, type, "class_")
@@ -854,6 +859,7 @@ class Mapper(
     _memoized_values: Dict[Any, Callable[[], Any]]
     _inheriting_mappers: util.WeakSequence[Mapper[Any]]
     _all_tables: Set[Table]
+    _polymorphic_attr_key: Optional[str]
 
     _pks_by_table: Dict[FromClause, OrderedSet[ColumnClause[Any]]]
     _cols_by_table: Dict[FromClause, OrderedSet[ColumnElement[Any]]]
@@ -898,8 +904,8 @@ class Mapper(
 
     with_polymorphic: Optional[
         Tuple[
-            Union[Literal["*"], Sequence[Union["Mapper[Any]", Type[Any]]]],
-            Optional["FromClause"],
+            Union[Literal["*"], Sequence[Union[Mapper[Any], Type[Any]]]],
+            Optional[FromClause],
         ]
     ]
 
@@ -1217,10 +1223,27 @@ class Mapper(
             else:
                 self.persist_selectable = self.local_table
 
-            if self.polymorphic_identity is not None and not self.concrete:
-                self._identity_class = self.inherits._identity_class
-            else:
+            if self.polymorphic_identity is None:
                 self._identity_class = self.class_
+
+                if self.inherits.base_mapper.polymorphic_on is not None:
+                    util.warn(
+                        "Mapper %s does not indicate a polymorphic_identity, "
+                        "yet is part of an inheritance hierarchy that has a "
+                        "polymorphic_on column of '%s'.  Objects of this type "
+                        "cannot be loaded polymorphically which can lead to "
+                        "degraded or incorrect loading behavior in some "
+                        "scenarios.  Please establish a polmorphic_identity "
+                        "for this class, or leave it un-mapped.  "
+                        "To omit mapping an intermediary class when using "
+                        "declarative, set the '__abstract__ = True' "
+                        "attribute on that class."
+                        % (self, self.inherits.base_mapper.polymorphic_on)
+                    )
+            elif self.concrete:
+                self._identity_class = self.class_
+            else:
+                self._identity_class = self.inherits._identity_class
 
             if self.version_id_col is None:
                 self.version_id_col = self.inherits.version_id_col
@@ -1594,7 +1617,6 @@ class Mapper(
 
     def _configure_properties(self) -> None:
 
-        # TODO: consider using DedupeColumnCollection
         self.columns = self.c = sql_base.ColumnCollection()  # type: ignore
 
         # object attribute names mapped to MapperProperty objects
@@ -1603,23 +1625,83 @@ class Mapper(
         # table columns mapped to MapperProperty
         self._columntoproperty = _ColumnMapping(self)
 
-        # load custom properties
+        explicit_col_props_by_column: Dict[
+            KeyedColumnElement[Any], Tuple[str, ColumnProperty[Any]]
+        ] = {}
+        explicit_col_props_by_key: Dict[str, ColumnProperty[Any]] = {}
+
+        # step 1: go through properties that were explicitly passed
+        # in the properties dictionary.  For Columns that are local, put them
+        # aside in a separate collection we will reconcile with the Table
+        # that's given.  For other properties, set them up in _props now.
         if self._init_properties:
-            for key, prop in self._init_properties.items():
-                self._configure_property(key, prop, False)
+            for key, prop_arg in self._init_properties.items():
 
-        # pull properties from the inherited mapper if any.
+                if not isinstance(prop_arg, MapperProperty):
+                    possible_col_prop = self._make_prop_from_column(
+                        key, prop_arg
+                    )
+                else:
+                    possible_col_prop = prop_arg
+
+                # issue #8705.  if the explicit property is actually a
+                # Column that is local to the local Table, don't set it up
+                # in ._props yet, integrate it into the order given within
+                # the Table.
+                if isinstance(possible_col_prop, properties.ColumnProperty):
+                    given_col = possible_col_prop.columns[0]
+                    if self.local_table.c.contains_column(given_col):
+                        explicit_col_props_by_key[key] = possible_col_prop
+                        explicit_col_props_by_column[given_col] = (
+                            key,
+                            possible_col_prop,
+                        )
+                        continue
+
+                self._configure_property(key, possible_col_prop, False)
+
+        # step 2: pull properties from the inherited mapper.  reconcile
+        # columns with those which are explicit above.  for properties that
+        # are only in the inheriting mapper, set them up as local props
         if self.inherits:
-            for key, prop in self.inherits._props.items():
-                if key not in self._props and not self._should_exclude(
-                    key, key, local=False, column=None
-                ):
-                    self._adapt_inherited_property(key, prop, False)
+            for key, inherited_prop in self.inherits._props.items():
+                if self._should_exclude(key, key, local=False, column=None):
+                    continue
 
-        # create properties for each column in the mapped table,
-        # for those columns which don't already map to a property
+                incoming_prop = explicit_col_props_by_key.get(key)
+                if incoming_prop:
+
+                    new_prop = self._reconcile_prop_with_incoming_columns(
+                        key,
+                        inherited_prop,
+                        warn_only=False,
+                        incoming_prop=incoming_prop,
+                    )
+                    explicit_col_props_by_key[key] = new_prop
+                    explicit_col_props_by_column[incoming_prop.columns[0]] = (
+                        key,
+                        new_prop,
+                    )
+                elif key not in self._props:
+                    self._adapt_inherited_property(key, inherited_prop, False)
+
+        # step 3.  Iterate through all columns in the persist selectable.
+        # this includes not only columns in the local table / fromclause,
+        # but also those columns in the superclass table if we are joined
+        # inh or single inh mapper.  map these columns as well. additional
+        # reconciliation against inherited columns occurs here also.
+
         for column in self.persist_selectable.columns:
-            if column in self._columntoproperty:
+
+            if column in explicit_col_props_by_column:
+                # column was explicitly passed to properties; configure
+                # it now in the order in which it corresponds to the
+                # Table / selectable
+                key, prop = explicit_col_props_by_column[column]
+                self._configure_property(key, prop, False)
+                continue
+
+            elif column in self._columntoproperty:
                 continue
 
             column_key = (self.column_prefix or "") + column.key
@@ -1653,6 +1735,7 @@ class Mapper(
 
         """
         setter = False
+        polymorphic_key: Optional[str] = None
 
         if self.polymorphic_on is not None:
             setter = True
@@ -1772,23 +1855,31 @@ class Mapper(
                         self._set_polymorphic_identity = (
                             mapper._set_polymorphic_identity
                         )
+                        self._polymorphic_attr_key = (
+                            mapper._polymorphic_attr_key
+                        )
                         self._validate_polymorphic_identity = (
                             mapper._validate_polymorphic_identity
                         )
                     else:
                         self._set_polymorphic_identity = None
+                        self._polymorphic_attr_key = None
                     return
 
         if setter:
 
             def _set_polymorphic_identity(state):
                 dict_ = state.dict
+                # TODO: what happens if polymorphic_on column attribute name
+                # does not match .key?
                 state.get_impl(polymorphic_key).set(
                     state,
                     dict_,
                     state.manager.mapper.polymorphic_identity,
                     None,
                 )
+
+            self._polymorphic_attr_key = polymorphic_key
 
             def _validate_polymorphic_identity(mapper, state, dict_):
                 if (
@@ -1808,6 +1899,7 @@ class Mapper(
                 _validate_polymorphic_identity
             )
         else:
+            self._polymorphic_attr_key = None
             self._set_polymorphic_identity = None
 
     _validate_polymorphic_identity = None
@@ -1879,7 +1971,9 @@ class Mapper(
         )
 
         if not isinstance(prop_arg, MapperProperty):
-            prop = self._property_from_column(key, prop_arg)
+            prop: MapperProperty[Any] = self._property_from_column(
+                key, prop_arg
+            )
         else:
             prop = prop_arg
 
@@ -1996,79 +2090,129 @@ class Mapper(
 
         return prop
 
+    def _make_prop_from_column(
+        self,
+        key: str,
+        column: Union[
+            Sequence[KeyedColumnElement[Any]], KeyedColumnElement[Any]
+        ],
+    ) -> ColumnProperty[Any]:
+
+        columns = util.to_list(column)
+        mapped_column = []
+        for c in columns:
+            mc = self.persist_selectable.corresponding_column(c)
+            if mc is None:
+                mc = self.local_table.corresponding_column(c)
+                if mc is not None:
+                    # if the column is in the local table but not the
+                    # mapped table, this corresponds to adding a
+                    # column after the fact to the local table.
+                    # [ticket:1523]
+                    self.persist_selectable._refresh_for_new_column(mc)
+                mc = self.persist_selectable.corresponding_column(c)
+                if mc is None:
+                    raise sa_exc.ArgumentError(
+                        "When configuring property '%s' on %s, "
+                        "column '%s' is not represented in the mapper's "
+                        "table. Use the `column_property()` function to "
+                        "force this column to be mapped as a read-only "
+                        "attribute." % (key, self, c)
+                    )
+            mapped_column.append(mc)
+        return properties.ColumnProperty(*mapped_column)
+
+    def _reconcile_prop_with_incoming_columns(
+        self,
+        key: str,
+        existing_prop: MapperProperty[Any],
+        warn_only: bool,
+        incoming_prop: Optional[ColumnProperty[Any]] = None,
+        single_column: Optional[KeyedColumnElement[Any]] = None,
+    ) -> ColumnProperty[Any]:
+
+        if incoming_prop and (
+            self.concrete
+            or not isinstance(existing_prop, properties.ColumnProperty)
+        ):
+            return incoming_prop
+
+        existing_column = existing_prop.columns[0]
+
+        if incoming_prop and existing_column in incoming_prop.columns:
+            return incoming_prop
+
+        if incoming_prop is None:
+            assert single_column is not None
+            incoming_column = single_column
+            equated_pair_key = (existing_prop.columns[0], incoming_column)
+        else:
+            assert single_column is None
+            incoming_column = incoming_prop.columns[0]
+            equated_pair_key = (incoming_column, existing_prop.columns[0])
+
+        if (
+            (
+                not self._inherits_equated_pairs
+                or (equated_pair_key not in self._inherits_equated_pairs)
+            )
+            and not existing_column.shares_lineage(incoming_column)
+            and existing_column is not self.version_id_col
+            and incoming_column is not self.version_id_col
+        ):
+            msg = (
+                "Implicitly combining column %s with column "
+                "%s under attribute '%s'.  Please configure one "
+                "or more attributes for these same-named columns "
+                "explicitly."
+                % (
+                    existing_prop.columns[-1],
+                    incoming_column,
+                    key,
+                )
+            )
+            if warn_only:
+                util.warn(msg)
+            else:
+                raise sa_exc.InvalidRequestError(msg)
+
+        # existing properties.ColumnProperty from an inheriting
+        # mapper. make a copy and append our column to it
+        # breakpoint()
+        new_prop = existing_prop.copy()
+
+        new_prop.columns.insert(0, incoming_column)
+        self._log(
+            "inserting column to existing list "
+            "in properties.ColumnProperty %s",
+            key,
+        )
+        return new_prop  # type: ignore
+
     @util.preload_module("sqlalchemy.orm.descriptor_props")
     def _property_from_column(
         self,
         key: str,
-        prop_arg: Union[KeyedColumnElement[Any], MapperProperty[Any]],
-    ) -> MapperProperty[Any]:
+        column: KeyedColumnElement[Any],
+    ) -> ColumnProperty[Any]:
         """generate/update a :class:`.ColumnProperty` given a
-        :class:`_schema.Column` object."""
+        :class:`_schema.Column` or other SQL expression object."""
+
         descriptor_props = util.preloaded.orm_descriptor_props
-        # we were passed a Column or a list of Columns;
-        # generate a properties.ColumnProperty
-        columns = util.to_list(prop_arg)
-        column = columns[0]
 
         prop = self._props.get(key)
 
         if isinstance(prop, properties.ColumnProperty):
-            if (
-                (
-                    not self._inherits_equated_pairs
-                    or (prop.columns[0], column)
-                    not in self._inherits_equated_pairs
-                )
-                and not prop.columns[0].shares_lineage(column)
-                and prop.columns[0] is not self.version_id_col
-                and column is not self.version_id_col
-            ):
-                warn_only = prop.parent is not self
-                msg = (
-                    "Implicitly combining column %s with column "
-                    "%s under attribute '%s'.  Please configure one "
-                    "or more attributes for these same-named columns "
-                    "explicitly." % (prop.columns[-1], column, key)
-                )
-                if warn_only:
-                    util.warn(msg)
-                else:
-                    raise sa_exc.InvalidRequestError(msg)
-
-            # existing properties.ColumnProperty from an inheriting
-            # mapper. make a copy and append our column to it
-            prop = prop.copy()
-            prop.columns.insert(0, column)
-            self._log(
-                "inserting column to existing list "
-                "in properties.ColumnProperty %s" % (key)
+            return self._reconcile_prop_with_incoming_columns(
+                key,
+                prop,
+                single_column=column,
+                warn_only=prop.parent is not self,
             )
-            return prop
         elif prop is None or isinstance(
             prop, descriptor_props.ConcreteInheritedProperty
         ):
-            mapped_column = []
-            for c in columns:
-                mc = self.persist_selectable.corresponding_column(c)
-                if mc is None:
-                    mc = self.local_table.corresponding_column(c)
-                    if mc is not None:
-                        # if the column is in the local table but not the
-                        # mapped table, this corresponds to adding a
-                        # column after the fact to the local table.
-                        # [ticket:1523]
-                        self.persist_selectable._refresh_for_new_column(mc)
-                    mc = self.persist_selectable.corresponding_column(c)
-                    if mc is None:
-                        raise sa_exc.ArgumentError(
-                            "When configuring property '%s' on %s, "
-                            "column '%s' is not represented in the mapper's "
-                            "table. Use the `column_property()` function to "
-                            "force this column to be mapped as a read-only "
-                            "attribute." % (key, self, c)
-                        )
-                mapped_column.append(mc)
-            return properties.ColumnProperty(*mapped_column)
+            return self._make_prop_from_column(key, column)
         else:
             raise sa_exc.ArgumentError(
                 "WARNING: when configuring property '%s' on %s, "
@@ -2297,6 +2441,41 @@ class Mapper(
             return None
 
     @HasMemoized.memoized_attribute
+    def _should_select_with_poly_adapter(self):
+        """determine if _MapperEntity or _ORMColumnEntity will need to use
+        polymorphic adaption when setting up a SELECT as well as fetching
+        rows for mapped classes and subclasses against this Mapper.
+
+        moved here from context.py for #8456 to generalize the ruleset
+        for this condition.
+
+        """
+
+        # this has been simplified as of #8456.
+        # rule is: if we have a with_polymorphic or a concrete-style
+        # polymorphic selectable, *or* if the base mapper has either of those,
+        # we turn on the adaption thing.  if not, we do *no* adaption.
+        #
+        # this splits the behavior among the "regular" joined inheritance
+        # and single inheritance mappers, vs. the "weird / difficult"
+        # concrete and joined inh mappings that use a with_polymorphic of
+        # some kind or polymorphic_union.
+        #
+        # note we have some tests in test_polymorphic_rel that query against
+        # a subclass, then refer to the superclass that has a with_polymorphic
+        # on it (such as test_join_from_polymorphic_explicit_aliased_three).
+        # these tests actually adapt the polymorphic selectable (like, the
+        # UNION or the SELECT subquery with JOIN in it) to be just the simple
+        # subclass table.   Hence even if we are a "plain" inheriting mapper
+        # but our base has a wpoly on it, we turn on adaption.
+        return (
+            self.with_polymorphic
+            or self._requires_row_aliasing
+            or self.base_mapper.with_polymorphic
+            or self.base_mapper._requires_row_aliasing
+        )
+
+    @HasMemoized.memoized_attribute
     def _with_polymorphic_mappers(self) -> Sequence[Mapper[Any]]:
         self._check_configure()
 
@@ -2338,105 +2517,85 @@ class Mapper(
 
     @HasMemoized_ro_memoized_attribute
     def _insert_cols_evaluating_none(self):
-        return dict(
-            (
-                table,
-                frozenset(
-                    col for col in columns if col.type.should_evaluate_none
-                ),
+        return {
+            table: frozenset(
+                col for col in columns if col.type.should_evaluate_none
             )
             for table, columns in self._cols_by_table.items()
-        )
+        }
 
     @HasMemoized.memoized_attribute
     def _insert_cols_as_none(self):
-        return dict(
-            (
-                table,
-                frozenset(
-                    col.key
-                    for col in columns
-                    if not col.primary_key
-                    and not col.server_default
-                    and not col.default
-                    and not col.type.should_evaluate_none
-                ),
+        return {
+            table: frozenset(
+                col.key
+                for col in columns
+                if not col.primary_key
+                and not col.server_default
+                and not col.default
+                and not col.type.should_evaluate_none
             )
             for table, columns in self._cols_by_table.items()
-        )
+        }
 
     @HasMemoized.memoized_attribute
     def _propkey_to_col(self):
-        return dict(
-            (
-                table,
-                dict(
-                    (self._columntoproperty[col].key, col) for col in columns
-                ),
-            )
+        return {
+            table: {self._columntoproperty[col].key: col for col in columns}
             for table, columns in self._cols_by_table.items()
-        )
+        }
 
     @HasMemoized.memoized_attribute
     def _pk_keys_by_table(self):
-        return dict(
-            (table, frozenset([col.key for col in pks]))
+        return {
+            table: frozenset([col.key for col in pks])
             for table, pks in self._pks_by_table.items()
-        )
+        }
 
     @HasMemoized.memoized_attribute
     def _pk_attr_keys_by_table(self):
-        return dict(
-            (
-                table,
-                frozenset([self._columntoproperty[col].key for col in pks]),
-            )
+        return {
+            table: frozenset([self._columntoproperty[col].key for col in pks])
             for table, pks in self._pks_by_table.items()
-        )
+        }
 
     @HasMemoized.memoized_attribute
     def _server_default_cols(
         self,
     ) -> Mapping[FromClause, FrozenSet[Column[Any]]]:
-        return dict(
-            (
-                table,
-                frozenset(
-                    [
-                        col
-                        for col in cast("Iterable[Column[Any]]", columns)
-                        if col.server_default is not None
-                        or (
-                            col.default is not None
-                            and col.default.is_clause_element
-                        )
-                    ]
-                ),
+        return {
+            table: frozenset(
+                [
+                    col
+                    for col in cast("Iterable[Column[Any]]", columns)
+                    if col.server_default is not None
+                    or (
+                        col.default is not None
+                        and col.default.is_clause_element
+                    )
+                ]
             )
             for table, columns in self._cols_by_table.items()
-        )
+        }
 
     @HasMemoized.memoized_attribute
     def _server_onupdate_default_cols(
         self,
     ) -> Mapping[FromClause, FrozenSet[Column[Any]]]:
-        return dict(
-            (
-                table,
-                frozenset(
-                    [
-                        col
-                        for col in cast("Iterable[Column[Any]]", columns)
-                        if col.server_onupdate is not None
-                        or (
-                            col.onupdate is not None
-                            and col.onupdate.is_clause_element
-                        )
-                    ]
-                ),
+        return {
+            table: frozenset(
+                [
+                    col
+                    for col in cast("Iterable[Column[Any]]", columns)
+                    if col.server_onupdate is not None
+                    or (
+                        col.onupdate is not None
+                        and col.onupdate.is_clause_element
+                    )
+                ]
             )
             for table, columns in self._cols_by_table.items()
-        )
+        }
 
     @HasMemoized.memoized_attribute
     def _server_default_col_keys(self) -> Mapping[FromClause, FrozenSet[str]]:
@@ -2730,7 +2889,25 @@ class Mapper(
 
     @HasMemoized.memoized_attribute
     @util.preload_module("sqlalchemy.orm.descriptor_props")
-    def synonyms(self) -> util.ReadOnlyProperties[Synonym[Any]]:
+    def _pk_synonyms(self) -> Dict[str, str]:
+        """return a dictionary of {syn_attribute_name: pk_attr_name} for
+        all synonyms that refer to primary key columns
+
+        """
+        descriptor_props = util.preloaded.orm_descriptor_props
+
+        pk_keys = {prop.key for prop in self._identity_key_props}
+
+        return {
+            syn.key: syn.name
+            for k, syn in self._props.items()
+            if isinstance(syn, descriptor_props.SynonymProperty)
+            and syn.name in pk_keys
+        }
+
+    @HasMemoized.memoized_attribute
+    @util.preload_module("sqlalchemy.orm.descriptor_props")
+    def synonyms(self) -> util.ReadOnlyProperties[SynonymProperty[Any]]:
         """Return a namespace of all :class:`.Synonym`
         properties maintained by this :class:`_orm.Mapper`.
 
@@ -2743,7 +2920,7 @@ class Mapper(
         """
         descriptor_props = util.preloaded.orm_descriptor_props
 
-        return self._filter_properties(descriptor_props.Synonym)
+        return self._filter_properties(descriptor_props.SynonymProperty)
 
     @property
     def entity_namespace(self):
@@ -2765,7 +2942,9 @@ class Mapper(
 
     @HasMemoized.memoized_attribute
     @util.preload_module("sqlalchemy.orm.relationships")
-    def relationships(self) -> util.ReadOnlyProperties[Relationship[Any]]:
+    def relationships(
+        self,
+    ) -> util.ReadOnlyProperties[RelationshipProperty[Any]]:
         """A namespace of all :class:`.Relationship` properties
         maintained by this :class:`_orm.Mapper`.
 
@@ -2789,12 +2968,12 @@ class Mapper(
 
         """
         return self._filter_properties(
-            util.preloaded.orm_relationships.Relationship
+            util.preloaded.orm_relationships.RelationshipProperty
         )
 
     @HasMemoized.memoized_attribute
     @util.preload_module("sqlalchemy.orm.descriptor_props")
-    def composites(self) -> util.ReadOnlyProperties[Composite[Any]]:
+    def composites(self) -> util.ReadOnlyProperties[CompositeProperty[Any]]:
         """Return a namespace of all :class:`.Composite`
         properties maintained by this :class:`_orm.Mapper`.
 
@@ -2806,7 +2985,7 @@ class Mapper(
 
         """
         return self._filter_properties(
-            util.preloaded.orm_descriptor_props.Composite
+            util.preloaded.orm_descriptor_props.CompositeProperty
         )
 
     def _filter_properties(
@@ -3361,6 +3540,13 @@ class Mapper(
         enable_opt = strategy_options.Load(entity)
 
         for prop in self.attrs:
+
+            # skip prop keys that are not instrumented on the mapped class.
+            # this is primarily the "_sa_polymorphic_on" property that gets
+            # created for an ad-hoc polymorphic_on SQL expression, issue #8704
+            if prop.key not in self.class_manager:
+                continue
+
             if prop.parent is self or prop in keep_props:
                 # "enable" options, to turn on the properties that we want to
                 # load by default (subject to options from the query)
@@ -3369,7 +3555,8 @@ class Mapper(
 
                 enable_opt = enable_opt._set_generic_strategy(
                     # convert string name to an attribute before passing
-                    # to loader strategy
+                    # to loader strategy.   note this must be in terms
+                    # of given entity, such as AliasedClass, etc.
                     (getattr(entity.entity_namespace, prop.key),),
                     dict(prop.strategy_key),
                     _reconcile_to_other=True,
@@ -3380,7 +3567,8 @@ class Mapper(
                 # the options from the query to override them
                 disable_opt = disable_opt._set_generic_strategy(
                     # convert string name to an attribute before passing
-                    # to loader strategy
+                    # to loader strategy.   note this must be in terms
+                    # of given entity, such as AliasedClass, etc.
                     (getattr(entity.entity_namespace, prop.key),),
                     {"do_nothing": True},
                     _reconcile_to_other=False,
@@ -3525,6 +3713,10 @@ class Mapper(
     @HasMemoized.memoized_attribute
     def _compiled_cache(self):
         return util.LRUCache(self._compiled_cache_size)
+
+    @HasMemoized.memoized_attribute
+    def _multiple_persistence_tables(self):
+        return len(self.tables) > 1
 
     @HasMemoized.memoized_attribute
     def _sorted_tables(self):
@@ -3841,7 +4033,9 @@ def reconstructor(fn):
     return fn
 
 
-def validates(*names, **kw):
+def validates(
+    *names: str, include_removes: bool = False, include_backrefs: bool = False
+) -> Callable[[_Fn], _Fn]:
     r"""Decorate a method as a 'validator' for one or more named properties.
 
     Designates a method as a validator, a method which receives the
@@ -3876,12 +4070,10 @@ def validates(*names, **kw):
       :ref:`simple_validators` - usage examples for :func:`.validates`
 
     """
-    include_removes = kw.pop("include_removes", False)
-    include_backrefs = kw.pop("include_backrefs", True)
 
-    def wrap(fn):
-        fn.__sa_validators__ = names
-        fn.__sa_validation_opts__ = {
+    def wrap(fn: _Fn) -> _Fn:
+        fn.__sa_validators__ = names  # type: ignore[attr-defined]
+        fn.__sa_validation_opts__ = {  # type: ignore[attr-defined]
             "include_removes": include_removes,
             "include_backrefs": include_backrefs,
         }

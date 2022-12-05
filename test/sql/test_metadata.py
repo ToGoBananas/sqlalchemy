@@ -44,7 +44,7 @@ from sqlalchemy.schema import DefaultClause
 from sqlalchemy.schema import DropIndex
 from sqlalchemy.sql import naming
 from sqlalchemy.sql import operators
-from sqlalchemy.sql.elements import _NONE_NAME
+from sqlalchemy.sql.base import _NONE_NAME
 from sqlalchemy.sql.elements import literal_column
 from sqlalchemy.sql.schema import RETAIN_SCHEMA
 from sqlalchemy.testing import assert_raises
@@ -59,6 +59,7 @@ from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_false
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import mock
+from sqlalchemy.testing import Variation
 from sqlalchemy.testing.assertions import expect_warnings
 
 
@@ -124,10 +125,10 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         class MyColumn(schema.Column):
             def __init__(self, *args, **kw):
                 self.widget = kw.pop("widget", None)
-                super(MyColumn, self).__init__(*args, **kw)
+                super().__init__(*args, **kw)
 
             def _copy(self, *arg, **kw):
-                c = super(MyColumn, self)._copy(*arg, **kw)
+                c = super()._copy(*arg, **kw)
                 c.widget = self.widget
                 return c
 
@@ -160,7 +161,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         Table("t2", metadata, Column("x", Integer), schema="bar")
         Table("t3", metadata, Column("x", Integer))
 
-        eq_(metadata._schemas, set(["foo", "bar"]))
+        eq_(metadata._schemas, {"foo", "bar"})
         eq_(len(metadata.tables), 3)
 
     def test_schema_collection_remove(self):
@@ -171,11 +172,11 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         t3 = Table("t3", metadata, Column("x", Integer), schema="bar")
 
         metadata.remove(t3)
-        eq_(metadata._schemas, set(["foo", "bar"]))
+        eq_(metadata._schemas, {"foo", "bar"})
         eq_(len(metadata.tables), 2)
 
         metadata.remove(t1)
-        eq_(metadata._schemas, set(["bar"]))
+        eq_(metadata._schemas, {"bar"})
         eq_(len(metadata.tables), 1)
 
     def test_schema_collection_remove_all(self):
@@ -1778,15 +1779,15 @@ class TableTest(fixtures.TestBase, AssertsCompiledSQL):
         fk3 = ForeignKeyConstraint(["b", "c"], ["r.x", "r.y"])
 
         t1.append_column(Column("b", Integer, fk1))
-        eq_(t1.foreign_key_constraints, set([fk1.constraint]))
+        eq_(t1.foreign_key_constraints, {fk1.constraint})
 
         t1.append_column(Column("c", Integer, fk2))
-        eq_(t1.foreign_key_constraints, set([fk1.constraint, fk2.constraint]))
+        eq_(t1.foreign_key_constraints, {fk1.constraint, fk2.constraint})
 
         t1.append_constraint(fk3)
         eq_(
             t1.foreign_key_constraints,
-            set([fk1.constraint, fk2.constraint, fk3]),
+            {fk1.constraint, fk2.constraint, fk3},
         )
 
     def test_c_immutable(self):
@@ -1825,8 +1826,12 @@ class TableTest(fixtures.TestBase, AssertsCompiledSQL):
         is_(t2.c.contains_column(g), False)
 
     def test_table_ctor_duplicated_column_name(self):
-        def go():
-            return Table(
+        # when it will raise
+        with testing.expect_raises_message(
+            exc.ArgumentError,
+            "A column with name 'col' is already present in table 't'",
+        ):
+            Table(
                 "t",
                 MetaData(),
                 Column("a", Integer),
@@ -1834,39 +1839,42 @@ class TableTest(fixtures.TestBase, AssertsCompiledSQL):
                 Column("col", String),
             )
 
-        with testing.expect_deprecated(
-            "A column with name 'col' is already present in table 't'",
-        ):
-            t = go()
-        is_true(isinstance(t.c.col.type, String))
-        # when it will raise
-        # with testing.expect_raises_message(
-        #     exc.ArgumentError,
-        #     "A column with name 'col' is already present in table 't'",
-        # ):
-        #     go()
-
     def test_append_column_existing_name(self):
         t = Table("t", MetaData(), Column("col", Integer))
 
-        with testing.expect_deprecated(
-            "A column with name 'col' is already present in table 't'",
+        with testing.expect_raises_message(
+            exc.DuplicateColumnError,
+            r"A column with name 'col' is already present in table 't'. "
+            r"Specify replace_existing=True to Table.append_column\(\) to "
+            r"replace an existing column.",
         ):
             t.append_column(Column("col", String))
-        is_true(isinstance(t.c.col.type, String))
-        # when it will raise
-        # col = t.c.col
-        # with testing.expect_raises_message(
-        #     exc.ArgumentError,
-        #     "A column with name 'col' is already present in table 't'",
-        # ):
-        #     t.append_column(Column("col", String))
-        # is_true(t.c.col is col)
 
-    def test_append_column_replace_existing(self):
-        t = Table("t", MetaData(), Column("col", Integer))
-        t.append_column(Column("col", String), replace_existing=True)
-        is_true(isinstance(t.c.col.type, String))
+    def test_append_column_existing_key(self):
+        t = Table("t", MetaData(), Column("col", Integer, key="c2"))
+
+        with testing.expect_raises_message(
+            exc.DuplicateColumnError,
+            r"A column with key 'c2' is already present in table 't'. "
+            r"Specify replace_existing=True to Table.append_column\(\) "
+            r"to replace an existing column.",
+        ):
+            t.append_column(Column("col", String, key="c2"))
+
+    @testing.variation("field", ["name", "key"])
+    def test_append_column_replace_existing(self, field: Variation):
+        if field.name:
+            t = Table("t", MetaData(), Column("col", Integer))
+            t.append_column(Column("col", String), replace_existing=True)
+            is_true(isinstance(t.c.col.type, String))
+        elif field.key:
+            t = Table("t", MetaData(), Column("col", Integer, key="c2"))
+            t.append_column(
+                Column("col", String, key="c2"), replace_existing=True
+            )
+            is_true(isinstance(t.c.c2.type, String))
+        else:
+            field.fail()
 
     def test_autoincrement_replace(self):
         m = MetaData()
@@ -2167,20 +2175,16 @@ class SchemaTypeTest(fixtures.TestBase):
         evt_targets = ()
 
         def _set_table(self, column, table):
-            super(SchemaTypeTest.TrackEvents, self)._set_table(column, table)
+            super()._set_table(column, table)
             self.column = column
             self.table = table
 
         def _on_table_create(self, target, bind, **kw):
-            super(SchemaTypeTest.TrackEvents, self)._on_table_create(
-                target, bind, **kw
-            )
+            super()._on_table_create(target, bind, **kw)
             self.evt_targets += (target,)
 
         def _on_metadata_create(self, target, bind, **kw):
-            super(SchemaTypeTest.TrackEvents, self)._on_metadata_create(
-                target, bind, **kw
-            )
+            super()._on_metadata_create(target, bind, **kw)
             self.evt_targets += (target,)
 
     # TODO: Enum and Boolean put TypeEngine first.  Changing that here
@@ -2621,7 +2625,15 @@ class SchemaTest(fixtures.TestBase, AssertsCompiledSQL):
             schema.CreateSchema("sa_schema"), "CREATE SCHEMA sa_schema"
         )
         self.assert_compile(
+            schema.CreateSchema("sa_schema", if_not_exists=True),
+            "CREATE SCHEMA IF NOT EXISTS sa_schema",
+        )
+        self.assert_compile(
             schema.DropSchema("sa_schema"), "DROP SCHEMA sa_schema"
+        )
+        self.assert_compile(
+            schema.DropSchema("sa_schema", if_exists=True),
+            "DROP SCHEMA IF EXISTS sa_schema",
         )
         self.assert_compile(
             schema.DropSchema("sa_schema", cascade=True),
@@ -2654,7 +2666,7 @@ class SchemaTest(fixtures.TestBase, AssertsCompiledSQL):
             assert t2.index("CREATE TABLE someschema.table2") > -1
 
 
-class UseExistingTest(fixtures.TablesTest):
+class UseExistingTest(testing.AssertsCompiledSQL, fixtures.TablesTest):
     @classmethod
     def define_tables(cls, metadata):
         Table(
@@ -2673,6 +2685,121 @@ class UseExistingTest(fixtures.TablesTest):
     @testing.fixture
     def empty_meta(self):
         return MetaData()
+
+    @testing.variation(
+        "scenario",
+        [
+            "inplace",
+            "inplace_ee",
+            "separate_ee_key_first",
+            "separate_ee_key_second",
+            "separate_ee_key_append_no_replace",
+            "separate_ee_key_append_replace",
+        ],
+    )
+    @testing.variation("both_have_keys", [True, False])
+    def test_table_w_two_same_named_columns(
+        self, empty_meta, scenario: Variation, both_have_keys: Variation
+    ):
+
+        if scenario.inplace:
+            with expect_raises_message(
+                exc.DuplicateColumnError,
+                "A column with name 'b' is already present in table 'users'.",
+            ):
+                t1 = Table(
+                    "users",
+                    empty_meta,
+                    Column("a", String),
+                    Column("b", String, key="b1" if both_have_keys else None),
+                    Column("b", String, key="b2"),
+                )
+            return
+        elif scenario.inplace_ee:
+            t1 = Table(
+                "users",
+                empty_meta,
+                Column("a", String),
+                Column("b", String, key="b1" if both_have_keys else None),
+                Column("b", String, key="b2"),
+                extend_existing=True,
+            )
+        elif scenario.separate_ee_key_first:
+            t1 = Table(
+                "users",
+                empty_meta,
+                Column("a", String),
+                Column("b", String, key="b2"),
+            )
+
+            expected_warnings = (
+                [
+                    'Column with user-specified key "b2" is being '
+                    'replaced with plain named column "b", key "b2" '
+                    "is being removed."
+                ]
+                if not both_have_keys
+                else []
+            )
+            with expect_warnings(*expected_warnings):
+                t1 = Table(
+                    "users",
+                    empty_meta,
+                    Column("a", String),
+                    Column("b", String, key="b1" if both_have_keys else None),
+                    extend_existing=True,
+                )
+        elif scenario.separate_ee_key_second:
+            t1 = Table(
+                "users",
+                empty_meta,
+                Column("a", String),
+                Column("b", String, key="b1" if both_have_keys else None),
+            )
+            t1 = Table(
+                "users",
+                empty_meta,
+                Column("a", String),
+                Column("b", String, key="b2"),
+                extend_existing=True,
+            )
+        elif scenario.separate_ee_key_append_no_replace:
+            t1 = Table(
+                "users",
+                empty_meta,
+                Column("a", String),
+                Column("b", String, key="b1" if both_have_keys else None),
+            )
+            with expect_raises_message(
+                exc.DuplicateColumnError,
+                r"A column with name 'b' is already present in table 'users'. "
+                r"Specify replace_existing=True to Table.append_column\(\) "
+                r"to replace an existing column.",
+            ):
+                t1.append_column(Column("b", String, key="b2"))
+            return
+        elif scenario.separate_ee_key_append_replace:
+            t1 = Table(
+                "users",
+                empty_meta,
+                Column("a", String),
+                Column("b", String, key="b1" if both_have_keys else None),
+            )
+            t1.append_column(
+                Column("b", String, key="b2"), replace_existing=True
+            )
+
+        else:
+            scenario.fail()
+
+        if scenario.separate_ee_key_first:
+            if both_have_keys:
+                eq_(t1.c.keys(), ["a", "b1"])
+            else:
+                eq_(t1.c.keys(), ["a", "b"])
+        else:
+            eq_(t1.c.keys(), ["a", "b2"])
+        self.assert_compile(select(t1), "SELECT users.a, users.b FROM users")
 
     def test_exception_no_flags(self, existing_meta):
         def go():
@@ -2943,7 +3070,7 @@ class ConstraintTest(fixtures.TestBase):
         return t1, t2, t3
 
     def _assert_index_col_x(self, t, i, columns=True):
-        eq_(t.indexes, set([i]))
+        eq_(t.indexes, {i})
         if columns:
             eq_(list(i.columns), [t.c.x])
         else:
@@ -3067,7 +3194,7 @@ class ConstraintTest(fixtures.TestBase):
 
         idx = Index("bar", MyThing(), t.c.y)
 
-        eq_(set(t.indexes), set([idx]))
+        eq_(set(t.indexes), {idx})
 
     def test_clauseelement_extraction_three(self):
         t = Table("t", MetaData(), Column("x", Integer), Column("y", Integer))
@@ -4198,6 +4325,8 @@ class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
         ("server_default", func.foo()),
         ("nullable", True),
         ("nullable", False),
+        ("index", True),
+        ("unique", True),
         ("type", BigInteger()),
         ("type", Enum("one", "two", "three", create_constraint=True)),
         argnames="paramname, value",

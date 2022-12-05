@@ -162,15 +162,13 @@ class _PGBoolean(sqltypes.Boolean):
     render_bind_cast = True
 
 
-class _PsycopgRange(ranges.AbstractRange):
+class _PsycopgRange(ranges.AbstractRangeImpl):
     def bind_processor(self, dialect):
-        Range = cast(PGDialect_psycopg, dialect)._psycopg_Range
-
-        NoneType = type(None)
+        psycopg_Range = cast(PGDialect_psycopg, dialect)._psycopg_Range
 
         def to_range(value):
-            if not isinstance(value, (str, NoneType)):
-                value = Range(
+            if isinstance(value, ranges.Range):
+                value = psycopg_Range(
                     value.lower, value.upper, value.bounds, value.empty
                 )
             return value
@@ -191,20 +189,22 @@ class _PsycopgRange(ranges.AbstractRange):
         return to_range
 
 
-class _PsycopgMultiRange(ranges.AbstractMultiRange):
+class _PsycopgMultiRange(ranges.AbstractMultiRangeImpl):
     def bind_processor(self, dialect):
-        Range = cast(PGDialect_psycopg, dialect)._psycopg_Range
-        Multirange = cast(PGDialect_psycopg, dialect)._psycopg_Multirange
+        psycopg_Range = cast(PGDialect_psycopg, dialect)._psycopg_Range
+        psycopg_Multirange = cast(
+            PGDialect_psycopg, dialect
+        )._psycopg_Multirange
 
         NoneType = type(None)
 
         def to_range(value):
-            if isinstance(value, (str, NoneType)):
+            if isinstance(value, (str, NoneType, psycopg_Multirange)):
                 return value
 
-            return Multirange(
+            return psycopg_Multirange(
                 [
-                    Range(
+                    psycopg_Range(
                         element.lower,
                         element.upper,
                         element.bounds,
@@ -504,6 +504,10 @@ class PGDialect_psycopg(_PGDialect_common_psycopg):
             )
         else:
             self.do_commit(connection.connection)
+
+    @util.memoized_property
+    def _dialect_specific_select_one(self):
+        return ";"
 
 
 class AsyncAdapt_psycopg_cursor:

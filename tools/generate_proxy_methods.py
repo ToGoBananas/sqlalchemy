@@ -154,14 +154,18 @@ def _grab_overloads(fn):
             current_ov[:] = []
             break
 
-        fn_match = re.match(rf"^    (?:async )?def (.*)\($", line)
+        fn_match = re.match(r"^    (?:    )?(?:async )?def (.*)\(", line)
         if fn_match and fn_match.group(1) != fn.__name__:
             current_ov[:] = []
             break
 
-        ov_match = re.match(r"^    @overload$", line)
+        ov_match = re.match(r"^    (?:    )?@overload$", line)
         if ov_match:
             output.append("".join(reversed(current_ov)))
+            current_ov[:] = []
+
+        if re.match(r"^    if (?:typing\.)?TYPE_CHECKING:", line):
+            output.append(line)
             current_ov[:] = []
 
     output.reverse()
@@ -322,7 +326,7 @@ def process_class(
                 "@%(name)s.setter\n"
                 "def %(name)s(self, attr: %(return_type)s) -> None:\n"
                 "    self._proxied.%(name)s = attr\n\n"
-            ) % {"name": name, "doc": doc, "return_type": return_type}
+            ) % {"name": name, "return_type": return_type}
 
         buf.write(textwrap.indent(code, "    "))
 

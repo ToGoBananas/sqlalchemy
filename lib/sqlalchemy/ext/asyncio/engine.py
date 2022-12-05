@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
+from typing import AsyncIterator
 from typing import Callable
 from typing import Dict
 from typing import Generator
@@ -21,6 +23,8 @@ from typing import TypeVar
 from typing import Union
 
 from . import exc as async_exc
+from .base import asyncstartablecontext
+from .base import GeneratorStartableContext
 from .base import ProxyComparable
 from .base import StartableContext
 from .result import _ensure_sync_result
@@ -42,9 +46,11 @@ if TYPE_CHECKING:
     from ...engine.interfaces import _CoreSingleExecuteParams
     from ...engine.interfaces import _DBAPIAnyExecuteParams
     from ...engine.interfaces import _ExecuteOptions
-    from ...engine.interfaces import _ExecuteOptionsParameter
-    from ...engine.interfaces import _IsolationLevel
+    from ...engine.interfaces import CompiledCacheType
+    from ...engine.interfaces import CoreExecuteOptionsParameter
     from ...engine.interfaces import Dialect
+    from ...engine.interfaces import IsolationLevel
+    from ...engine.interfaces import SchemaTranslateMapType
     from ...engine.result import ScalarResult
     from ...engine.url import URL
     from ...pool import Pool
@@ -131,7 +137,9 @@ class AsyncConnectable:
     ],
 )
 class AsyncConnection(
-    ProxyComparable[Connection], StartableContext, AsyncConnectable
+    ProxyComparable[Connection],
+    StartableContext["AsyncConnection"],
+    AsyncConnectable,
 ):
     """An asyncio proxy for a :class:`_engine.Connection`.
 
@@ -291,7 +299,7 @@ class AsyncConnection(
             self._proxied.invalidate, exception=exception
         )
 
-    async def get_isolation_level(self) -> _IsolationLevel:
+    async def get_isolation_level(self) -> IsolationLevel:
         return await greenlet_spawn(self._proxied.get_isolation_level)
 
     def in_transaction(self) -> bool:
@@ -345,6 +353,27 @@ class AsyncConnection(
         else:
             return None
 
+    @overload
+    async def execution_options(
+        self,
+        *,
+        compiled_cache: Optional[CompiledCacheType] = ...,
+        logging_token: str = ...,
+        isolation_level: IsolationLevel = ...,
+        no_parameters: bool = False,
+        stream_results: bool = False,
+        max_row_buffer: int = ...,
+        yield_per: int = ...,
+        insertmanyvalues_page_size: int = ...,
+        schema_translate_map: Optional[SchemaTranslateMapType] = ...,
+        **opt: Any,
+    ) -> AsyncConnection:
+        ...
+
+    @overload
+    async def execution_options(self, **opt: Any) -> AsyncConnection:
+        ...
+
     async def execution_options(self, **opt: Any) -> AsyncConnection:
         r"""Set non-SQL options for the connection which take effect
         during execution.
@@ -352,7 +381,7 @@ class AsyncConnection(
         This returns this :class:`_asyncio.AsyncConnection` object with
         the new options added.
 
-        See :meth:`_future.Connection.execution_options` for full details
+        See :meth:`_engine.Connection.execution_options` for full details
         on this method.
 
         """
@@ -369,9 +398,9 @@ class AsyncConnection(
         If no transaction was started, the method has no effect, assuming
         the connection is in a non-invalidated state.
 
-        A transaction is begun on a :class:`_future.Connection` automatically
+        A transaction is begun on a :class:`_engine.Connection` automatically
         whenever a statement is first executed, or when the
-        :meth:`_future.Connection.begin` method is called.
+        :meth:`_engine.Connection.begin` method is called.
 
         """
         await greenlet_spawn(self._proxied.commit)
@@ -384,9 +413,9 @@ class AsyncConnection(
         transaction was started and the connection is in an invalidated state,
         the transaction is cleared using this method.
 
-        A transaction is begun on a :class:`_future.Connection` automatically
+        A transaction is begun on a :class:`_engine.Connection` automatically
         whenever a statement is first executed, or when the
-        :meth:`_future.Connection.begin` method is called.
+        :meth:`_engine.Connection.begin` method is called.
 
 
         """
@@ -405,7 +434,7 @@ class AsyncConnection(
         self,
         statement: str,
         parameters: Optional[_DBAPIAnyExecuteParams] = None,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> CursorResult[Any]:
         r"""Executes a driver-level SQL string and return buffered
         :class:`_engine.Result`.
@@ -423,34 +452,67 @@ class AsyncConnection(
         return await _ensure_sync_result(result, self.exec_driver_sql)
 
     @overload
-    async def stream(
+    def stream(
         self,
         statement: TypedReturnsRows[_T],
         parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
-    ) -> AsyncResult[_T]:
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
+    ) -> GeneratorStartableContext[AsyncResult[_T]]:
         ...
 
     @overload
-    async def stream(
+    def stream(
         self,
         statement: Executable,
         parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
-    ) -> AsyncResult[Any]:
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
+    ) -> GeneratorStartableContext[AsyncResult[Any]]:
         ...
 
+    @asyncstartablecontext
     async def stream(
         self,
         statement: Executable,
         parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
-    ) -> AsyncResult[Any]:
-        """Execute a statement and return a streaming
-        :class:`_asyncio.AsyncResult` object."""
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
+    ) -> AsyncIterator[AsyncResult[Any]]:
+        """Execute a statement and return an awaitable yielding a
+        :class:`_asyncio.AsyncResult` object.
+
+        E.g.::
+
+            result = await conn.stream(stmt):
+            async for row in result:
+                print(f"{row}")
+
+        The :meth:`.AsyncConnection.stream`
+        method supports optional context manager use against the
+        :class:`.AsyncResult` object, as in::
+
+            async with conn.stream(stmt) as result:
+                async for row in result:
+                    print(f"{row}")
+
+        In the above pattern, the :meth:`.AsyncResult.close` method is
+        invoked unconditionally, even if the iterator is interrupted by an
+        exception throw.   Context manager use remains optional, however,
+        and the function may be called in either an ``async with fn():`` or
+        ``await fn()`` style.
+
+        .. versionadded:: 2.0.0b3 added context manager support
+
+
+        :return: an awaitable object that will yield an
+         :class:`_asyncio.AsyncResult` object.
+
+        .. seealso::
+
+            :meth:`.AsyncConnection.stream_scalars`
+
+        """
 
         result = await greenlet_spawn(
             self._proxied.execute,
@@ -461,10 +523,15 @@ class AsyncConnection(
             ),
             _require_await=True,
         )
-        if not result.context._is_server_side:
-            # TODO: real exception here
-            assert False, "server side result expected"
-        return AsyncResult(result)
+        assert result.context._is_server_side
+        ar = AsyncResult(result)
+        try:
+            yield ar
+        except GeneratorExit:
+            pass
+        else:
+            task = asyncio.create_task(ar.close())
+            await asyncio.shield(task)
 
     @overload
     async def execute(
@@ -472,7 +539,7 @@ class AsyncConnection(
         statement: TypedReturnsRows[_T],
         parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> CursorResult[_T]:
         ...
 
@@ -482,7 +549,7 @@ class AsyncConnection(
         statement: Executable,
         parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> CursorResult[Any]:
         ...
 
@@ -491,7 +558,7 @@ class AsyncConnection(
         statement: Executable,
         parameters: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> CursorResult[Any]:
         r"""Executes a SQL statement construct and return a buffered
         :class:`_engine.Result`.
@@ -519,7 +586,7 @@ class AsyncConnection(
         :param execution_options: optional dictionary of execution options,
          which will be associated with the statement execution.  This
          dictionary can provide a subset of the options that are accepted
-         by :meth:`_future.Connection.execution_options`.
+         by :meth:`_engine.Connection.execution_options`.
 
         :return: a :class:`_engine.Result` object.
 
@@ -539,7 +606,7 @@ class AsyncConnection(
         statement: TypedReturnsRows[Tuple[_T]],
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> Optional[_T]:
         ...
 
@@ -549,7 +616,7 @@ class AsyncConnection(
         statement: Executable,
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> Any:
         ...
 
@@ -558,13 +625,13 @@ class AsyncConnection(
         statement: Executable,
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> Any:
         r"""Executes a SQL statement construct and returns a scalar object.
 
         This method is shorthand for invoking the
         :meth:`_engine.Result.scalar` method after invoking the
-        :meth:`_future.Connection.execute` method.  Parameters are equivalent.
+        :meth:`_engine.Connection.execute` method.  Parameters are equivalent.
 
         :return: a scalar Python value representing the first column of the
          first row returned.
@@ -581,7 +648,7 @@ class AsyncConnection(
         statement: TypedReturnsRows[Tuple[_T]],
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> ScalarResult[_T]:
         ...
 
@@ -591,7 +658,7 @@ class AsyncConnection(
         statement: Executable,
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> ScalarResult[Any]:
         ...
 
@@ -600,13 +667,13 @@ class AsyncConnection(
         statement: Executable,
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> ScalarResult[Any]:
         r"""Executes a SQL statement construct and returns a scalar objects.
 
         This method is shorthand for invoking the
         :meth:`_engine.Result.scalars` method after invoking the
-        :meth:`_future.Connection.execute` method.  Parameters are equivalent.
+        :meth:`_engine.Connection.execute` method.  Parameters are equivalent.
 
         :return: a :class:`_engine.ScalarResult` object.
 
@@ -619,48 +686,77 @@ class AsyncConnection(
         return result.scalars()
 
     @overload
-    async def stream_scalars(
+    def stream_scalars(
         self,
         statement: TypedReturnsRows[Tuple[_T]],
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
-    ) -> AsyncScalarResult[_T]:
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
+    ) -> GeneratorStartableContext[AsyncScalarResult[_T]]:
         ...
 
     @overload
-    async def stream_scalars(
+    def stream_scalars(
         self,
         statement: Executable,
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
-    ) -> AsyncScalarResult[Any]:
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
+    ) -> GeneratorStartableContext[AsyncScalarResult[Any]]:
         ...
 
+    @asyncstartablecontext
     async def stream_scalars(
         self,
         statement: Executable,
         parameters: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
-    ) -> AsyncScalarResult[Any]:
-        r"""Executes a SQL statement and returns a streaming scalar result
-        object.
+        execution_options: Optional[CoreExecuteOptionsParameter] = None,
+    ) -> AsyncIterator[AsyncScalarResult[Any]]:
+        r"""Execute a statement and return an awaitable yielding a
+        :class:`_asyncio.AsyncScalarResult` object.
+
+        E.g.::
+
+            result = await conn.stream_scalars(stmt):
+            async for scalar in result:
+                print(f"{scalar}")
 
         This method is shorthand for invoking the
         :meth:`_engine.AsyncResult.scalars` method after invoking the
-        :meth:`_future.Connection.stream` method.  Parameters are equivalent.
+        :meth:`_engine.Connection.stream` method.  Parameters are equivalent.
 
-        :return: an :class:`_asyncio.AsyncScalarResult` object.
+        The :meth:`.AsyncConnection.stream_scalars`
+        method supports optional context manager use against the
+        :class:`.AsyncScalarResult` object, as in::
+
+            async with conn.stream_scalars(stmt) as result:
+                async for scalar in result:
+                    print(f"{scalar}")
+
+        In the above pattern, the :meth:`.AsyncScalarResult.close` method is
+        invoked unconditionally, even if the iterator is interrupted by an
+        exception throw.  Context manager use remains optional, however,
+        and the function may be called in either an ``async with fn():`` or
+        ``await fn()`` style.
+
+        .. versionadded:: 2.0.0b3 added context manager support
+
+        :return: an awaitable object that will yield an
+         :class:`_asyncio.AsyncScalarResult` object.
 
         .. versionadded:: 1.4.24
 
+        .. seealso::
+
+            :meth:`.AsyncConnection.stream`
+
         """
-        result = await self.stream(
+
+        async with self.stream(
             statement, parameters, execution_options=execution_options
-        )
-        return result.scalars()
+        ) as result:
+            yield result.scalars()
 
     async def run_sync(
         self, fn: Callable[..., Any], *arg: Any, **kw: Any
@@ -694,7 +790,8 @@ class AsyncConnection(
         return self.start().__await__()
 
     async def __aexit__(self, type_: Any, value: Any, traceback: Any) -> None:
-        await asyncio.shield(self.close())
+        task = asyncio.create_task(self.close())
+        await asyncio.shield(task)
 
     # START PROXY METHODS AsyncConnection
 
@@ -832,36 +929,6 @@ class AsyncEngine(ProxyComparable[Engine], AsyncConnectable):
         :ref:`asyncio_events`
     """
 
-    class _trans_ctx(StartableContext):
-        __slots__ = ("conn", "transaction")
-
-        conn: AsyncConnection
-        transaction: AsyncTransaction
-
-        def __init__(self, conn: AsyncConnection):
-            self.conn = conn
-
-        if TYPE_CHECKING:
-
-            async def __aenter__(self) -> AsyncConnection:
-                ...
-
-        async def start(self, is_ctxmanager: bool = False) -> AsyncConnection:
-            await self.conn.start(is_ctxmanager=is_ctxmanager)
-            self.transaction = self.conn.begin()
-            await self.transaction.__aenter__()
-
-            return self.conn
-
-        async def __aexit__(
-            self, type_: Any, value: Any, traceback: Any
-        ) -> None:
-            async def go() -> None:
-                await self.transaction.__aexit__(type_, value, traceback)
-                await self.conn.close()
-
-            await asyncio.shield(go())
-
     def __init__(self, sync_engine: Engine):
         if not sync_engine.dialect.is_async:
             raise exc.InvalidRequestError(
@@ -878,7 +945,8 @@ class AsyncEngine(ProxyComparable[Engine], AsyncConnectable):
     def _regenerate_proxy_for_target(cls, target: Engine) -> AsyncEngine:
         return AsyncEngine(target)
 
-    def begin(self) -> AsyncEngine._trans_ctx:
+    @contextlib.asynccontextmanager
+    async def begin(self) -> AsyncIterator[AsyncConnection]:
         """Return a context manager which when entered will deliver an
         :class:`_asyncio.AsyncConnection` with an
         :class:`_asyncio.AsyncTransaction` established.
@@ -894,7 +962,10 @@ class AsyncEngine(ProxyComparable[Engine], AsyncConnectable):
 
         """
         conn = self.connect()
-        return self._trans_ctx(conn)
+
+        async with conn:
+            async with conn.begin():
+                yield conn
 
     def connect(self) -> AsyncConnection:
         """Return an :class:`_asyncio.AsyncConnection` object.
@@ -924,12 +995,29 @@ class AsyncEngine(ProxyComparable[Engine], AsyncConnectable):
         """
         return await greenlet_spawn(self.sync_engine.raw_connection)
 
+    @overload
+    def execution_options(
+        self,
+        *,
+        compiled_cache: Optional[CompiledCacheType] = ...,
+        logging_token: str = ...,
+        isolation_level: IsolationLevel = ...,
+        insertmanyvalues_page_size: int = ...,
+        schema_translate_map: Optional[SchemaTranslateMapType] = ...,
+        **opt: Any,
+    ) -> AsyncEngine:
+        ...
+
+    @overload
+    def execution_options(self, **opt: Any) -> AsyncEngine:
+        ...
+
     def execution_options(self, **opt: Any) -> AsyncEngine:
         """Return a new :class:`_asyncio.AsyncEngine` that will provide
         :class:`_asyncio.AsyncConnection` objects with the given execution
         options.
 
-        Proxied from :meth:`_future.Engine.execution_options`.  See that
+        Proxied from :meth:`_engine.Engine.execution_options`.  See that
         method for details.
 
         """
@@ -1143,7 +1231,9 @@ class AsyncEngine(ProxyComparable[Engine], AsyncConnectable):
     # END PROXY METHODS AsyncEngine
 
 
-class AsyncTransaction(ProxyComparable[Transaction], StartableContext):
+class AsyncTransaction(
+    ProxyComparable[Transaction], StartableContext["AsyncTransaction"]
+):
     """An asyncio proxy for a :class:`_engine.Transaction`."""
 
     __slots__ = ("connection", "sync_transaction", "nested")

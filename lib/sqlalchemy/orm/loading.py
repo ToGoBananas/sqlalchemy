@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING
 from typing import TypeVar
 from typing import Union
 
-from sqlalchemy.orm.context import FromStatement
 from . import attributes
 from . import exc as orm_exc
 from . import path_registry
@@ -37,6 +36,7 @@ from .base import _DEFER_FOR_STATE
 from .base import _RAISE_FOR_STATE
 from .base import _SET_DEFERRED_EXPIRED
 from .base import PassiveFlag
+from .context import FromStatement
 from .util import _none_set
 from .util import state_str
 from .. import exc as sa_exc
@@ -50,6 +50,7 @@ from ..sql import util as sql_util
 from ..sql.selectable import ForUpdateArg
 from ..sql.selectable import LABEL_STYLE_TABLENAME_PLUS_COL
 from ..sql.selectable import SelectState
+from ..util import EMPTY_DICT
 
 if TYPE_CHECKING:
     from ._typing import _IdentityKeyType
@@ -534,15 +535,11 @@ def load_on_pk_identity(
         # None present in ident - turn those comparisons
         # into "IS NULL"
         if None in primary_key_identity:
-            nones = set(
-                [
-                    _get_params[col].key
-                    for col, value in zip(
-                        mapper.primary_key, primary_key_identity
-                    )
-                    if value is None
-                ]
-            )
+            nones = {
+                _get_params[col].key
+                for col, value in zip(mapper.primary_key, primary_key_identity)
+                if value is None
+            }
 
             _get_clause = sql_util.adapt_criterion_to_null(_get_clause, nones)
 
@@ -557,14 +554,12 @@ def load_on_pk_identity(
             sql_util._deep_annotate(_get_clause, {"_orm_adapt": True}),
         )
 
-        params = dict(
-            [
-                (_get_params[primary_key].key, id_val)
-                for id_val, primary_key in zip(
-                    primary_key_identity, mapper.primary_key
-                )
-            ]
-        )
+        params = {
+            _get_params[primary_key].key: id_val
+            for id_val, primary_key in zip(
+                primary_key_identity, mapper.primary_key
+            )
+        }
     else:
         params = None
 
@@ -764,7 +759,7 @@ def _instance_processor(
             )
 
         quick_populators = path.get(
-            context.attributes, "memoized_setups", _none_set
+            context.attributes, "memoized_setups", EMPTY_DICT
         )
 
         todo = []

@@ -1,4 +1,3 @@
-# coding: utf-8
 import datetime
 import decimal
 from enum import Enum as _PY_Enum
@@ -20,6 +19,7 @@ from sqlalchemy import func
 from sqlalchemy import inspect
 from sqlalchemy import Integer
 from sqlalchemy import literal
+from sqlalchemy import literal_column
 from sqlalchemy import MetaData
 from sqlalchemy import null
 from sqlalchemy import Numeric
@@ -36,6 +36,7 @@ from sqlalchemy import types
 from sqlalchemy import Unicode
 from sqlalchemy import util
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.dialects.postgresql import DATEMULTIRANGE
 from sqlalchemy.dialects.postgresql import DATERANGE
@@ -58,13 +59,17 @@ from sqlalchemy.dialects.postgresql import TSRANGE
 from sqlalchemy.dialects.postgresql import TSTZMULTIRANGE
 from sqlalchemy.dialects.postgresql import TSTZRANGE
 from sqlalchemy.exc import CompileError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import bindparam
 from sqlalchemy.sql import operators
 from sqlalchemy.sql import sqltypes
+from sqlalchemy.testing import expect_raises
 from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
+from sqlalchemy.testing import is_false
+from sqlalchemy.testing import is_true
 from sqlalchemy.testing.assertions import assert_raises
 from sqlalchemy.testing.assertions import assert_raises_message
 from sqlalchemy.testing.assertions import AssertsCompiledSQL
@@ -1524,8 +1529,9 @@ class ArrayTest(AssertsCompiledSQL, fixtures.TestBase):
                 return "MYTYPE"
 
         with expect_raises_message(
-            NotImplementedError,
-            r"Don't know how to literal-quote value \[1, 2, 3\]",
+            exc.CompileError,
+            r"No literal value renderer is available for literal "
+            r"value \"\[1, 2, 3\]\" with datatype ARRAY",
         ):
             self.assert_compile(
                 select(literal([1, 2, 3], ARRAY(MyType()))),
@@ -1901,6 +1907,48 @@ class ArrayRoundTripTest:
         stmt = select(func.array_agg(values_table.c.value)[2:4])
         eq_(connection.execute(stmt).scalar(), [2, 3, 4])
 
+    def test_array_agg_json(self, metadata, connection):
+        table = Table(
+            "values", metadata, Column("id", Integer), Column("bar", JSON)
+        )
+        metadata.create_all(connection)
+        connection.execute(
+            table.insert(),
+            [{"id": 1, "bar": [{"buz": 1}]}, {"id": 2, "bar": None}],
+        )
+
+        arg = aggregate_order_by(table.c.bar, table.c.id)
+        stmt = select(sa.func.array_agg(arg))
+        eq_(connection.execute(stmt).scalar(), [[{"buz": 1}], None])
+
+        arg = aggregate_order_by(table.c.bar, table.c.id.desc())
+        stmt = select(sa.func.array_agg(arg))
+        eq_(connection.execute(stmt).scalar(), [None, [{"buz": 1}]])
+
+    @testing.combinations(ARRAY, postgresql.ARRAY, argnames="cls")
+    def test_array_none(self, connection, metadata, cls):
+        table = Table(
+            "values", metadata, Column("id", Integer), Column("bar", cls(JSON))
+        )
+        metadata.create_all(connection)
+        connection.execute(
+            table.insert().values(
+                [
+                    {
+                        "id": 1,
+                        "bar": sa.text("""array['[{"x": 1}]'::json, null]"""),
+                    },
+                    {"id": 2, "bar": None},
+                ]
+            )
+        )
+
+        stmt = select(table.c.bar).order_by(table.c.id)
+        eq_(connection.scalars(stmt).all(), [[[{"x": 1}], None], None])
+
+        stmt = select(table.c.bar).order_by(table.c.id.desc())
+        eq_(connection.scalars(stmt).all(), [None, [[{"x": 1}], None]])
+
     def test_array_index_slice_exprs(self, connection):
         """test a variety of expressions that sometimes need parenthesizing"""
 
@@ -2188,8 +2236,8 @@ class ArrayRoundTripTest:
         )
         # hashable
         eq_(
-            set(row[1] for row in r),
-            set([("1", "2", "3"), ("4", "5", "6"), (("4", "5"), ("6", "7"))]),
+            {row[1] for row in r},
+            {("1", "2", "3"), ("4", "5", "6"), (("4", "5"), ("6", "7"))},
         )
 
     def test_array_plus_native_enum_create(self, metadata, connection):
@@ -2214,8 +2262,8 @@ class ArrayRoundTripTest:
 
         t.create(connection)
         eq_(
-            set(e["name"] for e in inspect(connection).get_enums()),
-            set(["my_enum_1", "my_enum_2", "my_enum_3"]),
+            {e["name"] for e in inspect(connection).get_enums()},
+            {"my_enum_1", "my_enum_2", "my_enum_3"},
         )
         t.drop(connection)
         eq_(inspect(connection).get_enums(), [])
@@ -2639,7 +2687,7 @@ class _ArrayOfEnum(TypeDecorator):
         return sa.cast(bindvalue, self)
 
     def result_processor(self, dialect, coltype):
-        super_rp = super(_ArrayOfEnum, self).result_processor(dialect, coltype)
+        super_rp = super().result_processor(dialect, coltype)
 
         def handle_raw_string(value):
             inner = re.match(r"^{(.*)}$", value).group(1)
@@ -3622,7 +3670,28 @@ class HStoreRoundTripTest(fixtures.TablesTest):
             eq_(s.query(Data.data, Data).all(), [(d.data, d)])
 
 
-class _RangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
+class _RangeTests:
+    _col_type = None
+    "The concrete range class these tests are for."
+
+    _col_str = None
+    "The corresponding PG type name."
+
+    _epsilon = None
+    """A small value used to generate range variants"""
+
+    def _data_str(self):
+        """return string form of a sample range"""
+        raise NotImplementedError()
+
+    def _data_obj(self):
+        """return Range form of the same range"""
+        raise NotImplementedError()
+
+
+class _RangeTypeCompilation(
+    AssertsCompiledSQL, _RangeTests, fixtures.TestBase
+):
     __dialect__ = "postgresql"
 
     # operator tests
@@ -3647,10 +3716,24 @@ class _RangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
             sqltypes.BOOLEANTYPE,
         )
 
+    def test_where_equal_obj(self):
+        self._test_clause(
+            self.col == self._data_obj(),
+            f"data_table.range = %(range_1)s::{self._col_str}",
+            sqltypes.BOOLEANTYPE,
+        )
+
     def test_where_not_equal(self):
         self._test_clause(
             self.col != self._data_str(),
             "data_table.range <> %(range_1)s",
+            sqltypes.BOOLEANTYPE,
+        )
+
+    def test_where_not_equal_obj(self):
+        self._test_clause(
+            self.col != self._data_obj(),
+            f"data_table.range <> %(range_1)s::{self._col_str}",
             sqltypes.BOOLEANTYPE,
         )
 
@@ -3698,6 +3781,13 @@ class _RangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
         self._test_clause(
             self.col.contains(self._data_str()),
             "data_table.range @> %(range_1)s",
+            sqltypes.BOOLEANTYPE,
+        )
+
+    def test_contains_obj(self):
+        self._test_clause(
+            self.col.contains(self._data_obj()),
+            f"data_table.range @> %(range_1)s::{self._col_str}",
             sqltypes.BOOLEANTYPE,
         )
 
@@ -3767,6 +3857,12 @@ class _RangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
             self.col.type,
         )
 
+        self._test_clause(
+            self.col.union(self._data_str()),
+            "data_table.range + %(range_1)s",
+            self.col.type,
+        )
+
     def test_intersection(self):
         self._test_clause(
             self.col * self.col,
@@ -3774,15 +3870,552 @@ class _RangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
             self.col.type,
         )
 
-    def test_different(self):
+    def test_difference(self):
         self._test_clause(
             self.col - self.col,
             "data_table.range - data_table.range",
             self.col.type,
         )
 
+        self._test_clause(
+            self.col.difference(self._data_str()),
+            "data_table.range - %(range_1)s",
+            self.col.type,
+        )
 
-class _RangeTypeRoundTrip(fixtures.TablesTest):
+
+class _RangeComparisonFixtures(_RangeTests):
+    def _step_value_up(self, value):
+        """given a value, return a step up
+
+        this is a value that given the lower end of the sample range,
+        would be less than the upper value of the range
+
+        """
+        raise NotImplementedError()
+
+    def _step_value_down(self, value):
+        """given a value, return a step down
+
+        this is a value that given the upper end of the sample range,
+        would be greater than the lower value of the range
+
+        """
+        raise NotImplementedError()
+
+    def _value_values(self):
+        """Return a series of values related to the base range
+
+        le = left equal
+        ll = lower than left
+        re = right equal
+        rh = higher than right
+        il = inside lower
+        ih = inside higher
+
+        """
+        spec = self._data_obj()
+
+        le, re_ = spec.lower, spec.upper
+
+        ll = self._step_value_down(le)
+        il = self._step_value_up(le)
+        rh = self._step_value_up(re_)
+        ih = self._step_value_down(re_)
+
+        return {"le": le, "re_": re_, "ll": ll, "il": il, "rh": rh, "ih": ih}
+
+    @testing.fixture(
+        params=[
+            lambda **kw: Range(empty=True),
+            lambda **kw: Range(bounds="[)"),
+            lambda le, **kw: Range(upper=le, bounds="[)"),
+            lambda le, re_, **kw: Range(lower=le, upper=re_, bounds="[)"),
+            lambda le, re_, **kw: Range(lower=le, upper=re_, bounds="[)"),
+            lambda le, re_, **kw: Range(lower=le, upper=re_, bounds="[]"),
+            lambda le, re_, **kw: Range(lower=le, upper=re_, bounds="(]"),
+            lambda le, re_, **kw: Range(lower=le, upper=re_, bounds="()"),
+            lambda ll, le, **kw: Range(lower=ll, upper=le, bounds="[)"),
+            lambda il, ih, **kw: Range(lower=il, upper=ih, bounds="[)"),
+            lambda ll, le, **kw: Range(lower=ll, upper=le, bounds="(]"),
+            lambda ll, rh, **kw: Range(lower=ll, upper=rh, bounds="[)"),
+        ]
+    )
+    def contains_range_obj_combinations(self, request):
+        """ranges that are used for range contains() contained_by() tests"""
+        data = self._value_values()
+
+        range_ = request.param(**data)
+        yield range_
+
+    @testing.fixture(
+        params=[
+            lambda l, r: Range(empty=True),
+            lambda l, r: Range(bounds="()"),
+            lambda l, r: Range(upper=r, bounds="(]"),
+            lambda l, r: Range(lower=l, bounds="[)"),
+            lambda l, r: Range(lower=l, upper=r, bounds="[)"),
+            lambda l, r: Range(lower=l, upper=r, bounds="[]"),
+            lambda l, r: Range(lower=l, upper=r, bounds="(]"),
+            lambda l, r: Range(lower=l, upper=r, bounds="()"),
+        ]
+    )
+    def bounds_obj_combinations(self, request):
+        """sample ranges used for value and range contains()/contained_by()
+        tests"""
+
+        obj = self._data_obj()
+        l, r = obj.lower, obj.upper
+
+        template = request.param
+        value = template(l=l, r=r)
+        yield value
+
+    @testing.fixture(params=["ll", "le", "il", "ih", "re_", "rh"])
+    def value_combinations(self, request):
+        """sample values used for value contains() tests"""
+        data = self._value_values()
+        return data[request.param]
+
+    def test_basic_py_sanity(self):
+        values = self._value_values()
+
+        range_ = self._data_obj()
+
+        is_true(range_.contains(Range(lower=values["il"], upper=values["ih"])))
+
+        is_true(
+            range_.contained_by(Range(lower=values["ll"], upper=values["rh"]))
+        )
+
+        is_true(range_.contains(values["il"]))
+
+        is_false(
+            range_.contains(Range(lower=values["ll"], upper=values["ih"]))
+        )
+
+        is_false(range_.contains(values["rh"]))
+
+    def test_contains_value(
+        self, connection, bounds_obj_combinations, value_combinations
+    ):
+        range_ = bounds_obj_combinations
+        range_typ = self._col_str
+
+        strvalue = range_._stringify()
+
+        v = value_combinations
+        RANGE = self._col_type
+
+        q = select(
+            literal_column(f"'{strvalue}'::{range_typ}", RANGE).label("r1"),
+            cast(range_, RANGE).label("r2"),
+        )
+        literal_range, cast_range = connection.execute(q).first()
+        eq_(literal_range, cast_range)
+
+        q = select(
+            cast(range_, RANGE),
+            cast(range_, RANGE).contains(v),
+        )
+        r, expected = connection.execute(q).first()
+        eq_(r.contains(v), expected)
+
+    _common_ranges_to_test = (
+        lambda r, e: Range(empty=True),
+        lambda r, e: Range(None, None, bounds="()"),
+        lambda r, e: Range(r.lower, None, bounds="[)"),
+        lambda r, e: Range(None, r.upper, bounds="(]"),
+        lambda r, e: r,
+        lambda r, e: Range(r.lower, r.upper, bounds="[]"),
+        lambda r, e: Range(r.lower, r.upper, bounds="(]"),
+        lambda r, e: Range(r.lower, r.upper, bounds="()"),
+    )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower + e, r.upper + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.upper - e, bounds="(]"),
+        lambda r, e: Range(r.lower + e, r.upper - e, bounds="[]"),
+        lambda r, e: Range(r.lower + e, r.upper - e, bounds="(]"),
+        lambda r, e: Range(r.lower + e, r.upper, bounds="(]"),
+        lambda r, e: Range(r.lower + e, r.upper, bounds="[]"),
+        lambda r, e: Range(r.lower + e, r.upper + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.upper - e, bounds="[]"),
+        lambda r, e: Range(r.lower - 2 * e, r.lower - e, bounds="(]"),
+        lambda r, e: Range(r.lower - 4 * e, r.lower, bounds="[)"),
+        lambda r, e: Range(r.upper + 4 * e, r.upper + 6 * e, bounds="()"),
+        argnames="r2t",
+    )
+    def test_contains_range(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        RANGE = self._col_type
+        range_typ = self._col_str
+
+        q = select(
+            cast(r1, RANGE).contains(r2),
+            cast(r1, RANGE).contained_by(r2),
+        )
+
+        validate_q = select(
+            literal_column(f"'{r1}'::{range_typ} @> '{r2}'::{range_typ}"),
+            literal_column(f"'{r1}'::{range_typ} <@ '{r2}'::{range_typ}"),
+        )
+
+        row = connection.execute(q).first()
+        validate_row = connection.execute(validate_q).first()
+        eq_(row, validate_row)
+
+        pg_contains, pg_contained = row
+        py_contains = r1.contains(r2)
+        eq_(
+            py_contains,
+            pg_contains,
+            f"{r1}.contains({r2}): got {py_contains},"
+            f" expected {pg_contains}",
+        )
+        py_contained = r1.contained_by(r2)
+        eq_(
+            py_contained,
+            pg_contained,
+            f"{r1}.contained_by({r2}): got {py_contained},"
+            f" expected {pg_contained}",
+        )
+        eq_(
+            r2.contains(r1),
+            pg_contained,
+            f"{r2}.contains({r1}: got {r2.contains(r1)},"
+            f" expected {pg_contained})",
+        )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower - 2 * e, r.lower - e, bounds="(]"),
+        lambda r, e: Range(r.upper + e, r.upper + 2 * e, bounds="[)"),
+        argnames="r2t",
+    )
+    def test_overlaps(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        RANGE = self._col_type
+        range_typ = self._col_str
+
+        q = select(
+            cast(r1, RANGE).overlaps(r2),
+        )
+        validate_q = select(
+            literal_column(f"'{r1}'::{range_typ} && '{r2}'::{range_typ}"),
+        )
+        row = connection.execute(q).first()
+        validate_row = connection.execute(validate_q).first()
+        eq_(row, validate_row)
+
+        pg_res = row[0]
+        py_res = r1.overlaps(r2)
+        eq_(
+            py_res,
+            pg_res,
+            f"{r1}.overlaps({r2}): got {py_res}, expected {pg_res}",
+        )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.upper, r.upper + 2 * e, bounds="[]"),
+        lambda r, e: Range(r.upper, r.upper + 2 * e, bounds="(]"),
+        lambda r, e: Range(r.lower - 2 * e, r.lower, bounds="[]"),
+        lambda r, e: Range(r.lower - 2 * e, r.lower, bounds="[)"),
+        argnames="r2t",
+    )
+    def test_strictly_left_or_right_of(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        RANGE = self._col_type
+        range_typ = self._col_str
+
+        q = select(
+            cast(r1, RANGE).strictly_left_of(r2),
+            cast(r1, RANGE).strictly_right_of(r2),
+        )
+        validate_q = select(
+            literal_column(f"'{r1}'::{range_typ} << '{r2}'::{range_typ}"),
+            literal_column(f"'{r1}'::{range_typ} >> '{r2}'::{range_typ}"),
+        )
+
+        row = connection.execute(q).first()
+        validate_row = connection.execute(validate_q).first()
+        eq_(row, validate_row)
+
+        pg_left, pg_right = row
+        py_left = r1.strictly_left_of(r2)
+        eq_(
+            py_left,
+            pg_left,
+            f"{r1}.strictly_left_of({r2}): got {py_left}, expected {pg_left}",
+        )
+        py_left = r1 << r2
+        eq_(
+            py_left,
+            pg_left,
+            f"{r1} << {r2}: got {py_left}, expected {pg_left}",
+        )
+        py_right = r1.strictly_right_of(r2)
+        eq_(
+            py_right,
+            pg_right,
+            f"{r1}.strictly_right_of({r2}): got {py_left},"
+            f" expected {pg_right}",
+        )
+        py_right = r1 >> r2
+        eq_(
+            py_right,
+            pg_right,
+            f"{r1} >> {r2}: got {py_left}, expected {pg_right}",
+        )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.upper, r.upper + 2 * e, bounds="[]"),
+        lambda r, e: Range(r.upper, r.upper + 2 * e, bounds="(]"),
+        lambda r, e: Range(r.lower - 2 * e, r.lower, bounds="[]"),
+        lambda r, e: Range(r.lower - 2 * e, r.lower, bounds="[)"),
+        argnames="r2t",
+    )
+    def test_not_extend_left_or_right_of(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        RANGE = self._col_type
+        range_typ = self._col_str
+
+        q = select(
+            cast(r1, RANGE).not_extend_left_of(r2),
+            cast(r1, RANGE).not_extend_right_of(r2),
+        )
+        validate_q = select(
+            literal_column(f"'{r1}'::{range_typ} &> '{r2}'::{range_typ}"),
+            literal_column(f"'{r1}'::{range_typ} &< '{r2}'::{range_typ}"),
+        )
+        row = connection.execute(q).first()
+        validate_row = connection.execute(validate_q).first()
+        eq_(row, validate_row)
+
+        pg_left, pg_right = row
+        py_left = r1.not_extend_left_of(r2)
+        eq_(
+            py_left,
+            pg_left,
+            f"{r1}.not_extend_left_of({r2}): got {py_left},"
+            f" expected {pg_left}",
+        )
+        py_right = r1.not_extend_right_of(r2)
+        eq_(
+            py_right,
+            pg_right,
+            f"{r1}.not_extend_right_of({r2}): got {py_right},"
+            f" expected {pg_right}",
+        )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower - e, r.lower + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.lower - e, bounds="[]"),
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower - e, r.lower + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.lower - e, bounds="[]"),
+        lambda r, e: Range(r.lower + e, r.upper - e, bounds="(]"),
+        lambda r, e: Range(r.lower + e, r.upper - e, bounds="[]"),
+        lambda r, e: Range(r.lower + e, r.upper, bounds="(]"),
+        lambda r, e: Range(r.lower + e, r.upper, bounds="[]"),
+        lambda r, e: Range(r.lower + e, r.upper + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.lower - e, bounds="[]"),
+        lambda r, e: Range(r.lower - 2 * e, r.lower - e, bounds="(]"),
+        lambda r, e: Range(r.lower - 4 * e, r.lower, bounds="[)"),
+        lambda r, e: Range(r.upper + 4 * e, r.upper + 6 * e, bounds="()"),
+        argnames="r2t",
+    )
+    def test_adjacent(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        RANGE = self._col_type
+        range_typ = self._col_str
+
+        q = select(
+            cast(r1, RANGE).adjacent_to(r2),
+        )
+        validate_q = select(
+            literal_column(f"'{r1}'::{range_typ} -|- '{r2}'::{range_typ}"),
+        )
+
+        row = connection.execute(q).first()
+        validate_row = connection.execute(validate_q).first()
+        eq_(row, validate_row)
+
+        pg_res = row[0]
+        py_res = r1.adjacent_to(r2)
+        eq_(
+            py_res,
+            pg_res,
+            f"{r1}.adjacent_to({r2}): got {py_res}, expected {pg_res}",
+        )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower, r.lower + e, bounds="[]"),
+        lambda r, e: Range(r.upper + 4 * e, r.upper + 6 * e, bounds="()"),
+        argnames="r2t",
+    )
+    def test_union(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        RANGE = self._col_type
+        range_typ = self._col_str
+
+        q = select(
+            cast(r1, RANGE).union(r2),
+        )
+        validate_q = select(
+            literal_column(f"'{r1}'::{range_typ}+'{r2}'::{range_typ}", RANGE),
+        )
+
+        try:
+            pg_res = connection.execute(q).scalar()
+        except DBAPIError:
+            connection.rollback()
+            with expect_raises(DBAPIError):
+                connection.execute(validate_q).scalar()
+            with expect_raises(ValueError):
+                r1.union(r2)
+        else:
+            validate_union = connection.execute(validate_q).scalar()
+            eq_(pg_res, validate_union)
+            py_res = r1.union(r2)
+            eq_(
+                py_res,
+                pg_res,
+                f"{r1}.union({r2}): got {py_res}, expected {pg_res}",
+            )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower, r.lower, bounds="[]"),
+        lambda r, e: Range(r.lower - e, r.upper - e, bounds="[]"),
+        lambda r, e: Range(r.lower - e, r.upper + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.upper + e, bounds="[]"),
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower, r.lower, bounds="[]"),
+        lambda r, e: Range(r.lower, r.upper - e, bounds="(]"),
+        lambda r, e: Range(r.lower, r.lower + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.lower, bounds="(]"),
+        lambda r, e: Range(r.lower - e, r.lower + e, bounds="()"),
+        lambda r, e: Range(r.lower, r.upper, bounds="[]"),
+        lambda r, e: Range(r.lower, r.upper, bounds="()"),
+        argnames="r2t",
+    )
+    def test_difference(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        RANGE = self._col_type
+        range_typ = self._col_str
+
+        q = select(
+            cast(r1, RANGE).difference(r2),
+        )
+        validate_q = select(
+            literal_column(f"'{r1}'::{range_typ}-'{r2}'::{range_typ}", RANGE),
+        )
+
+        try:
+            pg_res = connection.execute(q).scalar()
+        except DBAPIError:
+            connection.rollback()
+            with expect_raises(DBAPIError):
+                connection.execute(validate_q).scalar()
+            with expect_raises(ValueError):
+                r1.difference(r2)
+        else:
+            validate_difference = connection.execute(validate_q).scalar()
+            eq_(pg_res, validate_difference)
+            py_res = r1.difference(r2)
+            eq_(
+                py_res,
+                pg_res,
+                f"{r1}.difference({r2}): got {py_res}, expected {pg_res}",
+            )
+
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower, r.lower, bounds="[]"),
+        argnames="r1t",
+    )
+    @testing.combinations(
+        *_common_ranges_to_test,
+        lambda r, e: Range(r.lower, r.lower, bounds="[]"),
+        lambda r, e: Range(r.lower, r.lower + e, bounds="[)"),
+        lambda r, e: Range(r.lower - e, r.lower, bounds="(]"),
+        lambda r, e: Range(r.lower - e, r.lower + e, bounds="()"),
+        argnames="r2t",
+    )
+    def test_equality(self, connection, r1t, r2t):
+        r1 = r1t(self._data_obj(), self._epsilon)
+        r2 = r2t(self._data_obj(), self._epsilon)
+
+        range_typ = self._col_str
+
+        q = select(
+            literal_column(f"'{r1}'::{range_typ} = '{r2}'::{range_typ}")
+        )
+        equal = connection.execute(q).scalar()
+        eq_(r1 == r2, equal, f"{r1} == {r2}: got {r1 == r2}, expected {equal}")
+
+        q = select(
+            literal_column(f"'{r1}'::{range_typ} <> '{r2}'::{range_typ}")
+        )
+        different = connection.execute(q).scalar()
+        eq_(
+            r1 != r2,
+            different,
+            f"{r1} != {r2}: got {r1 != r2}, expected {different}",
+        )
+
+    def test_bool(self):
+        is_false(bool(Range(empty=True)))
+        is_true(bool(Range(1, 2)))
+
+
+class _RangeTypeRoundTrip(_RangeComparisonFixtures, fixtures.TablesTest):
     __requires__ = ("range_types",)
     __backend__ = True
 
@@ -3797,6 +4430,29 @@ class _RangeTypeRoundTrip(fixtures.TablesTest):
         )
         cls.col = table.c.range
 
+    def test_stringify(self):
+        eq_(str(self._data_obj()), self._data_str())
+
+    def test_auto_cast_back_to_type(self, connection):
+        """test that a straight pass of the range type without any context
+        will send appropriate casting info so that the driver can round
+        trip it.
+
+        This doesn't happen in general across other backends and not for
+        types like JSON etc., although perhaps it should, as we now have
+        pretty straightforward infrastructure to turn it on; asyncpg
+        for example does cast JSONs now in place.  But that's a
+        bigger issue; for PG ranges it's likely useful to do this for
+        PG backends as this is a fairly narrow use case.
+
+        Brought up in #8540.
+
+        """
+        data_obj = self._data_obj()
+        stmt = select(literal(data_obj, type_=self._col_type))
+        round_trip = connection.scalar(stmt)
+        eq_(round_trip, data_obj)
+
     def test_actual_type(self):
         eq_(str(self._col_type()), self._col_str)
 
@@ -3806,6 +4462,23 @@ class _RangeTypeRoundTrip(fixtures.TablesTest):
         insp = inspect(connection)
         cols = insp.get_columns("data_table")
         assert isinstance(cols[0]["type"], self._col_type)
+
+    def test_textual_round_trip_w_dialect_type(self, connection):
+        """test #8690"""
+        data_table = self.tables.data_table
+
+        data_obj = self._data_obj()
+        connection.execute(
+            self.tables.data_table.insert(), {"range": data_obj}
+        )
+
+        q1 = text("SELECT range from data_table")
+        v = connection.scalar(q1)
+
+        q2 = select(data_table).where(data_table.c.range == v)
+        v2 = connection.scalar(q2)
+
+        eq_(data_obj, v2)
 
     def _assert_data(self, conn):
         data = conn.execute(select(self.tables.data_table.c.range)).fetchall()
@@ -3894,10 +4567,18 @@ class _Int4RangeTests:
     _col_str = "INT4RANGE"
 
     def _data_str(self):
-        return "[1,2)"
+        return "[1,4)"
 
     def _data_obj(self):
-        return Range(1, 2)
+        return Range(1, 4)
+
+    _epsilon = 1
+
+    def _step_value_up(self, value):
+        return value + 1
+
+    def _step_value_down(self, value):
+        return value - 1
 
 
 class _Int8RangeTests:
@@ -3906,10 +4587,18 @@ class _Int8RangeTests:
     _col_str = "INT8RANGE"
 
     def _data_str(self):
-        return "[9223372036854775806,9223372036854775807)"
+        return "[9223372036854775306,9223372036854775800)"
 
     def _data_obj(self):
-        return Range(9223372036854775806, 9223372036854775807)
+        return Range(9223372036854775306, 9223372036854775800)
+
+    _epsilon = 1
+
+    def _step_value_up(self, value):
+        return value + 5
+
+    def _step_value_down(self, value):
+        return value - 5
 
 
 class _NumRangeTests:
@@ -3918,10 +4607,18 @@ class _NumRangeTests:
     _col_str = "NUMRANGE"
 
     def _data_str(self):
-        return "[1.0,2.0)"
+        return "[1.0,9.0)"
 
     def _data_obj(self):
-        return Range(decimal.Decimal("1.0"), decimal.Decimal("2.0"))
+        return Range(decimal.Decimal("1.0"), decimal.Decimal("9.0"))
+
+    _epsilon = decimal.Decimal(1)
+
+    def _step_value_up(self, value):
+        return value + decimal.Decimal("1.8")
+
+    def _step_value_down(self, value):
+        return value - decimal.Decimal("1.8")
 
 
 class _DateRangeTests:
@@ -3930,10 +4627,18 @@ class _DateRangeTests:
     _col_str = "DATERANGE"
 
     def _data_str(self):
-        return "[2013-03-23,2013-03-24)"
+        return "[2013-03-23,2013-03-30)"
 
     def _data_obj(self):
-        return Range(datetime.date(2013, 3, 23), datetime.date(2013, 3, 24))
+        return Range(datetime.date(2013, 3, 23), datetime.date(2013, 3, 30))
+
+    _epsilon = datetime.timedelta(days=1)
+
+    def _step_value_up(self, value):
+        return value + datetime.timedelta(days=1)
+
+    def _step_value_down(self, value):
+        return value - datetime.timedelta(days=1)
 
 
 class _DateTimeRangeTests:
@@ -3942,13 +4647,21 @@ class _DateTimeRangeTests:
     _col_str = "TSRANGE"
 
     def _data_str(self):
-        return "[2013-03-23 14:30,2013-03-23 23:30)"
+        return "[2013-03-23 14:30:00,2013-03-30 23:30:00)"
 
     def _data_obj(self):
         return Range(
             datetime.datetime(2013, 3, 23, 14, 30),
-            datetime.datetime(2013, 3, 23, 23, 30),
+            datetime.datetime(2013, 3, 30, 23, 30),
         )
+
+    _epsilon = datetime.timedelta(days=1)
+
+    def _step_value_up(self, value):
+        return value + datetime.timedelta(days=1)
+
+    def _step_value_down(self, value):
+        return value - datetime.timedelta(days=1)
 
 
 class _DateTimeTZRangeTests:
@@ -3956,23 +4669,28 @@ class _DateTimeTZRangeTests:
     _col_type = TSTZRANGE
     _col_str = "TSTZRANGE"
 
-    # make sure we use one, steady timestamp with timezone pair
-    # for all parts of all these tests
-    _tstzs = None
-
     def tstzs(self):
-        if self._tstzs is None:
-            with testing.db.connect() as connection:
-                lower = connection.scalar(func.current_timestamp().select())
-                upper = lower + datetime.timedelta(1)
-                self._tstzs = (lower, upper)
-        return self._tstzs
+        tz = datetime.timezone(-datetime.timedelta(hours=5, minutes=30))
+
+        return (
+            datetime.datetime(2013, 3, 23, 14, 30, tzinfo=tz),
+            datetime.datetime(2013, 3, 30, 23, 30, tzinfo=tz),
+        )
 
     def _data_str(self):
-        return "[%s,%s)" % self.tstzs()
+        l, r = self.tstzs()
+        return f"[{l},{r})"
 
     def _data_obj(self):
         return Range(*self.tstzs())
+
+    _epsilon = datetime.timedelta(days=1)
+
+    def _step_value_up(self, value):
+        return value + datetime.timedelta(days=1)
+
+    def _step_value_down(self, value):
+        return value - datetime.timedelta(days=1)
 
 
 class Int4RangeCompilationTest(_Int4RangeTests, _RangeTypeCompilation):
@@ -4050,10 +4768,24 @@ class _MultiRangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
             sqltypes.BOOLEANTYPE,
         )
 
+    def test_where_equal_obj(self):
+        self._test_clause(
+            self.col == self._data_obj(),
+            f"data_table.multirange = %(multirange_1)s::{self._col_str}",
+            sqltypes.BOOLEANTYPE,
+        )
+
     def test_where_not_equal(self):
         self._test_clause(
             self.col != self._data_str(),
             "data_table.multirange <> %(multirange_1)s",
+            sqltypes.BOOLEANTYPE,
+        )
+
+    def test_where_not_equal_obj(self):
+        self._test_clause(
+            self.col != self._data_obj(),
+            f"data_table.multirange <> %(multirange_1)s::{self._col_str}",
             sqltypes.BOOLEANTYPE,
         )
 
@@ -4113,6 +4845,13 @@ class _MultiRangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
             sqltypes.BOOLEANTYPE,
         )
 
+    def test_contained_by_obj(self):
+        self._test_clause(
+            self.col.contained_by(self._data_obj()),
+            f"data_table.multirange <@ %(multirange_1)s::{self._col_str}",
+            sqltypes.BOOLEANTYPE,
+        )
+
     def test_overlaps(self):
         self._test_clause(
             self.col.overlaps(self._data_str()),
@@ -4165,6 +4904,13 @@ class _MultiRangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
             sqltypes.BOOLEANTYPE,
         )
 
+    def test_adjacent_to_obj(self):
+        self._test_clause(
+            self.col.adjacent_to(self._data_obj()),
+            f"data_table.multirange -|- %(multirange_1)s::{self._col_str}",
+            sqltypes.BOOLEANTYPE,
+        )
+
     def test_union(self):
         self._test_clause(
             self.col + self.col,
@@ -4179,7 +4925,7 @@ class _MultiRangeTypeCompilation(AssertsCompiledSQL, fixtures.TestBase):
             self.col.type,
         )
 
-    def test_different(self):
+    def test_difference(self):
         self._test_clause(
             self.col - self.col,
             "data_table.multirange - data_table.multirange",
@@ -4202,6 +4948,26 @@ class _MultiRangeTypeRoundTrip(fixtures.TablesTest):
         )
         cls.col = table.c.range
 
+    def test_auto_cast_back_to_type(self, connection):
+        """test that a straight pass of the range type without any context
+        will send appropriate casting info so that the driver can round
+        trip it.
+
+        This doesn't happen in general across other backends and not for
+        types like JSON etc., although perhaps it should, as we now have
+        pretty straightforward infrastructure to turn it on; asyncpg
+        for example does cast JSONs now in place.  But that's a
+        bigger issue; for PG ranges it's likely useful to do this for
+        PG backends as this is a fairly narrow use case.
+
+        Brought up in #8540.
+
+        """
+        data_obj = self._data_obj()
+        stmt = select(literal(data_obj, type_=self._col_type))
+        round_trip = connection.scalar(stmt)
+        eq_(round_trip, data_obj)
+
     def test_actual_type(self):
         eq_(str(self._col_type()), self._col_str)
 
@@ -4215,6 +4981,23 @@ class _MultiRangeTypeRoundTrip(fixtures.TablesTest):
     def _assert_data(self, conn):
         data = conn.execute(select(self.tables.data_table.c.range)).fetchall()
         eq_(data, [(self._data_obj(),)])
+
+    def test_textual_round_trip_w_dialect_type(self, connection):
+        """test #8690"""
+        data_table = self.tables.data_table
+
+        data_obj = self._data_obj()
+        connection.execute(
+            self.tables.data_table.insert(), {"range": data_obj}
+        )
+
+        q1 = text("SELECT range from data_table")
+        v = connection.scalar(q1)
+
+        q2 = select(data_table).where(data_table.c.range == v)
+        v2 = connection.scalar(q2)
+
+        eq_(data_obj, v2)
 
     def test_insert_obj(self, connection):
         connection.execute(
@@ -4860,7 +5643,7 @@ class JSONBTest(JSONTest):
         ),
     )
     def test_where(self, whereclause_fn, expected):
-        super(JSONBTest, self).test_where(whereclause_fn, expected)
+        super().test_where(whereclause_fn, expected)
 
 
 class JSONBRoundTripTest(JSONRoundTripTest):
@@ -4870,7 +5653,7 @@ class JSONBRoundTripTest(JSONRoundTripTest):
 
     @testing.requires.postgresql_utf8_server_encoding
     def test_unicode_round_trip(self, connection):
-        super(JSONBRoundTripTest, self).test_unicode_round_trip(connection)
+        super().test_unicode_round_trip(connection)
 
     @testing.only_on("postgresql >= 12")
     def test_cast_jsonpath(self, connection):

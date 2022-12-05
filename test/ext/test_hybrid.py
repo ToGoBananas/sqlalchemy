@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlalchemy import exc
 from sqlalchemy import ForeignKey
 from sqlalchemy import func
+from sqlalchemy import insert
 from sqlalchemy import inspect
 from sqlalchemy import Integer
 from sqlalchemy import LABEL_STYLE_TABLENAME_PLUS_COL
@@ -97,7 +98,7 @@ class PropertyComparatorTest(fixtures.TestBase, AssertsCompiledSQL):
         sess = fixture_session()
         self.assert_compile(
             sess.query(aliased(A)).filter_by(value="foo"),
-            "SELECT a_1.value AS a_1_value, a_1.id AS a_1_id "
+            "SELECT a_1.id AS a_1_id, a_1.value AS a_1_value "
             "FROM a AS a_1 WHERE upper(a_1.value) = upper(:upper_1)",
         )
 
@@ -466,7 +467,7 @@ class PropertyExpressionTest(fixtures.TestBase, AssertsCompiledSQL):
         sess = fixture_session()
         self.assert_compile(
             sess.query(A).filter_by(value="foo"),
-            "SELECT a.value AS a_value, a.id AS a_id "
+            "SELECT a.id AS a_id, a.value AS a_value "
             "FROM a WHERE foo(a.value) + bar(a.value) = :param_1",
         )
 
@@ -475,7 +476,7 @@ class PropertyExpressionTest(fixtures.TestBase, AssertsCompiledSQL):
         sess = fixture_session()
         self.assert_compile(
             sess.query(aliased(A)).filter_by(value="foo"),
-            "SELECT a_1.value AS a_1_value, a_1.id AS a_1_id "
+            "SELECT a_1.id AS a_1_id, a_1.value AS a_1_value "
             "FROM a AS a_1 WHERE foo(a_1.value) + bar(a_1.value) = :param_1",
         )
 
@@ -913,7 +914,7 @@ class MethodExpressionTest(fixtures.TestBase, AssertsCompiledSQL):
         sess = fixture_session()
         self.assert_compile(
             sess.query(A).filter(A.value(5) == "foo"),
-            "SELECT a.value AS a_value, a.id AS a_id "
+            "SELECT a.id AS a_id, a.value AS a_value "
             "FROM a WHERE foo(a.value, :foo_1) + :foo_2 = :param_1",
         )
 
@@ -923,7 +924,7 @@ class MethodExpressionTest(fixtures.TestBase, AssertsCompiledSQL):
         a1 = aliased(A)
         self.assert_compile(
             sess.query(a1).filter(a1.value(5) == "foo"),
-            "SELECT a_1.value AS a_1_value, a_1.id AS a_1_id "
+            "SELECT a_1.id AS a_1_id, a_1.value AS a_1_value "
             "FROM a AS a_1 WHERE foo(a_1.value, :foo_1) + :foo_2 = :param_1",
         )
 
@@ -1017,15 +1018,43 @@ class BulkUpdateTest(fixtures.DeclarativeMappedTest, AssertsCompiledSQL):
             params={"first_name": "Dr."},
         )
 
-    def test_update_expr(self):
+    @testing.combinations("attr", "str", "kwarg", argnames="keytype")
+    def test_update_expr(self, keytype):
         Person = self.classes.Person
 
-        statement = update(Person).values({Person.name: "Dr. No"})
+        if keytype == "attr":
+            statement = update(Person).values({Person.name: "Dr. No"})
+        elif keytype == "str":
+            statement = update(Person).values({"name": "Dr. No"})
+        elif keytype == "kwarg":
+            statement = update(Person).values(name="Dr. No")
+        else:
+            assert False
 
         self.assert_compile(
             statement,
             "UPDATE person SET first_name=:first_name, last_name=:last_name",
-            params={"first_name": "Dr.", "last_name": "No"},
+            checkparams={"first_name": "Dr.", "last_name": "No"},
+        )
+
+    @testing.combinations("attr", "str", "kwarg", argnames="keytype")
+    def test_insert_expr(self, keytype):
+        Person = self.classes.Person
+
+        if keytype == "attr":
+            statement = insert(Person).values({Person.name: "Dr. No"})
+        elif keytype == "str":
+            statement = insert(Person).values({"name": "Dr. No"})
+        elif keytype == "kwarg":
+            statement = insert(Person).values(name="Dr. No")
+        else:
+            assert False
+
+        self.assert_compile(
+            statement,
+            "INSERT INTO person (first_name, last_name) VALUES "
+            "(:first_name, :last_name)",
+            checkparams={"first_name": "Dr.", "last_name": "No"},
         )
 
     # these tests all run two UPDATES to assert that caching is not
@@ -1231,8 +1260,8 @@ class SpecialObjectTest(fixtures.TestBase, AssertsCompiledSQL):
         from sqlalchemy import literal
 
         symbols = ("usd", "gbp", "cad", "eur", "aud")
-        currency_lookup = dict(
-            ((currency_from, currency_to), Decimal(str(rate)))
+        currency_lookup = {
+            (currency_from, currency_to): Decimal(str(rate))
             for currency_to, values in zip(
                 symbols,
                 [
@@ -1244,7 +1273,7 @@ class SpecialObjectTest(fixtures.TestBase, AssertsCompiledSQL):
                 ],
             )
             for currency_from, rate in zip(symbols, values)
-        )
+        }
 
         class Amount:
             def __init__(self, amount, currency):
@@ -1352,8 +1381,9 @@ class SpecialObjectTest(fixtures.TestBase, AssertsCompiledSQL):
 
         self.assert_compile(
             query,
-            "SELECT bank_account.balance AS bank_account_balance, "
-            "bank_account.id AS bank_account_id FROM bank_account "
+            "SELECT bank_account.id AS bank_account_id, "
+            "bank_account.balance AS bank_account_balance "
+            "FROM bank_account "
             "WHERE bank_account.balance = :balance_1",
             checkparams={"balance_1": Decimal("9886.110000")},
         )
@@ -1374,8 +1404,8 @@ class SpecialObjectTest(fixtures.TestBase, AssertsCompiledSQL):
         )
         self.assert_compile(
             query,
-            "SELECT bank_account.balance AS bank_account_balance, "
-            "bank_account.id AS bank_account_id "
+            "SELECT bank_account.id AS bank_account_id, "
+            "bank_account.balance AS bank_account_balance "
             "FROM bank_account "
             "WHERE :balance_1 * bank_account.balance > :param_1 "
             "AND :balance_2 * bank_account.balance < :param_2",
@@ -1397,8 +1427,9 @@ class SpecialObjectTest(fixtures.TestBase, AssertsCompiledSQL):
         )
         self.assert_compile(
             query,
-            "SELECT bank_account.balance AS bank_account_balance, "
-            "bank_account.id AS bank_account_id FROM bank_account "
+            "SELECT bank_account.id AS bank_account_id, "
+            "bank_account.balance AS bank_account_balance "
+            "FROM bank_account "
             "WHERE :balance_1 * bank_account.balance > "
             ":param_1 * :balance_2 * bank_account.balance",
             checkparams={

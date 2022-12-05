@@ -37,10 +37,10 @@ from . import elements
 from . import operators
 from . import roles
 from . import type_api
+from .base import _NONE_NAME
 from .base import NO_ARG
 from .base import SchemaEventTarget
 from .cache_key import HasCacheKey
-from .elements import _NONE_NAME
 from .elements import quoted_name
 from .elements import Slice
 from .elements import TypeCoerce as type_coerce  # noqa
@@ -59,6 +59,7 @@ from .. import util
 from ..engine import processors
 from ..util import langhelpers
 from ..util import OrderedDict
+from ..util.typing import GenericProtocol
 from ..util.typing import Literal
 
 if TYPE_CHECKING:
@@ -134,9 +135,7 @@ class Concatenable(TypeEngineMixin):
             ):
                 return operators.concat_op, self.expr.type
             else:
-                return super(Concatenable.Comparator, self)._adapt_expression(
-                    op, other_comparator
-                )
+                return super()._adapt_expression(op, other_comparator)
 
     comparator_factory: _ComparatorFactory[Any] = Comparator
 
@@ -319,7 +318,7 @@ class Unicode(String):
         Parameters are the same as that of :class:`.String`.
 
         """
-        super(Unicode, self).__init__(length=length, **kwargs)
+        super().__init__(length=length, **kwargs)
 
 
 class UnicodeText(Text):
@@ -344,7 +343,7 @@ class UnicodeText(Text):
         Parameters are the same as that of :class:`_expression.TextClause`.
 
         """
-        super(UnicodeText, self).__init__(length=length, **kwargs)
+        super().__init__(length=length, **kwargs)
 
 
 class Integer(HasExpressionLookup, TypeEngine[int]):
@@ -930,7 +929,7 @@ class _Binary(TypeEngine[bytes]):
         if isinstance(value, str):
             return self
         else:
-            return super(_Binary, self).coerce_compared_value(op, value)
+            return super().coerce_compared_value(op, value)
 
     def get_dbapi_type(self, dbapi):
         return dbapi.BINARY
@@ -1450,7 +1449,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
 
         self._valid_lookup[None] = self._object_lookup[None] = None
 
-        super(Enum, self).__init__(length=length)
+        super().__init__(length=length)
 
         if self.enum_class:
             kw.setdefault("name", self.enum_class.__name__.lower())
@@ -1490,6 +1489,28 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
         else:
             self.enum_class = None
             return enums, enums
+
+    def _resolve_for_literal(self, value: Any) -> Enum:
+        typ = self._resolve_for_python_type(type(value), type(value))
+        assert typ is not None
+        return typ
+
+    def _resolve_for_python_type(
+        self,
+        python_type: Type[Any],
+        matched_on: Union[GenericProtocol[Any], Type[Any]],
+    ) -> Optional[Enum]:
+        if not issubclass(python_type, enum.Enum):
+            return None
+        return cast(
+            Enum,
+            util.constructor_copy(
+                self,
+                self._generic_type_affinity,
+                python_type,
+                length=NO_ARG if self.length == 0 else self.length,
+            ),
+        )
 
     def _setup_for_values(self, values, objects, kw):
         self.enums = list(values)
@@ -1551,9 +1572,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
             op: OperatorType,
             other_comparator: TypeEngine.Comparator[Any],
         ) -> Tuple[OperatorType, TypeEngine[Any]]:
-            op, typ = super(Enum.Comparator, self)._adapt_expression(
-                op, other_comparator
-            )
+            op, typ = super()._adapt_expression(op, other_comparator)
             if op is operators.concat_op:
                 typ = String(self.type.length)
             return op, typ
@@ -1618,7 +1637,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
     def adapt(self, impltype, **kw):
         kw["_enums"] = self._enums_argument
         kw["_disable_warnings"] = True
-        return super(Enum, self).adapt(impltype, **kw)
+        return super().adapt(impltype, **kw)
 
     def _should_create_constraint(self, compiler, **kw):
         if not self._is_impl_for_variant(compiler.dialect, kw):
@@ -1649,7 +1668,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
         assert e.table is table
 
     def literal_processor(self, dialect):
-        parent_processor = super(Enum, self).literal_processor(dialect)
+        parent_processor = super().literal_processor(dialect)
 
         def process(value):
             value = self._db_value_for_elem(value)
@@ -1660,7 +1679,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
         return process
 
     def bind_processor(self, dialect):
-        parent_processor = super(Enum, self).bind_processor(dialect)
+        parent_processor = super().bind_processor(dialect)
 
         def process(value):
             value = self._db_value_for_elem(value)
@@ -1671,7 +1690,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
         return process
 
     def result_processor(self, dialect, coltype):
-        parent_processor = super(Enum, self).result_processor(dialect, coltype)
+        parent_processor = super().result_processor(dialect, coltype)
 
         def process(value):
             if parent_processor:
@@ -1690,7 +1709,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
         if self.enum_class:
             return self.enum_class
         else:
-            return super(Enum, self).python_type
+            return super().python_type
 
 
 class PickleType(TypeDecorator[object]):
@@ -1739,7 +1758,7 @@ class PickleType(TypeDecorator[object]):
         self.protocol = protocol
         self.pickler = pickler or pickle
         self.comparator = comparator
-        super(PickleType, self).__init__()
+        super().__init__()
 
         if impl:
             # custom impl is not necessarily a LargeBinary subclass.
@@ -2000,7 +2019,7 @@ class Interval(Emulated, _AbstractInterval, TypeDecorator[dt.timedelta]):
           support a "day precision" parameter, i.e. Oracle.
 
         """
-        super(Interval, self).__init__()
+        super().__init__()
         self.native = native
         self.second_precision = second_precision
         self.day_precision = day_precision
@@ -2204,10 +2223,14 @@ class JSON(Indexable, TypeEngine[Any]):
 
     The :class:`_types.JSON` type, when used with the SQLAlchemy ORM, does not
     detect in-place mutations to the structure.  In order to detect these, the
-    :mod:`sqlalchemy.ext.mutable` extension must be used.  This extension will
+    :mod:`sqlalchemy.ext.mutable` extension must be used, most typically
+    using the :class:`.MutableDict` class.  This extension will
     allow "in-place" changes to the datastructure to produce events which
     will be detected by the unit of work.  See the example at :class:`.HSTORE`
     for a simple example involving a dictionary.
+
+    Alternatively, assigning a JSON structure to an ORM element that
+    replaces the old one will always trigger a change event.
 
     **Support for JSON null vs. SQL NULL**
 
@@ -2735,6 +2758,31 @@ class ARRAY(
     :meth:`.types.ARRAY.Comparator.all`. The PostgreSQL-specific version of
     :class:`_types.ARRAY` also provides additional operators.
 
+    .. container:: topic
+
+        **Detecting Changes in ARRAY columns when using the ORM**
+
+        The :class:`_sqltypes.ARRAY` type, when used with the SQLAlchemy ORM,
+        does not detect in-place mutations to the array. In order to detect
+        these, the :mod:`sqlalchemy.ext.mutable` extension must be used, using
+        the :class:`.MutableList` class::
+
+            from sqlalchemy import ARRAY
+            from sqlalchemy.ext.mutable import MutableList
+
+            class SomeOrmClass(Base):
+                # ...
+
+                data = Column(MutableList.as_mutable(ARRAY(Integer)))
+
+        This extension will allow "in-place" changes such to the array
+        such as ``.append()`` to produce events which will be detected by the
+        unit of work.  Note that changes to elements **inside** the array,
+        including subarrays that are mutated in place, are **not** detected.
+
+        Alternatively, assigning a new array value to an ORM element that
+        replaces the old one will always trigger a change event.
+
     .. versionadded:: 1.1.0
 
     .. seealso::
@@ -2976,7 +3024,7 @@ class ARRAY(
     def _set_parent_with_dispatch(self, parent):
         """Support SchemaEventTarget"""
 
-        super(ARRAY, self)._set_parent_with_dispatch(parent, outer=True)
+        super()._set_parent_with_dispatch(parent, outer=True)
 
         if isinstance(self.item_type, SchemaEventTarget):
             self.item_type._set_parent_with_dispatch(parent)
@@ -3036,6 +3084,8 @@ class ARRAY(
                     dim - 1 if dim is not None else None,
                     collection_callable,
                 )
+                if x is not None
+                else None
                 for x in arr
             )
 
@@ -3219,7 +3269,7 @@ class TIMESTAMP(DateTime):
 
 
         """
-        super(TIMESTAMP, self).__init__(timezone=timezone)
+        super().__init__(timezone=timezone)
 
     def get_dbapi_type(self, dbapi):
         return dbapi.TIMESTAMP
@@ -3351,12 +3401,7 @@ class NullType(TypeEngine[None]):
     _isnull = True
 
     def literal_processor(self, dialect):
-        def process(value):
-            raise exc.CompileError(
-                "Don't know how to render literal SQL value: %r" % (value,)
-            )
-
-        return process
+        return None
 
     class Comparator(TypeEngine.Comparator[_T]):
         __slots__ = ()
@@ -3439,7 +3484,7 @@ class Uuid(TypeEngine[_UUID_RETURN]):
 
     @overload
     def __init__(
-        self: "Uuid[_python_UUID]",
+        self: Uuid[_python_UUID],
         as_uuid: Literal[True] = ...,
         native_uuid: bool = ...,
     ):
@@ -3447,7 +3492,7 @@ class Uuid(TypeEngine[_UUID_RETURN]):
 
     @overload
     def __init__(
-        self: "Uuid[str]",
+        self: Uuid[str],
         as_uuid: Literal[False] = ...,
         native_uuid: bool = ...,
     ):
@@ -3603,11 +3648,11 @@ class UUID(Uuid[_UUID_RETURN]):
     __visit_name__ = "UUID"
 
     @overload
-    def __init__(self: "UUID[_python_UUID]", as_uuid: Literal[True] = ...):
+    def __init__(self: UUID[_python_UUID], as_uuid: Literal[True] = ...):
         ...
 
     @overload
-    def __init__(self: "UUID[str]", as_uuid: Literal[False] = ...):
+    def __init__(self: UUID[str], as_uuid: Literal[False] = ...):
         ...
 
     def __init__(self, as_uuid: bool = True):
@@ -3653,6 +3698,7 @@ _type_map: Dict[Type[Any], TypeEngine[Any]] = {
     type(None): NULLTYPE,
     bytes: LargeBinary(),
     str: _STRING,
+    enum.Enum: Enum(enum.Enum),
 }
 
 
@@ -3661,6 +3707,10 @@ _type_map_get = _type_map.get
 
 def _resolve_value_to_type(value: Any) -> TypeEngine[Any]:
     _result_type = _type_map_get(type(value), False)
+
+    if _result_type is False:
+        _result_type = getattr(value, "__sa_type_engine__", False)
+
     if _result_type is False:
         # use inspect() to detect SQLAlchemy built-in
         # objects.

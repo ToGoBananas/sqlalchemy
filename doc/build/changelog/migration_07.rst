@@ -244,7 +244,7 @@ with an explicit onclause is now:
 
 ::
 
-    query.join(SomeClass, SomeClass.id==ParentClass.some_id)
+    query.join(SomeClass, SomeClass.id == ParentClass.some_id)
 
 In 0.6, this usage was considered to be an error, because
 ``join()`` accepts multiple arguments corresponding to
@@ -336,10 +336,12 @@ to the creation of the index outside of the Table.  That is:
 
 ::
 
-    Table('mytable', metadata,
-            Column('id',Integer, primary_key=True),
-            Column('name', String(50), nullable=False),
-            Index('idx_name', 'name')
+    Table(
+        "mytable",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("name", String(50), nullable=False),
+        Index("idx_name", "name"),
     )
 
 The primary rationale here is for the benefit of declarative
@@ -348,14 +350,16 @@ The primary rationale here is for the benefit of declarative
 ::
 
     class HasNameMixin(object):
-        name = Column('name', String(50), nullable=False)
+        name = Column("name", String(50), nullable=False)
+
         @declared_attr
         def __table_args__(cls):
-            return (Index('name'), {})
+            return (Index("name"), {})
+
 
     class User(HasNameMixin, Base):
-        __tablename__ = 'user'
-        id = Column('id', Integer, primary_key=True)
+        __tablename__ = "user"
+        id = Column("id", Integer, primary_key=True)
 
 `Indexes <https://www.sqlalchemy.org/docs/07/core/schema.html
 #indexes>`_
@@ -385,23 +389,22 @@ tutorial:
 
     from sqlalchemy.sql import table, column, select, func
 
-    empsalary = table('empsalary',
-                    column('depname'),
-                    column('empno'),
-                    column('salary'))
+    empsalary = table("empsalary", column("depname"), column("empno"), column("salary"))
 
-    s = select([
+    s = select(
+        [
             empsalary,
-            func.avg(empsalary.c.salary).
-                  over(partition_by=empsalary.c.depname).
-                  label('avg')
-        ])
+            func.avg(empsalary.c.salary)
+            .over(partition_by=empsalary.c.depname)
+            .label("avg"),
+        ]
+    )
 
     print(s)
 
 SQL:
 
-::
+.. sourcecode:: sql
 
     SELECT empsalary.depname, empsalary.empno, empsalary.salary,
     avg(empsalary.salary) OVER (PARTITION BY empsalary.depname) AS avg
@@ -495,7 +498,7 @@ equivalent to:
 
 ::
 
-    query.from_self(func.count(literal_column('1'))).scalar()
+    query.from_self(func.count(literal_column("1"))).scalar()
 
 Previously, internal logic attempted to rewrite the columns
 clause of the query itself, and upon detection of a
@@ -510,7 +513,7 @@ call.
 The SQL emitted by ``query.count()`` is now always of the
 form:
 
-::
+.. sourcecode:: sql
 
     SELECT count(1) AS count_1 FROM (
         SELECT user.id AS user_id, user.name AS user_name from user
@@ -534,6 +537,7 @@ be used:
 ::
 
     from sqlalchemy import func
+
     session.query(func.count(MyClass.id)).scalar()
 
 or for ``count(*)``:
@@ -541,7 +545,8 @@ or for ``count(*)``:
 ::
 
     from sqlalchemy import func, literal_column
-    session.query(func.count(literal_column('*'))).select_from(MyClass).scalar()
+
+    session.query(func.count(literal_column("*"))).select_from(MyClass).scalar()
 
 LIMIT/OFFSET clauses now use bind parameters
 --------------------------------------------
@@ -690,8 +695,11 @@ function, can be mapped.
     from sqlalchemy import select, func
     from sqlalchemy.orm import mapper
 
+
     class Subset(object):
         pass
+
+
     selectable = select(["x", "y", "z"]).select_from(func.some_db_function()).alias()
     mapper(Subset, selectable, primary_key=[selectable.c.x])
 
@@ -773,10 +781,11 @@ mutations, the type object must be constructed with
 
 ::
 
-    Table('mytable', metadata,
+    Table(
+        "mytable",
+        metadata,
         # ....
-
-        Column('pickled_data', PickleType(mutable=True))
+        Column("pickled_data", PickleType(mutable=True)),
     )
 
 The ``mutable=True`` flag is being phased out, in favor of
@@ -917,12 +926,13 @@ Using declarative, the scenario is this:
 ::
 
     class Parent(Base):
-        __tablename__ = 'parent'
+        __tablename__ = "parent"
         id = Column(Integer, primary_key=True)
 
+
     class Child(Parent):
-       __tablename__ = 'child'
-        id = Column(Integer, ForeignKey('parent.id'), primary_key=True)
+        __tablename__ = "child"
+        id = Column(Integer, ForeignKey("parent.id"), primary_key=True)
 
 Above, the attribute ``Child.id`` refers to both the
 ``child.id`` column as well as ``parent.id`` - this due to
@@ -949,15 +959,17 @@ local column:
 ::
 
     class Child(Parent):
-       __tablename__ = 'child'
-        id = Column(Integer, ForeignKey('parent.id'), primary_key=True)
-        some_related = relationship("SomeRelated",
-                        primaryjoin="Child.id==SomeRelated.child_id")
+        __tablename__ = "child"
+        id = Column(Integer, ForeignKey("parent.id"), primary_key=True)
+        some_related = relationship(
+            "SomeRelated", primaryjoin="Child.id==SomeRelated.child_id"
+        )
+
 
     class SomeRelated(Base):
-       __tablename__ = 'some_related'
+        __tablename__ = "some_related"
         id = Column(Integer, primary_key=True)
-        child_id = Column(Integer, ForeignKey('child.id'))
+        child_id = Column(Integer, ForeignKey("child.id"))
 
 Prior to 0.7 the ``Child.id`` expression would reference
 ``Parent.id``, and it would be necessary to map ``child.id``
@@ -972,7 +984,7 @@ behavior:
 
 In 0.6, this would render:
 
-::
+.. sourcecode:: sql
 
     SELECT parent.id AS parent_id
     FROM parent
@@ -980,7 +992,7 @@ In 0.6, this would render:
 
 in 0.7, you get:
 
-::
+.. sourcecode:: sql
 
     SELECT parent.id AS parent_id
     FROM parent, child
@@ -1000,7 +1012,7 @@ same manner as that of 0.5 and 0.6:
 
 Which on both 0.6 and 0.7 renders:
 
-::
+.. sourcecode:: sql
 
     SELECT parent.id AS parent_id, child.id AS child_id
     FROM parent LEFT OUTER JOIN child ON parent.id = child.id
@@ -1036,7 +1048,7 @@ key column ``id``, the following now produces an error:
 ::
 
 
-    foobar = foo.join(bar, foo.c.id==bar.c.foo_id)
+    foobar = foo.join(bar, foo.c.id == bar.c.foo_id)
     mapper(FooBar, foobar)
 
 This because the ``mapper()`` refuses to guess what column
@@ -1047,10 +1059,8 @@ explicit:
 ::
 
 
-    foobar = foo.join(bar, foo.c.id==bar.c.foo_id)
-    mapper(FooBar, foobar, properties={
-        'id':[foo.c.id, bar.c.id]
-    })
+    foobar = foo.join(bar, foo.c.id == bar.c.foo_id)
+    mapper(FooBar, foobar, properties={"id": [foo.c.id, bar.c.id]})
 
 :ticket:`1896`
 
@@ -1231,14 +1241,14 @@ backend:
 
 ::
 
-    select([mytable], distinct='ALL', prefixes=['HIGH_PRIORITY'])
+    select([mytable], distinct="ALL", prefixes=["HIGH_PRIORITY"])
 
 The ``prefixes`` keyword or ``prefix_with()`` method should
 be used for non-standard or unusual prefixes:
 
 ::
 
-    select([mytable]).prefix_with('HIGH_PRIORITY', 'ALL')
+    select([mytable]).prefix_with("HIGH_PRIORITY", "ALL")
 
 ``useexisting`` superseded by ``extend_existing`` and ``keep_existing``
 -----------------------------------------------------------------------

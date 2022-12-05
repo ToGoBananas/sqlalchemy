@@ -301,9 +301,7 @@ class _CopyInternalsTraversal(HasTraversalDispatch):
     def visit_string_clauseelement_dict(
         self, attrname, parent, element, clone=_clone, **kw
     ):
-        return dict(
-            (key, clone(value, **kw)) for key, value in element.items()
-        )
+        return {key: clone(value, **kw) for key, value in element.items()}
 
     def visit_setup_join_tuple(
         self, attrname, parent, element, clone=_clone, **kw
@@ -565,7 +563,7 @@ class TraversalComparatorStrategy(HasTraversalDispatch, util.MemoizedSlots):
                 assert right_attrname is not None
 
                 dispatch = self.dispatch(left_visit_sym)
-                assert dispatch, (
+                assert dispatch is not None, (
                     f"{self.__class__} has no dispatch for "
                     f"'{self._dispatch_lookup[left_visit_sym]}'"
                 )

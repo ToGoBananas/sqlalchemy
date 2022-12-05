@@ -9,11 +9,21 @@
 """Serializer/Deserializer objects for usage with SQLAlchemy query structures,
 allowing "contextual" deserialization.
 
+.. legacy::
+
+    The serializer extension is **legacy** and should not be used for
+    new development.
+
 Any SQLAlchemy query structure, either based on sqlalchemy.sql.*
 or sqlalchemy.orm.* can be used.  The mappers, Tables, Columns, Session
 etc. which are referenced by the structure are not persisted in serialized
 form, but are instead re-associated with the query structure
 when it is deserialized.
+
+.. warning:: The serializer extension uses pickle to serialize and
+   deserialize objects, so the same security consideration mentioned
+   in the `python documentation
+   <https://docs.python.org/3/library/pickle.html>`_ apply.
 
 Usage is nearly the same as that of the standard Python pickle module::
 

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import util as orm_util
 from sqlalchemy.orm import with_parent
 from sqlalchemy.orm.attributes import instance_state
-from sqlalchemy.orm.collections import attribute_mapped_collection
+from sqlalchemy.orm.collections import attribute_keyed_dict
 from sqlalchemy.orm.decl_api import declarative_base
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
@@ -137,9 +137,9 @@ class CascadeArgTest(fixtures.MappedTest):
         users, addresses = self.tables.users, self.tables.addresses
 
         rel = relationship(Address)
-        eq_(rel.cascade, set(["save-update", "merge"]))
+        eq_(rel.cascade, {"save-update", "merge"})
         rel.cascade = "save-update, merge, expunge"
-        eq_(rel.cascade, set(["save-update", "merge", "expunge"]))
+        eq_(rel.cascade, {"save-update", "merge", "expunge"})
 
         self.mapper_registry.map_imperatively(
             User, users, properties={"addresses": rel}
@@ -147,7 +147,7 @@ class CascadeArgTest(fixtures.MappedTest):
         am = self.mapper_registry.map_imperatively(Address, addresses)
         configure_mappers()
 
-        eq_(rel.cascade, set(["save-update", "merge", "expunge"]))
+        eq_(rel.cascade, {"save-update", "merge", "expunge"})
 
         assert ("addresses", User) not in am._delete_orphans
         rel.cascade = "all, delete, delete-orphan"
@@ -155,16 +155,14 @@ class CascadeArgTest(fixtures.MappedTest):
 
         eq_(
             rel.cascade,
-            set(
-                [
-                    "delete",
-                    "delete-orphan",
-                    "expunge",
-                    "merge",
-                    "refresh-expire",
-                    "save-update",
-                ]
-            ),
+            {
+                "delete",
+                "delete-orphan",
+                "expunge",
+                "merge",
+                "refresh-expire",
+                "save-update",
+            },
         )
 
     def test_cascade_unicode(self):
@@ -172,7 +170,7 @@ class CascadeArgTest(fixtures.MappedTest):
 
         rel = relationship(Address)
         rel.cascade = "save-update, merge, expunge"
-        eq_(rel.cascade, set(["save-update", "merge", "expunge"]))
+        eq_(rel.cascade, {"save-update", "merge", "expunge"})
 
 
 class O2MCascadeDeleteOrphanTest(fixtures.MappedTest):
@@ -4176,11 +4174,11 @@ class SubclassCascadeTest(fixtures.DeclarativeMappedTest):
 
         state = inspect(obj)
         it = inspect(Company).cascade_iterator("save-update", state)
-        eq_(set([rec[0] for rec in it]), set([eng, maven_build, lang]))
+        eq_({rec[0] for rec in it}, {eng, maven_build, lang})
 
         state = inspect(eng)
         it = inspect(Employee).cascade_iterator("save-update", state)
-        eq_(set([rec[0] for rec in it]), set([maven_build, lang]))
+        eq_({rec[0] for rec in it}, {maven_build, lang})
 
     def test_delete_orphan_round_trip(self):
         (
@@ -4255,7 +4253,7 @@ class ViewonlyCascadeUpdate(fixtures.MappedTest):
         ({"delete"}, {"none"}),
         (
             {"all, delete-orphan"},
-            {"refresh-expire", "expunge"},
+            {"refresh-expire", "expunge", "merge"},
         ),
         ({"save-update, expunge"}, {"expunge"}),
     )
@@ -4359,7 +4357,10 @@ class ViewonlyCascadeUpdate(fixtures.MappedTest):
         not_in(o1, sess)
         not_in(o2, sess)
 
-    def test_default_merge_cascade(self):
+    @testing.combinations(
+        "persistent", "pending", argnames="collection_status"
+    )
+    def test_default_merge_cascade(self, collection_status):
         User, Order, orders, users = (
             self.classes.User,
             self.classes.Order,
@@ -4391,12 +4392,31 @@ class ViewonlyCascadeUpdate(fixtures.MappedTest):
             Order(id=2, user_id=1, description="someotherorder"),
         )
 
-        u1.orders.append(o1)
-        u1.orders.append(o2)
+        if collection_status == "pending":
+            # technically this is pointless, one should not be appending
+            # to this collection
+            u1.orders.append(o1)
+            u1.orders.append(o2)
+        elif collection_status == "persistent":
+            sess.add(u1)
+            sess.flush()
+            sess.add_all([o1, o2])
+            sess.flush()
+            u1.orders
+        else:
+            assert False
 
         u1 = sess.merge(u1)
 
-        assert not u1.orders
+        # in 1.4, as of #4993 this was asserting that u1.orders would
+        # not be present in the new object.  However, as observed during
+        # #8862, this defeats schemes that seek to restore fully loaded
+        # objects from caches which may even have lazy="raise", but
+        # in any case would want to not emit new SQL on those collections.
+        # so we assert here that u1.orders is in fact present
+        assert "orders" in u1.__dict__
+        assert u1.__dict__["orders"]
+        assert u1.orders
 
     def test_default_cascade(self):
         User, Order, orders, users = (
@@ -4422,7 +4442,7 @@ class ViewonlyCascadeUpdate(fixtures.MappedTest):
             },
         )
 
-        eq_(umapper.attrs["orders"].cascade, set())
+        eq_(umapper.attrs["orders"].cascade, {"merge"})
 
 
 class CollectionCascadesNoBackrefTest(fixtures.TestBase):
@@ -4462,10 +4482,10 @@ class CollectionCascadesNoBackrefTest(fixtures.TestBase):
     @testing.combinations(
         (set, "add"),
         (list, "append"),
-        (attribute_mapped_collection("key"), "__setitem__"),
-        (attribute_mapped_collection("key"), "setdefault"),
-        (attribute_mapped_collection("key"), "update_dict"),
-        (attribute_mapped_collection("key"), "update_kw"),
+        (attribute_keyed_dict("key"), "__setitem__"),
+        (attribute_keyed_dict("key"), "setdefault"),
+        (attribute_keyed_dict("key"), "update_dict"),
+        (attribute_keyed_dict("key"), "update_kw"),
         argnames="collection_class,methname",
     )
     def test_cascades_on_collection(

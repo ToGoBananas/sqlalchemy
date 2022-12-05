@@ -36,8 +36,19 @@ This dialect should normally be used only with the
 The URL passes through all arguments to the ``pysqlite`` driver, so all
 connection arguments are the same as they are for that of :ref:`pysqlite`.
 
+.. _aiosqlite_udfs:
+
+User-Defined Functions
+----------------------
+
+aiosqlite extends pysqlite to support async, so we can create our own user-defined functions (UDFs)
+in Python and use them directly in SQLite queries as described here: :ref:`pysqlite_udfs`.
+
 
 """  # noqa
+
+import asyncio
+from functools import partial
 
 from .base import SQLiteExecutionContext
 from .pysqlite import SQLiteDialect_pysqlite
@@ -179,8 +190,22 @@ class AsyncAdapt_aiosqlite_connection(AdaptedConnection):
 
     @isolation_level.setter
     def isolation_level(self, value):
+
+        # aiosqlite's isolation_level setter works outside the Thread
+        # that it's supposed to, necessitating setting check_same_thread=False.
+        # for improved stability, we instead invent our own awaitable version
+        # using aiosqlite's async queue directly.
+
+        def set_iso(connection, value):
+            connection.isolation_level = value
+
+        function = partial(set_iso, self._connection._conn, value)
+        future = asyncio.get_event_loop().create_future()
+
+        self._connection._tx.put_nowait((future, function))
+
         try:
-            self._connection.isolation_level = value
+            return self.await_(future)
         except Exception as error:
             self._handle_exception(error)
 
@@ -263,18 +288,6 @@ class AsyncAdapt_aiosqlite_dbapi:
 
     def connect(self, *arg, **kw):
         async_fallback = kw.pop("async_fallback", False)
-
-        # Q. WHY do we need this?
-        # A. Because there is no way to set connection.isolation_level
-        #    otherwise
-        # Q. BUT HOW do you know it is SAFE ?????
-        # A. The only operation that isn't safe is the isolation level set
-        #    operation which aiosqlite appears to have let slip through even
-        #    though pysqlite appears to do check_same_thread for this.
-        #    All execute operations etc. should be safe because they all
-        #    go through the single executor thread.
-
-        kw["check_same_thread"] = False
 
         connection = self.aiosqlite.connect(*arg, **kw)
 

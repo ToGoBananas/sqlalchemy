@@ -772,25 +772,21 @@ class ConcreteExtensionConfigTest(
                 [
                     A(
                         data="a1",
-                        collection=set(
-                            [
-                                B(data="a1b1", b_data="a1b1"),
-                                C(data="a1b2", c_data="a1c1"),
-                                B(data="a1b2", b_data="a1b2"),
-                                C(data="a1c2", c_data="a1c2"),
-                            ]
-                        ),
+                        collection={
+                            B(data="a1b1", b_data="a1b1"),
+                            C(data="a1b2", c_data="a1c1"),
+                            B(data="a1b2", b_data="a1b2"),
+                            C(data="a1c2", c_data="a1c2"),
+                        },
                     ),
                     A(
                         data="a2",
-                        collection=set(
-                            [
-                                B(data="a2b1", b_data="a2b1"),
-                                C(data="a2c1", c_data="a2c1"),
-                                B(data="a2b2", b_data="a2b2"),
-                                C(data="a2c2", c_data="a2c2"),
-                            ]
-                        ),
+                        collection={
+                            B(data="a2b1", b_data="a2b1"),
+                            C(data="a2c1", c_data="a2c1"),
+                            B(data="a2b2", b_data="a2b2"),
+                            C(data="a2c2", c_data="a2c2"),
+                        },
                     ),
                 ]
             )
@@ -802,14 +798,12 @@ class ConcreteExtensionConfigTest(
                 [
                     A(
                         data="a2",
-                        collection=set(
-                            [
-                                B(data="a2b1", b_data="a2b1"),
-                                B(data="a2b2", b_data="a2b2"),
-                                C(data="a2c1", c_data="a2c1"),
-                                C(data="a2c2", c_data="a2c2"),
-                            ]
-                        ),
+                        collection={
+                            B(data="a2b1", b_data="a2b1"),
+                            B(data="a2b2", b_data="a2b2"),
+                            C(data="a2c1", c_data="a2c1"),
+                            C(data="a2c2", c_data="a2c2"),
+                        },
                     )
                 ],
             )
@@ -975,8 +969,9 @@ class ConcreteExtensionConfigTest(
         session = Session()
         self.assert_compile(
             session.query(Document),
-            "SELECT pjoin.documenttype AS pjoin_documenttype, "
-            "pjoin.id AS pjoin_id, pjoin.type AS pjoin_type FROM "
+            "SELECT "
+            "pjoin.id AS pjoin_id, pjoin.documenttype AS pjoin_documenttype, "
+            "pjoin.type AS pjoin_type FROM "
             "(SELECT offers.id AS id, offers.documenttype AS documenttype, "
             "'offer' AS type FROM offers) AS pjoin",
         )

@@ -58,17 +58,15 @@ The documentation is separated into four sections:
 * :ref:`unified_tutorial` - this all-new tutorial for the 1.4/2.0 series of
   SQLAlchemy introduces the entire library holistically, starting from a
   description of Core and working more and more towards ORM-specific concepts.
-  New users, as well as users coming from :term:`1.x style`, who wish to work
-  in :term:`2.0 style` should start here.
+  New users, as well as users coming from the 1.x series of
+  SQLAlchemy, should start here.
 
 * :ref:`orm_toplevel` - In this section, reference documentation for the ORM is
-  presented; this section also includes the now-legacy
-  :ref:`ormtutorial_toplevel`.
+  presented.
 
 * :ref:`core_toplevel` - Here, reference documentation for
-  everything else within Core is presented; section also includes the legacy
-  :ref:`sqlexpression_toplevel`. SQLAlchemy engine, connection, and pooling
-  services are also described here.
+  everything else within Core is presented. SQLAlchemy engine, connection, and
+  pooling services are also described here.
 
 * :ref:`dialect_toplevel` - Provides reference documentation
   for all :term:`dialect` implementations, including :term:`DBAPI` specifics.
@@ -126,13 +124,10 @@ approaches.
 Install via pip
 ---------------
 
-.. warning::  This section **does not apply until SQLAlchemy 2.0 is actually
-   released**, which as of January 26, 2022 the library is **not released yet**.
-   In the interim, these instructions **will not function** and will install
-   the latest 1.4 release.
-
 When ``pip`` is available, the distribution can be
-downloaded from PyPI and installed in one step::
+downloaded from PyPI and installed in one step:
+
+.. sourcecode:: text
 
     pip install SQLAlchemy
 
@@ -142,7 +137,9 @@ to your system. For most common platforms, a Python Wheel file will be
 downloaded which provides native Cython / C extensions prebuilt.
 
 In order to install the latest **prerelease** version, such as ``2.0.0b1``,
-pip requires that the ``--pre`` flag be used::
+pip requires that the ``--pre`` flag be used:
+
+.. sourcecode:: text
 
     pip install --pre SQLAlchemy
 
@@ -154,7 +151,9 @@ Installing manually from the source distribution
 -------------------------------------------------
 
 When not installing from pip, the source distribution may be installed
-using the ``setup.py`` script::
+using the ``setup.py`` script:
+
+.. sourcecode:: text
 
     python setup.py install
 
@@ -177,7 +176,9 @@ within various areas, with a current emphasis on the speed of Core result sets.
 
 ``setup.py`` will automatically build the extensions if an appropriate platform
 is detected, assuming the Cython package is installed.  A complete manual
-build looks like::
+build looks like:
+
+.. sourcecode:: text
 
     # cd into SQLAlchemy source distribution
     cd path/to/sqlalchemy
@@ -192,7 +193,9 @@ build looks like::
     python setup.py install
 
 Source builds may also be performed using :pep:`517` techniques, such as
-using build_::
+using build_:
+
+.. sourcecode:: text
 
     # cd into SQLAlchemy source distribution
     cd path/to/sqlalchemy
@@ -212,7 +215,9 @@ To run the build/install without even attempting to compile the Cython
 extensions, the ``DISABLE_SQLALCHEMY_CEXT`` environment variable may be
 specified. The use case for this is either for special testing circumstances,
 or in the rare case of compatibility/build issues not overcome by the usual
-"rebuild" mechanism::
+"rebuild" mechanism:
+
+.. sourcecode:: text
 
   export DISABLE_SQLALCHEMY_CEXT=1; python setup.py install
 
@@ -235,12 +240,10 @@ Checking the Installed SQLAlchemy Version
 
 This documentation covers SQLAlchemy version 2.0. If you're working on a
 system that already has SQLAlchemy installed, check the version from your
-Python prompt like this:
-
-.. sourcecode:: python+sql
+Python prompt like this::
 
      >>> import sqlalchemy
-     >>> sqlalchemy.__version__ # doctest: +SKIP
+     >>> sqlalchemy.__version__  # doctest: +SKIP
      2.0.0
 
 Next Steps

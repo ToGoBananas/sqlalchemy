@@ -1,4 +1,3 @@
-#! coding: utf-8
 # mypy: ignore-errors
 
 
@@ -8,8 +7,10 @@ from .. import config
 from .. import engines
 from .. import eq_
 from .. import fixtures
+from .. import is_true
 from .. import ne_
 from .. import provide_metadata
+from ..assertions import expect_raises
 from ..assertions import expect_raises_message
 from ..config import requirements
 from ..provision import set_default_schema_on_connection
@@ -22,6 +23,16 @@ from ... import Integer
 from ... import literal_column
 from ... import select
 from ... import String
+
+
+class PingTest(fixtures.TestBase):
+    __backend__ = True
+
+    def test_do_ping(self):
+        with testing.db.connect() as conn:
+            is_true(
+                testing.db.dialect.do_ping(conn.connection.dbapi_connection)
+            )
 
 
 class ExceptionTest(fixtures.TablesTest):
@@ -359,7 +370,7 @@ class FutureWeCanSetDefaultSchemaWEventsTest(
 class DifficultParametersTest(fixtures.TestBase):
     __backend__ = True
 
-    @testing.combinations(
+    tough_parameters = testing.combinations(
         ("boring",),
         ("per cent",),
         ("per % cent",),
@@ -367,15 +378,29 @@ class DifficultParametersTest(fixtures.TestBase):
         ("par(ens)",),
         ("percent%(ens)yah",),
         ("col:ons",),
+        ("_starts_with_underscore",),
+        ("dot.s",),
         ("more :: %colons%",),
+        ("_name",),
+        ("___name",),
+        ("[BracketsAndCase]",),
+        ("42numbers",),
+        ("percent%signs",),
+        ("has spaces",),
         ("/slashes/",),
         ("more/slashes",),
         ("q?marks",),
         ("1param",),
         ("1col:on",),
-        argnames="name",
+        argnames="paramname",
     )
-    def test_round_trip(self, name, connection, metadata):
+
+    @tough_parameters
+    def test_round_trip_same_named_column(
+        self, paramname, connection, metadata
+    ):
+        name = paramname
+
         t = Table(
             "t",
             metadata,
@@ -401,3 +426,211 @@ class DifficultParametersTest(fixtures.TestBase):
 
         # name works as the key from cursor.description
         eq_(row._mapping[name], "some name")
+
+        # use expanding IN
+        stmt = select(t.c[name]).where(
+            t.c[name].in_(["some name", "some other_name"])
+        )
+
+        row = connection.execute(stmt).first()
+
+    @testing.fixture
+    def multirow_fixture(self, metadata, connection):
+        mytable = Table(
+            "mytable",
+            metadata,
+            Column("myid", Integer),
+            Column("name", String(50)),
+            Column("desc", String(50)),
+        )
+
+        mytable.create(connection)
+
+        connection.execute(
+            mytable.insert(),
+            [
+                {"myid": 1, "name": "a", "desc": "a_desc"},
+                {"myid": 2, "name": "b", "desc": "b_desc"},
+                {"myid": 3, "name": "c", "desc": "c_desc"},
+                {"myid": 4, "name": "d", "desc": "d_desc"},
+            ],
+        )
+        yield mytable
+
+    @tough_parameters
+    def test_standalone_bindparam_escape(
+        self, paramname, connection, multirow_fixture
+    ):
+        tbl1 = multirow_fixture
+        stmt = select(tbl1.c.myid).where(
+            tbl1.c.name == bindparam(paramname, value="x")
+        )
+        res = connection.scalar(stmt, {paramname: "c"})
+        eq_(res, 3)
+
+    @tough_parameters
+    def test_standalone_bindparam_escape_expanding(
+        self, paramname, connection, multirow_fixture
+    ):
+        tbl1 = multirow_fixture
+        stmt = (
+            select(tbl1.c.myid)
+            .where(tbl1.c.name.in_(bindparam(paramname, value=["a", "b"])))
+            .order_by(tbl1.c.myid)
+        )
+
+        res = connection.scalars(stmt, {paramname: ["d", "a"]}).all()
+        eq_(res, [1, 4])
+
+
+class ReturningGuardsTest(fixtures.TablesTest):
+    """test that the various 'returning' flags are set appropriately"""
+
+    __backend__ = True
+
+    @classmethod
+    def define_tables(cls, metadata):
+
+        Table(
+            "t",
+            metadata,
+            Column("id", Integer, primary_key=True, autoincrement=False),
+            Column("data", String(50)),
+        )
+
+    @testing.fixture
+    def run_stmt(self, connection):
+        t = self.tables.t
+
+        def go(stmt, executemany, id_param_name, expect_success):
+            stmt = stmt.returning(t.c.id)
+
+            if executemany:
+                if not expect_success:
+                    # for RETURNING executemany(), we raise our own
+                    # error as this is independent of general RETURNING
+                    # support
+                    with expect_raises_message(
+                        exc.StatementError,
+                        rf"Dialect {connection.dialect.name}\+"
+                        f"{connection.dialect.driver} with "
+                        f"current server capabilities does not support "
+                        f".*RETURNING when executemany is used",
+                    ):
+                        result = connection.execute(
+                            stmt,
+                            [
+                                {id_param_name: 1, "data": "d1"},
+                                {id_param_name: 2, "data": "d2"},
+                                {id_param_name: 3, "data": "d3"},
+                            ],
+                        )
+                else:
+                    result = connection.execute(
+                        stmt,
+                        [
+                            {id_param_name: 1, "data": "d1"},
+                            {id_param_name: 2, "data": "d2"},
+                            {id_param_name: 3, "data": "d3"},
+                        ],
+                    )
+                    eq_(result.all(), [(1,), (2,), (3,)])
+            else:
+                if not expect_success:
+                    # for RETURNING execute(), we pass all the way to the DB
+                    # and let it fail
+                    with expect_raises(exc.DBAPIError):
+                        connection.execute(
+                            stmt, {id_param_name: 1, "data": "d1"}
+                        )
+                else:
+                    result = connection.execute(
+                        stmt, {id_param_name: 1, "data": "d1"}
+                    )
+                    eq_(result.all(), [(1,)])
+
+        return go
+
+    def test_insert_single(self, connection, run_stmt):
+        t = self.tables.t
+
+        stmt = t.insert()
+
+        run_stmt(stmt, False, "id", connection.dialect.insert_returning)
+
+    def test_insert_many(self, connection, run_stmt):
+        t = self.tables.t
+
+        stmt = t.insert()
+
+        run_stmt(
+            stmt, True, "id", connection.dialect.insert_executemany_returning
+        )
+
+    def test_update_single(self, connection, run_stmt):
+        t = self.tables.t
+
+        connection.execute(
+            t.insert(),
+            [
+                {"id": 1, "data": "d1"},
+                {"id": 2, "data": "d2"},
+                {"id": 3, "data": "d3"},
+            ],
+        )
+
+        stmt = t.update().where(t.c.id == bindparam("b_id"))
+
+        run_stmt(stmt, False, "b_id", connection.dialect.update_returning)
+
+    def test_update_many(self, connection, run_stmt):
+        t = self.tables.t
+
+        connection.execute(
+            t.insert(),
+            [
+                {"id": 1, "data": "d1"},
+                {"id": 2, "data": "d2"},
+                {"id": 3, "data": "d3"},
+            ],
+        )
+
+        stmt = t.update().where(t.c.id == bindparam("b_id"))
+
+        run_stmt(
+            stmt, True, "b_id", connection.dialect.update_executemany_returning
+        )
+
+    def test_delete_single(self, connection, run_stmt):
+        t = self.tables.t
+
+        connection.execute(
+            t.insert(),
+            [
+                {"id": 1, "data": "d1"},
+                {"id": 2, "data": "d2"},
+                {"id": 3, "data": "d3"},
+            ],
+        )
+
+        stmt = t.delete().where(t.c.id == bindparam("b_id"))
+
+        run_stmt(stmt, False, "b_id", connection.dialect.delete_returning)
+
+    def test_delete_many(self, connection, run_stmt):
+        t = self.tables.t
+
+        connection.execute(
+            t.insert(),
+            [
+                {"id": 1, "data": "d1"},
+                {"id": 2, "data": "d2"},
+                {"id": 3, "data": "d3"},
+            ],
+        )
+
+        stmt = t.delete().where(t.c.id == bindparam("b_id"))
+
+        run_stmt(
+            stmt, True, "b_id", connection.dialect.delete_executemany_returning
+        )

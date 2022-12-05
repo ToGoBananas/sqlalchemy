@@ -53,6 +53,7 @@ from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import in_
 from sqlalchemy.testing import is_
+from sqlalchemy.testing import is_false
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import le_
 from sqlalchemy.testing import mock
@@ -100,9 +101,54 @@ class CursorResultTest(fixtures.TablesTest):
         Table(
             "test",
             metadata,
-            Column("x", Integer, primary_key=True),
+            Column(
+                "x", Integer, primary_key=True, test_needs_autoincrement=False
+            ),
             Column("y", String(50)),
         )
+
+    @testing.requires.insert_returning
+    def test_splice_horizontally(self, connection):
+        users = self.tables.users
+        addresses = self.tables.addresses
+
+        r1 = connection.execute(
+            users.insert().returning(users.c.user_name, users.c.user_id),
+            [
+                dict(user_id=1, user_name="john"),
+                dict(user_id=2, user_name="jack"),
+            ],
+        )
+
+        r2 = connection.execute(
+            addresses.insert().returning(
+                addresses.c.address_id,
+                addresses.c.address,
+                addresses.c.user_id,
+            ),
+            [
+                dict(address_id=1, user_id=1, address="foo@bar.com"),
+                dict(address_id=2, user_id=2, address="bar@bat.com"),
+            ],
+        )
+
+        rows = r1.splice_horizontally(r2).all()
+        eq_(
+            rows,
+            [
+                ("john", 1, 1, "foo@bar.com", 1),
+                ("jack", 2, 2, "bar@bat.com", 2),
+            ],
+        )
+
+        eq_(rows[0]._mapping[users.c.user_id], 1)
+        eq_(rows[0]._mapping[addresses.c.user_id], 1)
+        eq_(rows[1].address, "bar@bat.com")
+
+        with expect_raises_message(
+            exc.InvalidRequestError, "Ambiguous column name 'user_id'"
+        ):
+            rows[0].user_id
 
     def test_keys_no_rows(self, connection):
 
@@ -1149,14 +1195,56 @@ class CursorResultTest(fixtures.TablesTest):
         row = result.first()
 
         eq_(
-            set(
-                [
-                    users.c.user_id in row._mapping,
-                    addresses.c.user_id in row._mapping,
-                ]
-            ),
-            set([True]),
+            {
+                users.c.user_id in row._mapping,
+                addresses.c.user_id in row._mapping,
+            },
+            {True},
         )
+
+    @testing.combinations(
+        (("name_label", "*"), False),
+        (("*", "name_label"), False),
+        (("user_id", "name_label", "user_name"), False),
+        (("user_id", "name_label", "*", "user_name"), True),
+        argnames="cols,other_cols_are_ambiguous",
+    )
+    @testing.requires.select_star_mixed
+    def test_label_against_star(
+        self, connection, cols, other_cols_are_ambiguous
+    ):
+        """test #8536"""
+        users = self.tables.users
+
+        connection.execute(users.insert(), dict(user_id=1, user_name="john"))
+
+        stmt = select(
+            *[
+                text("*")
+                if colname == "*"
+                else users.c.user_name.label("name_label")
+                if colname == "name_label"
+                else users.c[colname]
+                for colname in cols
+            ]
+        )
+
+        row = connection.execute(stmt).first()
+
+        eq_(row._mapping["name_label"], "john")
+
+        if other_cols_are_ambiguous:
+            with expect_raises_message(
+                exc.InvalidRequestError, "Ambiguous column name"
+            ):
+                row._mapping["user_id"]
+            with expect_raises_message(
+                exc.InvalidRequestError, "Ambiguous column name"
+            ):
+                row._mapping["user_name"]
+        else:
+            eq_(row._mapping["user_id"], 1)
+            eq_(row._mapping["user_name"], "john")
 
     def test_loose_matching_one(self, connection):
         users = self.tables.users
@@ -1943,6 +2031,89 @@ class CursorResultTest(fixtures.TablesTest):
             # ensure partition is set up to same size
             partition = next(result.partitions())
             eq_(len(partition), value)
+
+    @testing.fixture
+    def autoclose_row_fixture(self, connection):
+        users = self.tables.users
+        connection.execute(
+            users.insert(),
+            [
+                {"user_id": 1, "name": "u1"},
+                {"user_id": 2, "name": "u2"},
+                {"user_id": 3, "name": "u3"},
+                {"user_id": 4, "name": "u4"},
+                {"user_id": 5, "name": "u5"},
+            ],
+        )
+
+    @testing.fixture(params=["plain", "scalars", "mapping"])
+    def result_fixture(self, request, connection):
+        users = self.tables.users
+
+        result_type = request.param
+
+        if result_type == "plain":
+            result = connection.execute(select(users))
+        elif result_type == "scalars":
+            result = connection.scalars(select(users))
+        elif result_type == "mapping":
+            result = connection.execute(select(users)).mappings()
+        else:
+            assert False
+
+        return result
+
+    def test_results_can_close(self, autoclose_row_fixture, result_fixture):
+        """test #8710"""
+
+        r1 = result_fixture
+
+        is_false(r1.closed)
+        is_false(r1._soft_closed)
+
+        r1._soft_close()
+        is_false(r1.closed)
+        is_true(r1._soft_closed)
+
+        r1.close()
+        is_true(r1.closed)
+        is_true(r1._soft_closed)
+
+    def test_autoclose_rows_exhausted_plain(
+        self, connection, autoclose_row_fixture, result_fixture
+    ):
+        result = result_fixture
+
+        assert not result._soft_closed
+        assert not result.closed
+
+        read_iterator = list(result)
+        eq_(len(read_iterator), 5)
+
+        assert result._soft_closed
+        assert not result.closed
+
+        result.close()
+        assert result.closed
+
+    def test_result_ctxmanager(
+        self, connection, autoclose_row_fixture, result_fixture
+    ):
+        """test #8710"""
+
+        result = result_fixture
+
+        with expect_raises_message(Exception, "hi"):
+            with result:
+                assert not result._soft_closed
+                assert not result.closed
+
+                for i, obj in enumerate(result):
+                    if i > 2:
+                        raise Exception("hi")
+
+        assert result._soft_closed
+        assert result.closed
 
 
 class KeyTargetingTest(fixtures.TablesTest):
@@ -3024,6 +3195,47 @@ class AlternateCursorResultTest(fixtures.TablesTest):
         # buffer of 98, plus buffer of 99 - 89, 10 rows
         eq_(len(result.cursor_strategy._rowbuffer), 10)
 
+        for i, row in enumerate(result):
+            if i == 206:
+                break
+
+        eq_(i, 206)
+
+    def test_iterator_remains_unbroken(self, connection):
+        """test related to #8710.
+
+        demonstrate that we can't close the cursor by catching
+        GeneratorExit inside of our iteration.  Leaving the iterable
+        block using break, then picking up again, would be directly
+        impacted by this.  So this provides a clear rationale for
+        providing context manager support for result objects.
+
+        """
+        table = self.tables.test
+
+        connection.execute(
+            table.insert(),
+            [{"x": i, "y": "t_%d" % i} for i in range(15, 250)],
+        )
+
+        result = connection.execute(table.select())
+        result = result.yield_per(100)
+        for i, row in enumerate(result):
+            if i == 188:
+                # this will raise GeneratorExit inside the iterator.
+                # so we can't close the DBAPI cursor here, we have plenty
+                # more rows to yield
+                break
+
+        eq_(i, 188)
+
+        # demonstrate getting more rows
+        for i, row in enumerate(result, 188):
+            if i == 206:
+                break
+
+        eq_(i, 206)
+
     @testing.combinations(True, False, argnames="close_on_init")
     @testing.combinations(
         "fetchone", "fetchmany", "fetchall", argnames="fetch_style"
@@ -3143,7 +3355,7 @@ class AlternateCursorResultTest(fixtures.TablesTest):
     def test_handle_error_in_fetch(self, strategy_cls, method_name):
         class cursor:
             def raise_(self):
-                raise IOError("random non-DBAPI error during cursor operation")
+                raise OSError("random non-DBAPI error during cursor operation")
 
             def fetchone(self):
                 self.raise_()
@@ -3176,7 +3388,7 @@ class AlternateCursorResultTest(fixtures.TablesTest):
 
     def test_buffered_row_close_error_during_fetchone(self):
         def raise_(**kw):
-            raise IOError("random non-DBAPI error during cursor operation")
+            raise OSError("random non-DBAPI error during cursor operation")
 
         with self._proxy_fixture(_cursor.BufferedRowCursorFetchStrategy):
             with self.engine.connect() as conn:

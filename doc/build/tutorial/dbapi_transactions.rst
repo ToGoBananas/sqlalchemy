@@ -11,9 +11,9 @@ Working with Transactions and the DBAPI
 
 
 
-With the :class:`_future.Engine` object ready to go, we may now proceed
-to dive into the basic operation of an :class:`_future.Engine` and
-its primary interactive endpoints, the :class:`_future.Connection` and
+With the :class:`_engine.Engine` object ready to go, we may now proceed
+to dive into the basic operation of an :class:`_engine.Engine` and
+its primary interactive endpoints, the :class:`_engine.Connection` and
 :class:`_engine.Result`.   We will additionally introduce the ORM's
 :term:`facade` for these objects, known as the :class:`_orm.Session`.
 
@@ -21,13 +21,13 @@ its primary interactive endpoints, the :class:`_future.Connection` and
 
     **Note to ORM readers**
 
-    When using the ORM, the :class:`_future.Engine` is managed by another
+    When using the ORM, the :class:`_engine.Engine` is managed by another
     object called the :class:`_orm.Session`.  The :class:`_orm.Session` in
     modern SQLAlchemy emphasizes a transactional and SQL execution pattern that
-    is largely identical to that of the :class:`_future.Connection` discussed
+    is largely identical to that of the :class:`_engine.Connection` discussed
     below, so while this subsection is Core-centric, all of the concepts here
     are essentially relevant to ORM use as well and is recommended for all ORM
-    learners.   The execution pattern used by the :class:`_future.Connection`
+    learners.   The execution pattern used by the :class:`_engine.Connection`
     will be contrasted with that of the :class:`_orm.Session` at the end
     of this section.
 
@@ -45,11 +45,11 @@ tasks, even though it always remains fully available.
 Getting a Connection
 ---------------------
 
-The sole purpose of the :class:`_future.Engine` object from a user-facing
+The sole purpose of the :class:`_engine.Engine` object from a user-facing
 perspective is to provide a unit of
-connectivity to the database called the :class:`_future.Connection`.   When
-working with the Core directly, the :class:`_future.Connection` object
-is how all interaction with the database is done.   As the :class:`_future.Connection`
+connectivity to the database called the :class:`_engine.Connection`.   When
+working with the Core directly, the :class:`_engine.Connection` object
+is how all interaction with the database is done.   As the :class:`_engine.Connection`
 represents an open resource against the database, we want to always limit
 the scope of our use of this object to a specific context, and the best
 way to do that is by using Python context manager form, also known as
@@ -76,7 +76,7 @@ and also framed the operation inside of a transaction. The default behavior of
 the Python DBAPI includes that a transaction is always in progress; when the
 scope of the connection is :term:`released`, a ROLLBACK is emitted to end the
 transaction.   The transaction is **not committed automatically**; when we want
-to commit data we normally need to call :meth:`_future.Connection.commit`
+to commit data we normally need to call :meth:`_engine.Connection.commit`
 as we'll see in the next section.
 
 .. tip::  "autocommit" mode is available for special cases.  The section
@@ -97,8 +97,8 @@ Committing Changes
 We just learned that the DBAPI connection is non-autocommitting.  What if
 we want to commit some data?   We can alter our above example to create a
 table and insert some data, and the transaction is then committed using
-the :meth:`_future.Connection.commit` method, invoked **inside** the block
-where we acquired the :class:`_future.Connection` object:
+the :meth:`_engine.Connection.commit` method, invoked **inside** the block
+where we acquired the :class:`_engine.Connection` object:
 
 .. sourcecode:: pycon+sql
 
@@ -107,7 +107,7 @@ where we acquired the :class:`_future.Connection` object:
     ...     conn.execute(text("CREATE TABLE some_table (x int, y int)"))
     ...     conn.execute(
     ...         text("INSERT INTO some_table (x, y) VALUES (:x, :y)"),
-    ...         [{"x": 1, "y": 1}, {"x": 2, "y": 4}]
+    ...         [{"x": 1, "y": 1}, {"x": 2, "y": 4}],
     ...     )
     ...     conn.commit()
     {opensql}BEGIN (implicit)
@@ -124,17 +124,17 @@ Above, we emitted two SQL statements that are generally transactional, a
 (the parameterization syntax above is discussed a few sections below in
 :ref:`tutorial_multiple_parameters`).  As we want the work we've done to be
 committed within our block, we invoke the
-:meth:`_future.Connection.commit` method which commits the transaction. After
+:meth:`_engine.Connection.commit` method which commits the transaction. After
 we call this method inside the block, we can continue to run more SQL
-statements and if we choose we may call :meth:`_future.Connection.commit`
+statements and if we choose we may call :meth:`_engine.Connection.commit`
 again for subsequent statements.  SQLAlchemy refers to this style as **commit as
 you go**.
 
 There is also another style of committing data, which is that we can declare
 our "connect" block to be a transaction block up front.   For this mode of
-operation, we use the :meth:`_future.Engine.begin` method to acquire the
-connection, rather than the :meth:`_future.Engine.connect` method.  This method
-will both manage the scope of the :class:`_future.Connection` and also
+operation, we use the :meth:`_engine.Engine.begin` method to acquire the
+connection, rather than the :meth:`_engine.Engine.connect` method.  This method
+will both manage the scope of the :class:`_engine.Connection` and also
 enclose everything inside of a transaction with COMMIT at the end, assuming
 a successful block, or ROLLBACK in case of exception raise.  This style
 may be referred towards as **begin once**:
@@ -145,7 +145,7 @@ may be referred towards as **begin once**:
     >>> with engine.begin() as conn:
     ...     conn.execute(
     ...         text("INSERT INTO some_table (x, y) VALUES (:x, :y)"),
-    ...         [{"x": 6, "y": 8}, {"x": 9, "y": 10}]
+    ...         [{"x": 6, "y": 8}, {"x": 9, "y": 10}],
     ...     )
     {opensql}BEGIN (implicit)
     INSERT INTO some_table (x, y) VALUES (?, ?)
@@ -185,7 +185,7 @@ Basics of Statement Execution
 -----------------------------
 
 We have seen a few examples that run SQL statements against a database, making
-use of a method called :meth:`_future.Connection.execute`, in conjunction with
+use of a method called :meth:`_engine.Connection.execute`, in conjunction with
 an object called :func:`_sql.text`, and returning an object called
 :class:`_engine.Result`.  In this section we'll illustrate more closely the
 mechanics and interactions of these components.
@@ -194,7 +194,7 @@ mechanics and interactions of these components.
 
   Most of the content in this section applies equally well to modern ORM
   use when using the :meth:`_orm.Session.execute` method, which works
-  very similarly to that of :meth:`_future.Connection.execute`, including that
+  very similarly to that of :meth:`_engine.Connection.execute`, including that
   ORM result rows are delivered using the same :class:`_engine.Result`
   interface used by Core.
 
@@ -248,7 +248,7 @@ Below we illustrate a variety of ways to access rows.
       result = conn.execute(text("select x, y from some_table"))
 
       for x, y in result:
-          # ...
+          ...
 
 * **Integer Index** - Tuples are Python sequences, so regular integer access is available too:
 
@@ -256,8 +256,8 @@ Below we illustrate a variety of ways to access rows.
 
       result = conn.execute(text("select x, y from some_table"))
 
-        for row in result:
-            x = row[0]
+      for row in result:
+          x = row[0]
 
 * **Attribute Name** - As these are Python named tuples, the tuples have dynamic attribute names
   matching the names of each column.  These names are normally the names that the
@@ -286,8 +286,8 @@ Below we illustrate a variety of ways to access rows.
       result = conn.execute(text("select x, y from some_table"))
 
       for dict_row in result.mappings():
-          x = dict_row['x']
-          y = dict_row['y']
+          x = dict_row["x"]
+          y = dict_row["y"]
 
   ..
 
@@ -300,7 +300,7 @@ Sending Parameters
 
 SQL statements are usually accompanied by data that is to be passed with the
 statement itself, as we saw in the INSERT example previously. The
-:meth:`_future.Connection.execute` method therefore also accepts parameters,
+:meth:`_engine.Connection.execute` method therefore also accepts parameters,
 which are referred towards as :term:`bound parameters`.  A rudimentary example
 might be if we wanted to limit our SELECT statement only to rows that meet a
 certain criteria, such as rows where the "y" value were greater than a certain
@@ -311,17 +311,14 @@ that the driver can properly sanitize the value, we add a WHERE criteria to
 our statement that names a new parameter called "y"; the :func:`_sql.text`
 construct accepts these using a colon format "``:y``".   The actual value for
 "``:y``" is then passed as the second argument to
-:meth:`_future.Connection.execute` in the form of a dictionary:
+:meth:`_engine.Connection.execute` in the form of a dictionary:
 
 .. sourcecode:: pycon+sql
 
     >>> with engine.connect() as conn:
-    ...     result = conn.execute(
-    ...         text("SELECT x, y FROM some_table WHERE y > :y"),
-    ...         {"y": 2}
-    ...     )
+    ...     result = conn.execute(text("SELECT x, y FROM some_table WHERE y > :y"), {"y": 2})
     ...     for row in result:
-    ...        print(f"x: {row.x}  y: {row.y}")
+    ...         print(f"x: {row.x}  y: {row.y}")
     {opensql}BEGIN (implicit)
     SELECT x, y FROM some_table WHERE y > ?
     [...] (2,)
@@ -358,19 +355,19 @@ Sending Multiple Parameters
 
 In the example at :ref:`tutorial_committing_data`, we executed an INSERT
 statement where it appeared that we were able to INSERT multiple rows into the
-database at once.  For statements that **operate upon data, but do not return
-result sets**, namely :term:`DML` statements such as "INSERT" which don't
-include a phrase like "RETURNING", we can send **multi params** to the
-:meth:`_future.Connection.execute` method by passing a list of dictionaries
-instead of a single dictionary, thus allowing the single SQL statement to
-be invoked against each parameter set individually:
+database at once.  For statements :term:`DML` statements such as "INSERT",
+"UPDATE" and "DELETE", we can send **multiple parameter sets** to the
+:meth:`_engine.Connection.execute` method by passing a list of dictionaries
+instead of a single dictionary, which indicates that the single SQL statement
+should be invoked multiple times, once for each parameter set.  This style
+of execution is known as :term:`executemany`:
 
 .. sourcecode:: pycon+sql
 
     >>> with engine.connect() as conn:
     ...     conn.execute(
     ...         text("INSERT INTO some_table (x, y) VALUES (:x, :y)"),
-    ...         [{"x": 11, "y": 12}, {"x": 13, "y": 14}]
+    ...         [{"x": 11, "y": 12}, {"x": 13, "y": 14}],
     ...     )
     ...     conn.commit()
     {opensql}BEGIN (implicit)
@@ -379,67 +376,30 @@ be invoked against each parameter set individually:
     <sqlalchemy.engine.cursor.CursorResult object at 0x...>
     COMMIT
 
-Behind the scenes, the :class:`_future.Connection` objects uses a DBAPI feature
-known as `cursor.executemany()
-<https://www.python.org/dev/peps/pep-0249/#id18>`_. This method performs the
-equivalent operation of invoking the given SQL statement against each parameter
-set individually.   The DBAPI may optimize this operation in a variety of ways,
-by using prepared statements, or by concatenating the parameter sets into a
-single SQL statement in some cases.  Some SQLAlchemy dialects may also use
-alternate APIs for this case, such as the :ref:`psycopg2 dialect for PostgreSQL
-<postgresql_psycopg2>` which uses more performant APIs
-for this use case.
+The above operation is equivalent to running the given INSERT statement once
+for each parameter set, except that the operation will be optimized for
+better performance across many rows.
 
-.. tip::  you may have noticed this section isn't tagged as an ORM concept.
-   That's because the "multiple parameters" use case is **usually** used
-   for INSERT statements, which when using the ORM are invoked in a different
-   way.   Multiple parameters also may be used with UPDATE and DELETE
-   statements to emit distinct UPDATE/DELETE operations on a per-row basis,
-   however again when using the ORM, there is a different technique
-   generally used for updating or deleting many individual rows separately.
+A key behavioral difference between "execute" and "executemany" is that the
+latter doesn't support returning of result rows, even if the statement includes
+the RETURNING clause. The one exception to this is when using a Core
+:func:`_sql.insert` construct, introduced later in this tutorial at
+:ref:`tutorial_core_insert`, which also indicates RETURNING using the
+:meth:`_sql.Insert.returning` method.  In that case, SQLAlchemy makes use of
+special logic to reorganize the INSERT statement so that it can be invoked
+for many rows while still supporting RETURNING.
 
-.. rst-class:: orm-addin
+.. seealso::
 
-.. _tutorial_bundling_parameters:
+   :term:`executemany` - in the :doc:`Glossary </glossary>`, describes the
+   DBAPI-level
+   `cursor.executemany() <https://peps.python.org/pep-0249/#executemany>`_
+   method that's used for most "executemany" executions.
 
-Bundling Parameters with a Statement
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   :ref:`engine_insertmanyvalues` - in :ref:`connections_toplevel`, describes
+   the specialized logic used by :meth:`_sql.Insert.returning` to deliver
+   result sets with "executemany" executions.
 
-The two previous cases illustrate a series of parameters being passed to
-accompany a SQL statement.    For single-parameter statement executions,
-SQLAlchemy's use of parameters is in fact more often than not done by
-**bundling** the parameters with the statement itself, which is a primary
-feature of the SQL Expression Language and makes for queries that can be
-composed naturally while still making use of parameterization in all cases.
-This concept will be discussed in much more detail in the sections that follow;
-for a brief preview, the :func:`_sql.text` construct itself being part of the
-SQL Expression Language supports this feature by using the
-:meth:`_sql.TextClause.bindparams` method; this is a :term:`generative` method that
-returns a new copy of the SQL construct with additional state added, in this
-case the parameter values we want to pass along:
-
-
-.. sourcecode:: pycon+sql
-
-    >>> stmt = text("SELECT x, y FROM some_table WHERE y > :y ORDER BY x, y").bindparams(y=6)
-    >>> with engine.connect() as conn:
-    ...     result = conn.execute(stmt)
-    ...     for row in result:
-    ...        print(f"x: {row.x}  y: {row.y}")
-    {opensql}BEGIN (implicit)
-    SELECT x, y FROM some_table WHERE y > ? ORDER BY x, y
-    [...] (6,)
-    {stop}x: 6  y: 8
-    x: 9  y: 10
-    x: 11  y: 12
-    x: 13  y: 14
-    {opensql}ROLLBACK{stop}
-
-
-The interesting thing to note above is that even though we passed only a single
-argument, ``stmt``, to the :meth:`_future.Connection.execute` method, the
-execution of the statement illustrated both the SQL string as well as the
-separate parameter tuple.
 
 .. rst-class:: orm-addin
 
@@ -455,30 +415,30 @@ terms of Core and ORM use together.
 
 The fundamental transactional / database interactive object when using the
 ORM is called the :class:`_orm.Session`.  In modern SQLAlchemy, this object
-is used in a manner very similar to that of the :class:`_future.Connection`,
+is used in a manner very similar to that of the :class:`_engine.Connection`,
 and in fact as the :class:`_orm.Session` is used, it refers to a
-:class:`_future.Connection` internally which it uses to emit SQL.
+:class:`_engine.Connection` internally which it uses to emit SQL.
 
 When the :class:`_orm.Session` is used with non-ORM constructs, it
 passes through the SQL statements we give it and does not generally do things
-much differently from how the :class:`_future.Connection` does directly, so
+much differently from how the :class:`_engine.Connection` does directly, so
 we can illustrate it here in terms of the simple textual SQL
 operations we've already learned.
 
 The :class:`_orm.Session` has a few different creational patterns, but
 here we will illustrate the most basic one that tracks exactly with how
-the :class:`_future.Connection` is used which is to construct it within
+the :class:`_engine.Connection` is used which is to construct it within
 a context manager:
 
 .. sourcecode:: pycon+sql
 
     >>> from sqlalchemy.orm import Session
 
-    >>> stmt = text("SELECT x, y FROM some_table WHERE y > :y ORDER BY x, y").bindparams(y=6)
+    >>> stmt = text("SELECT x, y FROM some_table WHERE y > :y ORDER BY x, y")
     >>> with Session(engine) as session:
-    ...     result = session.execute(stmt)
+    ...     result = session.execute(stmt, {"y": 6})
     ...     for row in result:
-    ...        print(f"x: {row.x}  y: {row.y}")
+    ...         print(f"x: {row.x}  y: {row.y}")
     {opensql}BEGIN (implicit)
     SELECT x, y FROM some_table WHERE y > ? ORDER BY x, y
     [...] (6,){stop}
@@ -489,12 +449,12 @@ a context manager:
     {opensql}ROLLBACK{stop}
 
 The example above can be compared to the example in the preceding section
-in :ref:`tutorial_bundling_parameters` - we directly replace the call to
+in :ref:`tutorial_sending_parameters` - we directly replace the call to
 ``with engine.connect() as conn`` with ``with Session(engine) as session``,
 and then make use of the :meth:`_orm.Session.execute` method just like we
-do with the :meth:`_future.Connection.execute` method.
+do with the :meth:`_engine.Connection.execute` method.
 
-Also, like the :class:`_future.Connection`, the :class:`_orm.Session` features
+Also, like the :class:`_engine.Connection`, the :class:`_orm.Session` features
 "commit as you go" behavior using the :meth:`_orm.Session.commit` method,
 illustrated below using a textual UPDATE statement to alter some of
 our data:
@@ -504,7 +464,7 @@ our data:
     >>> with Session(engine) as session:
     ...     result = session.execute(
     ...         text("UPDATE some_table SET y=:y WHERE x=:x"),
-    ...         [{"x": 9, "y":11}, {"x": 13, "y": 15}]
+    ...         [{"x": 9, "y": 11}, {"x": 13, "y": 15}],
     ...     )
     ...     session.commit()
     {opensql}BEGIN (implicit)
@@ -517,13 +477,13 @@ style of execution introduced at :ref:`tutorial_multiple_parameters`, ending
 the block with a "commit as you go" commit.
 
 .. tip:: The :class:`_orm.Session` doesn't actually hold onto the
-   :class:`_future.Connection` object after it ends the transaction.  It
-   gets a new :class:`_future.Connection` from the :class:`_future.Engine`
-   when executing SQL against the database is next needed.
+   :class:`_engine.Connection` object after it ends the transaction.  It
+   gets a new :class:`_engine.Connection` from the :class:`_engine.Engine`
+   the next time it needs to execute SQL against the database.
 
 The :class:`_orm.Session` obviously has a lot more tricks up its sleeve
 than that, however understanding that it has a :meth:`_orm.Session.execute`
-method that's used the same way as :meth:`_future.Connection.execute` will
+method that's used the same way as :meth:`_engine.Connection.execute` will
 get us started with the examples that follow later.
 
 .. seealso::

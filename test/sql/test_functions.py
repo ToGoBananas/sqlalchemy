@@ -44,11 +44,13 @@ from sqlalchemy.sql.functions import GenericFunction
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
+from sqlalchemy.testing import config
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing.assertions import expect_warnings
 from sqlalchemy.testing.engines import all_dialects
+from sqlalchemy.testing.provision import normalize_sequence
 
 
 table1 = table(
@@ -386,7 +388,7 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
 
             def __init__(self, *args):
                 args = args + (3,)
-                super(MyFunction, self).__init__(*args)
+                super().__init__(*args)
 
         self.assert_compile(
             func.my_func(1, 2), "my_func(:my_func_1, :my_func_2, :my_func_3)"
@@ -772,6 +774,22 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "OVER (PARTITION BY mytable.description RANGE BETWEEN :param_1 "
             "FOLLOWING AND :param_2 FOLLOWING) "
             "AS anon_1 FROM mytable",
+            checkparams={"name_1": "foo", "param_1": 1, "param_2": 5},
+        )
+
+    def test_funcfilter_windowing_range_positional(self):
+        self.assert_compile(
+            select(
+                func.rank()
+                .filter(table1.c.name > "foo")
+                .over(range_=(1, 5), partition_by=["description"])
+            ),
+            "SELECT rank() FILTER (WHERE mytable.name > ?) "
+            "OVER (PARTITION BY mytable.description RANGE BETWEEN ? "
+            "FOLLOWING AND ? FOLLOWING) "
+            "AS anon_1 FROM mytable",
+            checkpositional=("foo", 1, 5),
+            dialect="default_qmark",
         )
 
     def test_funcfilter_windowing_rows(self):
@@ -948,11 +966,14 @@ class ReturnTypeTest(AssertsCompiledSQL, fixtures.TestBase):
         expr = func.array_agg(column("data", Integer))
         is_(expr.type._type_affinity, ARRAY)
         is_(expr.type.item_type._type_affinity, Integer)
+        is_(expr.type.dimensions, 1)
 
     def test_array_agg_array_datatype(self):
-        expr = func.array_agg(column("data", ARRAY(Integer)))
+        col = column("data", ARRAY(Integer))
+        expr = func.array_agg(col)
         is_(expr.type._type_affinity, ARRAY)
         is_(expr.type.item_type._type_affinity, Integer)
+        eq_(expr.type.dimensions, col.type.dimensions)
 
     def test_array_agg_array_literal_implicit_type(self):
         from sqlalchemy.dialects.postgresql import array, ARRAY as PG_ARRAY
@@ -1067,7 +1088,7 @@ class ExecuteTest(fixtures.TestBase):
             Column(
                 "id",
                 Integer,
-                Sequence("t1idseq", optional=True),
+                normalize_sequence(config, Sequence("t1idseq", optional=True)),
                 primary_key=True,
             ),
             Column("value", Integer),
@@ -1078,7 +1099,7 @@ class ExecuteTest(fixtures.TestBase):
             Column(
                 "id",
                 Integer,
-                Sequence("t2idseq", optional=True),
+                normalize_sequence(config, Sequence("t2idseq", optional=True)),
                 primary_key=True,
             ),
             Column("value", Integer, default=7),

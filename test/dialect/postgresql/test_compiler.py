@@ -1,4 +1,3 @@
-# coding: utf-8
 from sqlalchemy import and_
 from sqlalchemy import BigInteger
 from sqlalchemy import bindparam
@@ -43,6 +42,7 @@ from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import JSONPATH
+from sqlalchemy.dialects.postgresql import Range
 from sqlalchemy.dialects.postgresql import TSRANGE
 from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.dialects.postgresql.psycopg2 import PGDialect_psycopg2
@@ -61,6 +61,7 @@ from sqlalchemy.testing.assertions import AssertsCompiledSQL
 from sqlalchemy.testing.assertions import eq_ignore_whitespace
 from sqlalchemy.testing.assertions import expect_warnings
 from sqlalchemy.testing.assertions import is_
+from sqlalchemy.types import TypeEngine
 from sqlalchemy.util import OrderedDict
 
 
@@ -91,11 +92,11 @@ class SequenceTest(fixtures.TestBase, AssertsCompiledSQL):
         (SmallInteger, "AS SMALLINT "),
         (BigInteger, "AS BIGINT "),
     )
-    def test_create_index_concurrently(self, type_, text):
+    def test_compile_type(self, type_, text):
         s = Sequence("s1", data_type=type_)
         self.assert_compile(
             schema.CreateSequence(s),
-            "CREATE SEQUENCE s1 %sSTART WITH 1" % text,
+            f"CREATE SEQUENCE s1 {text}".strip(),
             dialect=postgresql.dialect(),
         )
 
@@ -198,6 +199,35 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "(%(name)s) RETURNING length(mytable.name) "
             "AS length_1",
             dialect=dialect,
+        )
+
+    @testing.fixture
+    def column_expression_fixture(self):
+        class MyString(TypeEngine):
+            def column_expression(self, column):
+                return func.lower(column)
+
+        return table(
+            "some_table", column("name", String), column("value", MyString)
+        )
+
+    @testing.combinations("columns", "table", argnames="use_columns")
+    def test_plain_returning_column_expression(
+        self, column_expression_fixture, use_columns
+    ):
+        """test #8770"""
+        table1 = column_expression_fixture
+
+        if use_columns == "columns":
+            stmt = insert(table1).returning(table1)
+        else:
+            stmt = insert(table1).returning(table1.c.name, table1.c.value)
+
+        self.assert_compile(
+            stmt,
+            "INSERT INTO some_table (name, value) "
+            "VALUES (%(name)s, %(value)s) RETURNING some_table.name, "
+            "lower(some_table.value) AS value",
         )
 
     def test_create_drop_enum(self):
@@ -2368,6 +2398,26 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "AS jsonb_path_exists_1 FROM data",
         )
 
+    def test_custom_object_hook(self):
+        # See issue #8884
+        from datetime import date
+
+        usages = table(
+            "usages",
+            column("id", Integer),
+            column("date", Date),
+            column("amount", Integer),
+        )
+        period = Range(date(2022, 1, 1), (2023, 1, 1))
+        stmt = select(func.sum(usages.c.amount)).where(
+            usages.c.date.op("<@")(period)
+        )
+        self.assert_compile(
+            stmt,
+            "SELECT sum(usages.amount) AS sum_1 FROM usages "
+            "WHERE usages.date <@ %(date_1)s::DATERANGE",
+        )
+
 
 class InsertOnConflictTest(fixtures.TablesTest, AssertsCompiledSQL):
     __dialect__ = postgresql.dialect()
@@ -2841,7 +2891,7 @@ class InsertOnConflictTest(fixtures.TablesTest, AssertsCompiledSQL):
         i = i.on_conflict_do_update(
             constraint=self.excl_constr_anon,
             set_=dict(name=i.excluded.name),
-            where=((self.table1.c.name != i.excluded.name)),
+            where=(self.table1.c.name != i.excluded.name),
         )
         self.assert_compile(
             i,
@@ -2883,7 +2933,7 @@ class InsertOnConflictTest(fixtures.TablesTest, AssertsCompiledSQL):
             i.on_conflict_do_update(
                 constraint=self.excl_constr_anon,
                 set_=dict(name=i.excluded.name),
-                where=((self.table1.c.name != i.excluded.name)),
+                where=(self.table1.c.name != i.excluded.name),
             )
             .returning(literal_column("1"))
             .cte("i_upsert")
@@ -3365,11 +3415,11 @@ class RegexpTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             self.table.c.myid.regexp_replace(
                 "pattern", "replacement", flags="ig"
             ),
-            "REGEXP_REPLACE(mytable.myid, %(myid_1)s, %(myid_3)s, %(myid_2)s)",
+            "REGEXP_REPLACE(mytable.myid, %(myid_1)s, %(myid_2)s, %(myid_3)s)",
             checkparams={
                 "myid_1": "pattern",
-                "myid_3": "replacement",
-                "myid_2": "ig",
+                "myid_2": "replacement",
+                "myid_3": "ig",
             },
         )
 
@@ -3464,4 +3514,37 @@ class RegexpTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             select(1).fetch(fetch, **fetch_kw).offset(offset),
             "SELECT 1 " + exp,
             checkparams=params,
+        )
+
+
+class CacheKeyTest(fixtures.CacheKeyFixture, fixtures.TestBase):
+    def test_aggregate_order_by(self):
+        """test #8574"""
+
+        self._run_cache_key_fixture(
+            lambda: (
+                aggregate_order_by(column("a"), column("a")),
+                aggregate_order_by(column("a"), column("b")),
+                aggregate_order_by(column("a"), column("a").desc()),
+                aggregate_order_by(column("a"), column("a").nulls_first()),
+                aggregate_order_by(
+                    column("a"), column("a").desc().nulls_first()
+                ),
+                aggregate_order_by(column("a", Integer), column("b")),
+                aggregate_order_by(column("a"), column("b"), column("c")),
+                aggregate_order_by(column("a"), column("c"), column("b")),
+                aggregate_order_by(
+                    column("a"), column("b").desc(), column("c")
+                ),
+                aggregate_order_by(
+                    column("a"), column("b").nulls_first(), column("c")
+                ),
+                aggregate_order_by(
+                    column("a"), column("b").desc().nulls_first(), column("c")
+                ),
+                aggregate_order_by(
+                    column("a", Integer), column("a"), column("b")
+                ),
+            ),
+            compare_values=False,
         )

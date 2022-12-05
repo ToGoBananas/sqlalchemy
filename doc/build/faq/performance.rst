@@ -76,7 +76,9 @@ dialects, :class:`.TypeEngine` objects, and SQL constructs that are not
 participating in caching.
 
 For user defined datatypes such as those which extend :class:`_types.TypeDecorator`
-and :class:`_types.UserDefinedType`, the warnings will look like::
+and :class:`_types.UserDefinedType`, the warnings will look like:
+
+.. sourcecode:: text
 
     sqlalchemy.ext.SAWarning: MyType will not produce a cache key because the
     ``cache_ok`` attribute is not set to True. This can have significant
@@ -87,7 +89,9 @@ and :class:`_types.UserDefinedType`, the warnings will look like::
 
 For custom and third party SQL elements, such as those constructed using
 the techniques described at :ref:`sqlalchemy.ext.compiler_toplevel`, these
-warnings will look like::
+warnings will look like:
+
+.. sourcecode:: text
 
     sqlalchemy.exc.SAWarning: Class MyClass will not make use of SQL
     compilation caching as it does not set the 'inherit_cache' attribute to
@@ -98,7 +102,9 @@ warnings will look like::
     False which will disable this warning.
 
 For custom and third party dialects which make use of the :class:`.Dialect`
-class hierarchy, the warnings will look like::
+class hierarchy, the warnings will look like:
+
+.. sourcecode:: text
 
     sqlalchemy.exc.SAWarning: Dialect database:driver will not make use of SQL
     compilation caching as it does not set the 'supports_statement_cache'
@@ -183,7 +189,9 @@ Sometimes just plain SQL logging (enabled via python's logging module
 or via the ``echo=True`` argument on :func:`_sa.create_engine`) can give an
 idea how long things are taking.  For example, if you log something
 right after a SQL operation, you'd see something like this in your
-log::
+log:
+
+.. sourcecode:: text
 
     17:37:48,325 INFO  [sqlalchemy.engine.base.Engine.0x...048c] SELECT ...
     17:37:48,326 INFO  [sqlalchemy.engine.base.Engine.0x...048c] {<params>}
@@ -215,16 +223,16 @@ using a recipe like the following::
     logger = logging.getLogger("myapp.sqltime")
     logger.setLevel(logging.DEBUG)
 
+
     @event.listens_for(Engine, "before_cursor_execute")
-    def before_cursor_execute(conn, cursor, statement,
-                            parameters, context, executemany):
-        conn.info.setdefault('query_start_time', []).append(time.time())
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        conn.info.setdefault("query_start_time", []).append(time.time())
         logger.debug("Start Query: %s", statement)
 
+
     @event.listens_for(Engine, "after_cursor_execute")
-    def after_cursor_execute(conn, cursor, statement,
-                            parameters, context, executemany):
-        total = time.time() - conn.info['query_start_time'].pop(-1)
+    def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        total = time.time() - conn.info["query_start_time"].pop(-1)
         logger.debug("Query Complete!")
         logger.debug("Total Time: %f", total)
 
@@ -255,6 +263,7 @@ Below is a simple recipe which works profiling into a context manager::
     import pstats
     import contextlib
 
+
     @contextlib.contextmanager
     def profiled():
         pr = cProfile.Profile()
@@ -262,7 +271,7 @@ Below is a simple recipe which works profiling into a context manager::
         yield
         pr.disable()
         s = io.StringIO()
-        ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+        ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
         ps.print_stats()
         # uncomment this to see who's calling what
         # ps.print_callers()
@@ -271,10 +280,12 @@ Below is a simple recipe which works profiling into a context manager::
 To profile a section of code::
 
     with profiled():
-        session.scalars(select(FooClass).where(FooClass.somevalue==8)).all()
+        session.scalars(select(FooClass).where(FooClass.somevalue == 8)).all()
 
 The output of profiling can be used to give an idea where time is
-being spent.   A section of profiling output looks like this::
+being spent.   A section of profiling output looks like this:
+
+.. sourcecode:: text
 
     13726 function calls (13042 primitive calls) in 0.014 seconds
 
@@ -305,7 +316,9 @@ Execution Slowness
 
 The specifics of these calls can tell us where the time is being spent.
 If for example, you see time being spent within ``cursor.execute()``,
-e.g. against the DBAPI::
+e.g. against the DBAPI:
+
+.. sourcecode:: text
 
     2    0.102    0.102    0.204    0.102 {method 'execute' of 'sqlite3.Cursor' objects}
 
@@ -325,7 +338,9 @@ of rows itself is slow.   The ORM itself typically uses ``fetchall()`` to fetch
 rows (or ``fetchmany()`` if the :meth:`_query.Query.yield_per` option is used).
 
 An inordinately large number of rows would be indicated
-by a very slow call to ``fetchall()`` at the DBAPI level::
+by a very slow call to ``fetchall()`` at the DBAPI level:
+
+.. sourcecode:: text
 
     2    0.300    0.600    0.300    0.600 {method 'fetchall' of 'sqlite3.Cursor' objects}
 
@@ -339,7 +354,9 @@ pulling in additional FROM clauses that are unexpected.
 On the other hand, a fast call to ``fetchall()`` at the DBAPI level, but then
 slowness when SQLAlchemy's :class:`_engine.CursorResult` is asked to do a ``fetchall()``,
 may indicate slowness in processing of datatypes, such as unicode conversions
-and similar::
+and similar:
+
+.. sourcecode:: text
 
     # the DBAPI cursor is fast...
     2    0.020    0.040    0.020    0.040 {method 'fetchall' of 'sqlite3.Cursor' objects}
@@ -357,15 +374,18 @@ this::
     from sqlalchemy import TypeDecorator
     import time
 
+
     class Foo(TypeDecorator):
         impl = String
 
         def process_result_value(self, value, thing):
             # intentionally add slowness for illustration purposes
-            time.sleep(.001)
+            time.sleep(0.001)
             return value
 
-the profiling output of this intentionally slow operation can be seen like this::
+the profiling output of this intentionally slow operation can be seen like this:
+
+.. sourcecode:: text
 
       200    0.001    0.000    0.237    0.001 lib/sqlalchemy/sql/type_api.py:911(process)
       200    0.001    0.000    0.236    0.001 test.py:28(process_result_value)
@@ -389,7 +409,9 @@ Result Fetching Slowness - ORM
 
 To detect slowness in ORM fetching of rows (which is the most common area
 of performance concern), calls like ``populate_state()`` and ``_instance()`` will
-illustrate individual ORM object populations::
+illustrate individual ORM object populations:
+
+.. sourcecode:: text
 
     # the ORM calls _instance for each ORM-loaded row it sees, and
     # populate_state for each ORM-loaded row that results in the population
@@ -411,11 +433,11 @@ Common strategies to mitigate this include:
 
 * Use :class:`.Bundle` objects to organize column-based results::
 
-      u_b = Bundle('user', User.id, User.name)
-      a_b = Bundle('address', Address.id, Address.email)
+      u_b = Bundle("user", User.id, User.name)
+      a_b = Bundle("address", Address.id, Address.email)
 
       for user, address in session.execute(select(u_b, a_b).join(User.addresses)):
-          # ...
+          ...
 
 * Use result caching - see :ref:`examples_caching` for an in-depth example
   of this.
@@ -433,238 +455,18 @@ practice they are very easy to read.
 I'm inserting 400,000 rows with the ORM and it's really slow!
 -------------------------------------------------------------
 
-The SQLAlchemy ORM uses the :term:`unit of work` pattern when synchronizing
-changes to the database. This pattern goes far beyond simple "inserts"
-of data. It includes that attributes which are assigned on objects are
-received using an attribute instrumentation system which tracks
-changes on objects as they are made, includes that all rows inserted
-are tracked in an identity map which has the effect that for each row
-SQLAlchemy must retrieve its "last inserted id" if not already given,
-and also involves that rows to be inserted are scanned and sorted for
-dependencies as needed. Objects are also subject to a fair degree of
-bookkeeping in order to keep all of this running, which for a very
-large number of rows at once can create an inordinate amount of time
-spent with large data structures, hence it's best to chunk these.
+The nature of ORM inserts has changed, as most included drivers use RETURNING
+with :ref:`insertmanyvalues <engine_insertmanyvalues>` support as of SQLAlchemy
+2.0. See the section :ref:`change_6047` for details.
 
-Basically, unit of work is a large degree of automation in order to
-automate the task of persisting a complex object graph into a
-relational database with no explicit persistence code, and this
-automation has a price.
+Overall, SQLAlchemy built-in drivers other than that of MySQL should now
+offer very fast ORM bulk insert performance.
 
-ORMs are basically not intended for high-performance bulk inserts -
-this is the whole reason SQLAlchemy offers the Core in addition to the
-ORM as a first-class component.
-
-For the use case of fast bulk inserts, the
-SQL generation and execution system that the ORM builds on top of
-is part of the :ref:`Core <sqlexpression_toplevel>`.  Using this system directly, we can produce an INSERT that
-is competitive with using the raw database API directly.
-
-.. note::
-
-    When using the psycopg2 dialect, consider making use of the :ref:`batch
-    execution helpers <psycopg2_executemany_mode>` feature of psycopg2, now
-    supported directly by the SQLAlchemy psycopg2 dialect.
-
-Alternatively, the SQLAlchemy ORM offers the :ref:`bulk_operations`
-suite of methods, which provide hooks into subsections of the unit of
-work process in order to emit Core-level INSERT and UPDATE constructs with
-a small degree of ORM-based automation.
-
-The example below illustrates time-based tests for several different
-methods of inserting rows, going from the most automated to the least.
-With cPython, runtimes observed::
-
-    Python: 3.8.12 | packaged by conda-forge | (default, Sep 29 2021, 19:42:05)  [Clang 11.1.0 ]
-    sqlalchemy v1.4.22 (future=True)
-    SQLA ORM:
-            Total time for 100000 records 5.722 secs
-    SQLA ORM pk given:
-            Total time for 100000 records 3.781 secs
-    SQLA ORM bulk_save_objects:
-            Total time for 100000 records 1.385 secs
-    SQLA ORM bulk_save_objects, return_defaults:
-            Total time for 100000 records 3.858 secs
-    SQLA ORM bulk_insert_mappings:
-            Total time for 100000 records 0.472 secs
-    SQLA ORM bulk_insert_mappings, return_defaults:
-            Total time for 100000 records 2.840 secs
-    SQLA Core:
-            Total time for 100000 records 0.246 secs
-    sqlite3:
-            Total time for 100000 records 0.153 secs
-
-We can reduce the time by a factor of nearly three using recent versions of `PyPy <https://pypy.org/>`_::
-
-    Python: 3.7.10 | packaged by conda-forge | (77787b8f, Sep 07 2021, 14:06:31) [PyPy 7.3.5 with GCC Clang 11.1.0]
-    sqlalchemy v1.4.25 (future=True)
-    SQLA ORM:
-            Total time for 100000 records 2.976 secs
-    SQLA ORM pk given:
-            Total time for 100000 records 1.676 secs
-    SQLA ORM bulk_save_objects:
-            Total time for 100000 records 0.658 secs
-    SQLA ORM bulk_save_objects, return_defaults:
-            Total time for 100000 records 1.158 secs
-    SQLA ORM bulk_insert_mappings:
-            Total time for 100000 records 0.403 secs
-    SQLA ORM bulk_insert_mappings, return_defaults:
-            Total time for 100000 records 0.976 secs
-    SQLA Core:
-            Total time for 100000 records 0.241 secs
-    sqlite3:
-            Total time for 100000 records 0.128 secs
-
-Script::
-
-    import contextlib
-    import sqlite3
-    import sys
-    import tempfile
-    import time
-
-    from sqlalchemy.ext.declarative import declarative_base
-    from sqlalchemy import __version__, Column, Integer, String, create_engine, insert
-    from sqlalchemy.orm import Session
-
-    Base = declarative_base()
+Third party drivers can opt in to the new bulk infrastructure as well with some
+small code changes assuming their backends support the necessary syntaxes.
+SQLAlchemy developers would encourage users of third party dialects to post
+issues with these drivers, so that they may contact SQLAlchemy developers for
+assistance.
 
 
-    class Customer(Base):
-        __tablename__ = "customer"
-        id = Column(Integer, primary_key=True)
-        name = Column(String(255))
 
-
-    @contextlib.contextmanager
-    def sqlalchemy_session(future):
-        with tempfile.NamedTemporaryFile(suffix=".db") as handle:
-            dbpath = handle.name
-            engine = create_engine(f"sqlite:///{dbpath}", future=future, echo=False)
-            session = Session(
-                bind=engine, future=future, autoflush=False, expire_on_commit=False
-            )
-            Base.metadata.create_all(engine)
-            yield session
-            session.close()
-
-
-    def print_result(name, nrows, seconds):
-        print(f"{name}:\n{' '*10}Total time for {nrows} records {seconds:.3f} secs")
-
-
-    def test_sqlalchemy_orm(n=100000, future=True):
-        with sqlalchemy_session(future) as session:
-            t0 = time.time()
-            for i in range(n):
-                customer = Customer()
-                customer.name = "NAME " + str(i)
-                session.add(customer)
-                if i % 1000 == 0:
-                    session.flush()
-            session.commit()
-            print_result("SQLA ORM", n, time.time() - t0)
-
-
-    def test_sqlalchemy_orm_pk_given(n=100000, future=True):
-        with sqlalchemy_session(future) as session:
-            t0 = time.time()
-            for i in range(n):
-                customer = Customer(id=i + 1, name="NAME " + str(i))
-                session.add(customer)
-                if i % 1000 == 0:
-                    session.flush()
-            session.commit()
-            print_result("SQLA ORM pk given", n, time.time() - t0)
-
-
-    def test_sqlalchemy_orm_bulk_save_objects(n=100000, future=True, return_defaults=False):
-        with sqlalchemy_session(future) as session:
-            t0 = time.time()
-            for chunk in range(0, n, 10000):
-                session.bulk_save_objects(
-                    [
-                        Customer(name="NAME " + str(i))
-                        for i in range(chunk, min(chunk + 10000, n))
-                    ],
-                    return_defaults=return_defaults,
-                )
-            session.commit()
-            print_result(
-                f"SQLA ORM bulk_save_objects{', return_defaults' if return_defaults else ''}",
-                n,
-                time.time() - t0,
-            )
-
-
-    def test_sqlalchemy_orm_bulk_insert(n=100000, future=True, return_defaults=False):
-        with sqlalchemy_session(future) as session:
-            t0 = time.time()
-            for chunk in range(0, n, 10000):
-                session.bulk_insert_mappings(
-                    Customer,
-                    [
-                        dict(name="NAME " + str(i))
-                        for i in range(chunk, min(chunk + 10000, n))
-                    ],
-                    return_defaults=return_defaults,
-                )
-            session.commit()
-            print_result(
-                f"SQLA ORM bulk_insert_mappings{', return_defaults' if return_defaults else ''}",
-                n,
-                time.time() - t0,
-            )
-
-
-    def test_sqlalchemy_core(n=100000, future=True):
-        with sqlalchemy_session(future) as session:
-            with session.bind.begin() as conn:
-                t0 = time.time()
-                conn.execute(
-                    insert(Customer.__table__),
-                    [{"name": "NAME " + str(i)} for i in range(n)],
-                )
-                conn.commit()
-                print_result("SQLA Core", n, time.time() - t0)
-
-
-    @contextlib.contextmanager
-    def sqlite3_conn():
-        with tempfile.NamedTemporaryFile(suffix=".db") as handle:
-            dbpath = handle.name
-            conn = sqlite3.connect(dbpath)
-            c = conn.cursor()
-            c.execute("DROP TABLE IF EXISTS customer")
-            c.execute(
-                "CREATE TABLE customer (id INTEGER NOT NULL, "
-                "name VARCHAR(255), PRIMARY KEY(id))"
-            )
-            conn.commit()
-            yield conn
-
-
-    def test_sqlite3(n=100000):
-        with sqlite3_conn() as conn:
-            c = conn.cursor()
-            t0 = time.time()
-            for i in range(n):
-                row = ("NAME " + str(i),)
-                c.execute("INSERT INTO customer (name) VALUES (?)", row)
-            conn.commit()
-            print_result("sqlite3", n, time.time() - t0)
-
-
-    if __name__ == "__main__":
-        rows = 100000
-        _future = True
-        print(f"Python: {' '.join(sys.version.splitlines())}")
-        print(f"sqlalchemy v{__version__} (future={_future})")
-        test_sqlalchemy_orm(rows, _future)
-        test_sqlalchemy_orm_pk_given(rows, _future)
-        test_sqlalchemy_orm_bulk_save_objects(rows, _future)
-        test_sqlalchemy_orm_bulk_save_objects(rows, _future, True)
-        test_sqlalchemy_orm_bulk_insert(rows, _future)
-        test_sqlalchemy_orm_bulk_insert(rows, _future, True)
-        test_sqlalchemy_core(rows, _future)
-        test_sqlite3(rows)

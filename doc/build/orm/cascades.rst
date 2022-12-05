@@ -109,10 +109,10 @@ and added to another::
 
     >>> user1 = sess1.scalars(select(User).filter_by(id=1)).first()
     >>> address1 = user1.addresses[0]
-    >>> sess1.close()   # user1, address1 no longer associated with sess1
+    >>> sess1.close()  # user1, address1 no longer associated with sess1
     >>> user1.addresses.remove(address1)  # address1 no longer associated with user1
     >>> sess2 = Session()
-    >>> sess2.add(user1)   # ... but it still gets added to the new session,
+    >>> sess2.add(user1)  # ... but it still gets added to the new session,
     >>> address1 in sess2  # because it's still "pending" for flush
     True
 
@@ -254,7 +254,7 @@ related ``Address`` objects::
 If we mark ``user1`` for deletion, after the flush operation proceeds,
 ``address1`` and ``address2`` will also be deleted:
 
-.. sourcecode:: python+sql
+.. sourcecode:: pycon+sql
 
     >>> sess.delete(user1)
     >>> sess.commit()
@@ -277,7 +277,7 @@ reference to ``NULL``.  Using a mapping as follows::
 Upon deletion of a parent ``User`` object, the rows in ``address`` are not
 deleted, but are instead de-associated:
 
-.. sourcecode:: python+sql
+.. sourcecode:: pycon+sql
 
     >>> sess.delete(user1)
     >>> sess.commit()
@@ -734,6 +734,7 @@ illustrated in the example below::
         # ...
 
         addresses = relationship("Address", cascade="all, delete-orphan")
+
 
     # ...
 

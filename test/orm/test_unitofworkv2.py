@@ -38,6 +38,7 @@ from sqlalchemy.testing.assertsql import AllOf
 from sqlalchemy.testing.assertsql import CompiledSQL
 from sqlalchemy.testing.assertsql import Conditional
 from sqlalchemy.testing.fixtures import fixture_session
+from sqlalchemy.testing.provision import normalize_sequence
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 from test.orm import _fixtures
@@ -98,7 +99,8 @@ class RudimentaryFlushTest(UOWTest):
                 [
                     CompiledSQL(
                         "INSERT INTO addresses (user_id, email_address) "
-                        "VALUES (:user_id, :email_address)",
+                        "VALUES (:user_id, :email_address) "
+                        "RETURNING addresses.id",
                         lambda ctx: [
                             {"email_address": "a1", "user_id": u1.id},
                             {"email_address": "a2", "user_id": u1.id},
@@ -220,7 +222,8 @@ class RudimentaryFlushTest(UOWTest):
                 [
                     CompiledSQL(
                         "INSERT INTO addresses (user_id, email_address) "
-                        "VALUES (:user_id, :email_address)",
+                        "VALUES (:user_id, :email_address) "
+                        "RETURNING addresses.id",
                         lambda ctx: [
                             {"email_address": "a1", "user_id": u1.id},
                             {"email_address": "a2", "user_id": u1.id},
@@ -889,7 +892,7 @@ class SingleCycleTest(UOWTest):
                 [
                     CompiledSQL(
                         "INSERT INTO nodes (parent_id, data) VALUES "
-                        "(:parent_id, :data)",
+                        "(:parent_id, :data) RETURNING nodes.id",
                         lambda ctx: [
                             {"parent_id": n1.id, "data": "n2"},
                             {"parent_id": n1.id, "data": "n3"},
@@ -1003,7 +1006,7 @@ class SingleCycleTest(UOWTest):
                 [
                     CompiledSQL(
                         "INSERT INTO nodes (parent_id, data) VALUES "
-                        "(:parent_id, :data)",
+                        "(:parent_id, :data) RETURNING nodes.id",
                         lambda ctx: [
                             {"parent_id": n1.id, "data": "n2"},
                             {"parent_id": n1.id, "data": "n3"},
@@ -1165,7 +1168,7 @@ class SingleCycleTest(UOWTest):
                 [
                     CompiledSQL(
                         "INSERT INTO nodes (parent_id, data) VALUES "
-                        "(:parent_id, :data)",
+                        "(:parent_id, :data) RETURNING nodes.id",
                         lambda ctx: [
                             {"parent_id": n1.id, "data": "n11"},
                             {"parent_id": n1.id, "data": "n12"},
@@ -1196,7 +1199,7 @@ class SingleCycleTest(UOWTest):
                 [
                     CompiledSQL(
                         "INSERT INTO nodes (parent_id, data) VALUES "
-                        "(:parent_id, :data)",
+                        "(:parent_id, :data) RETURNING nodes.id",
                         lambda ctx: [
                             {"parent_id": n12.id, "data": "n121"},
                             {"parent_id": n12.id, "data": "n122"},
@@ -2099,7 +2102,7 @@ class BatchInsertsTest(fixtures.MappedTest, testing.AssertsExecutionResults):
                 testing.db.dialect.insert_executemany_returning,
                 [
                     CompiledSQL(
-                        "INSERT INTO t (data) VALUES (:data)",
+                        "INSERT INTO t (data) VALUES (:data) RETURNING t.id",
                         [{"data": "t1"}, {"data": "t2"}],
                     ),
                 ],
@@ -2472,20 +2475,24 @@ class EagerDefaultsTest(fixtures.MappedTest):
                 CompiledSQL(
                     "INSERT INTO test (id, foo) VALUES (:id, 2 + 5)",
                     [{"id": 1}],
+                    enable_returning=False,
                 ),
                 CompiledSQL(
                     "INSERT INTO test (id, foo) VALUES (:id, 5 + 5)",
                     [{"id": 2}],
+                    enable_returning=False,
                 ),
                 CompiledSQL(
                     "SELECT test.foo AS test_foo FROM test "
                     "WHERE test.id = :pk_1",
                     [{"pk_1": 1}],
+                    enable_returning=False,
                 ),
                 CompiledSQL(
                     "SELECT test.foo AS test_foo FROM test "
                     "WHERE test.id = :pk_1",
                     [{"pk_1": 2}],
+                    enable_returning=False,
                 ),
             )
 
@@ -2678,20 +2685,24 @@ class EagerDefaultsTest(fixtures.MappedTest):
                     CompiledSQL(
                         "UPDATE test2 SET foo=:foo WHERE test2.id = :test2_id",
                         [{"foo": 5, "test2_id": 1}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "UPDATE test2 SET foo=:foo, bar=:bar "
                         "WHERE test2.id = :test2_id",
                         [{"foo": 6, "bar": 10, "test2_id": 2}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "UPDATE test2 SET foo=:foo WHERE test2.id = :test2_id",
                         [{"foo": 7, "test2_id": 3}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "UPDATE test2 SET foo=:foo, bar=:bar "
                         "WHERE test2.id = :test2_id",
                         [{"foo": 8, "bar": 12, "test2_id": 4}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "SELECT test2.bar AS test2_bar FROM test2 "
@@ -2772,31 +2783,37 @@ class EagerDefaultsTest(fixtures.MappedTest):
                         "UPDATE test4 SET foo=:foo, bar=5 + 3 "
                         "WHERE test4.id = :test4_id",
                         [{"foo": 5, "test4_id": 1}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "UPDATE test4 SET foo=:foo, bar=:bar "
                         "WHERE test4.id = :test4_id",
                         [{"foo": 6, "bar": 10, "test4_id": 2}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "UPDATE test4 SET foo=:foo, bar=5 + 3 "
                         "WHERE test4.id = :test4_id",
                         [{"foo": 7, "test4_id": 3}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "UPDATE test4 SET foo=:foo, bar=:bar "
                         "WHERE test4.id = :test4_id",
                         [{"foo": 8, "bar": 12, "test4_id": 4}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "SELECT test4.bar AS test4_bar FROM test4 "
                         "WHERE test4.id = :pk_1",
                         [{"pk_1": 1}],
+                        enable_returning=False,
                     ),
                     CompiledSQL(
                         "SELECT test4.bar AS test4_bar FROM test4 "
                         "WHERE test4.id = :pk_1",
                         [{"pk_1": 3}],
+                        enable_returning=False,
                     ),
                 ],
             ),
@@ -2871,20 +2888,24 @@ class EagerDefaultsTest(fixtures.MappedTest):
                     "UPDATE test2 SET foo=:foo, bar=1 + 1 "
                     "WHERE test2.id = :test2_id",
                     [{"foo": 5, "test2_id": 1}],
+                    enable_returning=False,
                 ),
                 CompiledSQL(
                     "UPDATE test2 SET foo=:foo, bar=:bar "
                     "WHERE test2.id = :test2_id",
                     [{"foo": 6, "bar": 10, "test2_id": 2}],
+                    enable_returning=False,
                 ),
                 CompiledSQL(
                     "UPDATE test2 SET foo=:foo WHERE test2.id = :test2_id",
                     [{"foo": 7, "test2_id": 3}],
+                    enable_returning=False,
                 ),
                 CompiledSQL(
                     "UPDATE test2 SET foo=:foo, bar=5 + 7 "
                     "WHERE test2.id = :test2_id",
                     [{"foo": 8, "test2_id": 4}],
+                    enable_returning=False,
                 ),
                 CompiledSQL(
                     "SELECT test2.bar AS test2_bar FROM test2 "
@@ -3022,6 +3043,70 @@ class EagerDefaultsTest(fixtures.MappedTest):
             CompiledSQL(
                 "UPDATE test2 SET bar=:bar WHERE test2.id = :test2_id",
                 [{"bar": 3, "test2_id": 1}],
+            ),
+        )
+
+    @testing.fixture
+    def selectable_fixture(self, decl_base):
+
+        t1, t2 = self.tables("test", "test2")
+
+        stmt = (
+            select(t1.c.id, t1.c.foo, t2.c.id.label("id2"), t2.c.bar)
+            .join_from(t1, t2, t1.c.foo == t2.c.foo)
+            .subquery()
+        )
+
+        class MyClass(decl_base):
+            __table__ = stmt
+
+            __mapper_args__ = {"eager_defaults": True}
+
+        return MyClass
+
+    def test_against_selectable_insert(self, selectable_fixture):
+        """test #8812"""
+        MyClass = selectable_fixture
+
+        s = fixture_session()
+        obj = MyClass(id=1, id2=1, bar=5)
+        s.add(obj)
+
+        with self.sql_execution_asserter() as asserter:
+            s.flush()
+
+        asserter.assert_(
+            Conditional(
+                testing.db.dialect.insert_executemany_returning,
+                [
+                    CompiledSQL(
+                        "INSERT INTO test (id) VALUES (:id) "
+                        "RETURNING test.foo",
+                        [{"id": 1}],
+                    ),
+                    CompiledSQL(
+                        "INSERT INTO test2 (id, bar) VALUES (:id, :bar)",
+                        [{"id": 1, "bar": 5}],
+                    ),
+                ],
+                [
+                    CompiledSQL(
+                        "INSERT INTO test (id) VALUES (:id)",
+                        [{"id": 1}],
+                    ),
+                    CompiledSQL(
+                        "INSERT INTO test2 (id, bar) VALUES (:id, :bar)",
+                        [{"id": 1, "bar": 5}],
+                    ),
+                    CompiledSQL(
+                        "SELECT anon_1.foo AS anon_1_foo FROM "
+                        "(SELECT test.id AS id, test.foo AS foo, "
+                        "test2.id AS id2, test2.bar AS bar FROM test "
+                        "JOIN test2 ON test.foo = test2.foo) AS anon_1 "
+                        "WHERE anon_1.id = :pk_1 AND anon_1.id2 = :pk_2",
+                        [{"pk_1": 1, "pk_2": 1}],
+                    ),
+                ],
             ),
         )
 
@@ -3426,7 +3511,7 @@ class ORMOnlyPrimaryKeyTest(fixtures.TestBase):
     @testing.requires.insert_returning
     def test_b(self, base, run_test):
 
-        seq = Sequence("x_seq")
+        seq = normalize_sequence(config, Sequence("x_seq"))
 
         class A(base):
             __tablename__ = "a"

@@ -43,6 +43,7 @@ from sqlalchemy.sql import roles
 from sqlalchemy.sql import sqltypes
 from sqlalchemy.sql import table
 from sqlalchemy.sql import true
+from sqlalchemy.sql import values
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.elements import BooleanClauseList
 from sqlalchemy.sql.elements import Label
@@ -702,7 +703,7 @@ class CustomComparatorTest(_CustomComparatorTests, fixtures.TestBase):
         class MyInteger(Integer):
             class comparator_factory(TypeEngine.Comparator):
                 def __init__(self, expr):
-                    super(MyInteger.comparator_factory, self).__init__(expr)
+                    super().__init__(expr)
 
                 def __add__(self, other):
                     return self.expr.op("goofy")(other)
@@ -721,7 +722,7 @@ class TypeDecoratorComparatorTest(_CustomComparatorTests, fixtures.TestBase):
 
             class comparator_factory(TypeDecorator.Comparator):
                 def __init__(self, expr):
-                    super(MyInteger.comparator_factory, self).__init__(expr)
+                    super().__init__(expr)
 
                 def __add__(self, other):
                     return self.expr.op("goofy")(other)
@@ -742,7 +743,7 @@ class TypeDecoratorTypeDecoratorComparatorTest(
 
             class comparator_factory(TypeDecorator.Comparator):
                 def __init__(self, expr):
-                    super(MyIntegerOne.comparator_factory, self).__init__(expr)
+                    super().__init__(expr)
 
                 def __add__(self, other):
                     return self.expr.op("goofy")(other)
@@ -764,9 +765,7 @@ class TypeDecoratorWVariantComparatorTest(
         class SomeOtherInteger(Integer):
             class comparator_factory(TypeEngine.Comparator):
                 def __init__(self, expr):
-                    super(SomeOtherInteger.comparator_factory, self).__init__(
-                        expr
-                    )
+                    super().__init__(expr)
 
                 def __add__(self, other):
                     return self.expr.op("not goofy")(other)
@@ -780,7 +779,7 @@ class TypeDecoratorWVariantComparatorTest(
 
             class comparator_factory(TypeDecorator.Comparator):
                 def __init__(self, expr):
-                    super(MyInteger.comparator_factory, self).__init__(expr)
+                    super().__init__(expr)
 
                 def __add__(self, other):
                     return self.expr.op("goofy")(other)
@@ -798,7 +797,7 @@ class CustomEmbeddedinTypeDecoratorTest(
         class MyInteger(Integer):
             class comparator_factory(TypeEngine.Comparator):
                 def __init__(self, expr):
-                    super(MyInteger.comparator_factory, self).__init__(expr)
+                    super().__init__(expr)
 
                 def __add__(self, other):
                     return self.expr.op("goofy")(other)
@@ -818,7 +817,7 @@ class NewOperatorTest(_CustomComparatorTests, fixtures.TestBase):
         class MyInteger(Integer):
             class comparator_factory(TypeEngine.Comparator):
                 def __init__(self, expr):
-                    super(MyInteger.comparator_factory, self).__init__(expr)
+                    super().__init__(expr)
 
                 def foob(self, other):
                     return self.expr.op("foob")(other)
@@ -2392,6 +2391,23 @@ class InTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             dialect="default_enhanced",
         )
 
+    @testing.combinations(lambda v: v, lambda v: v.scalar_values())
+    def test_in_values(self, scalar):
+        t1, t2 = self.table1, self.table2
+        v = scalar(values(t2.c.otherid).data([(1,), (42,)]))
+        self.assert_compile(
+            select(t1.c.myid.in_(v)),
+            "SELECT mytable.myid IN (VALUES (:param_1), (:param_2)) "
+            "AS anon_1 FROM mytable",
+            params={"param_1": 1, "param_2": 42},
+        )
+        self.assert_compile(
+            select(t1.c.myid.not_in(v)),
+            "SELECT (mytable.myid NOT IN (VALUES (:param_1), (:param_2))) "
+            "AS anon_1 FROM mytable",
+            params={"param_1": 1, "param_2": 42},
+        )
+
 
 class MathOperatorTest(fixtures.TestBase, testing.AssertsCompiledSQL):
     __dialect__ = "default"
@@ -2709,6 +2725,25 @@ class NegationTest(fixtures.TestBase, testing.AssertsCompiledSQL):
         )
         assert not text("x = y")._is_implicitly_boolean
         assert not literal_column("x = y")._is_implicitly_boolean
+
+    def test_scalar_select(self):
+        t = self.table1
+        expr = select(t.c.myid).where(t.c.myid > 5).scalar_subquery()
+        self.assert_compile(
+            not_(expr),
+            "NOT (SELECT mytable.myid FROM mytable "
+            "WHERE mytable.myid > :myid_1)",
+            params={"myid_1": 5},
+        )
+
+    def test_scalar_values(self):
+        t = self.table1
+        expr = values(t.c.myid).data([(7,), (42,)]).scalar_values()
+        self.assert_compile(
+            not_(expr),
+            "NOT (VALUES (:param_1), (:param_2))",
+            params={"param_1": 7, "param_2": 42},
+        )
 
 
 class LikeTest(fixtures.TestBase, testing.AssertsCompiledSQL):
@@ -3087,6 +3122,14 @@ class ComposedLikeOperatorsTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             checkparams={"x_1": "y"},
         )
 
+    def test_contains_pg(self):
+        self.assert_compile(
+            column("x").contains("y"),
+            "x LIKE '%%' || %(x_1)s || '%%'",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
     def test_contains_encoded(self):
         self.assert_compile(
             column("x").contains(b"y"),
@@ -3115,6 +3158,14 @@ class ComposedLikeOperatorsTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             "x NOT LIKE concat('%%', %s, '%%')",
             checkparams={"x_1": b"y"},
             dialect="mysql",
+        )
+
+    def test_not_contains_pg(self):
+        self.assert_compile(
+            ~column("x").contains(b"y"),
+            "x NOT LIKE '%%' || %(x_1)s || '%%'",
+            checkparams={"x_1": b"y"},
+            dialect="postgresql",
         )
 
     def test_contains_escape(self):
@@ -3194,6 +3245,177 @@ class ComposedLikeOperatorsTest(fixtures.TestBase, testing.AssertsCompiledSQL):
         self.assert_compile(
             column("x").contains(text("y")),
             "x LIKE concat('%%', y, '%%')",
+            checkparams={},
+            dialect=mysql.dialect(),
+        )
+
+    def test_icontains(self):
+        """
+        case insensitive contains method
+        """
+        self.assert_compile(
+            column("x").icontains("y"),
+            "lower(x) LIKE '%' || lower(:x_1) || '%'",
+            checkparams={"x_1": "y"},
+        )
+
+    def test_icontains_pg(self):
+        """
+        case insensitive contains method
+        """
+        self.assert_compile(
+            column("x").icontains("y"),
+            "x ILIKE '%%' || %(x_1)s || '%%'",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
+    def test_icontains_encoded(self):
+        self.assert_compile(
+            column("x").icontains(b"y"),
+            "lower(x) LIKE '%' || lower(:x_1) || '%'",
+            checkparams={"x_1": b"y"},
+        )
+
+    def test_not_icontains_encoded(self):
+        self.assert_compile(
+            ~column("x").icontains(b"y"),
+            "lower(x) NOT LIKE '%' || lower(:x_1) || '%'",
+            checkparams={"x_1": b"y"},
+        )
+
+    def test_icontains_encoded_mysql(self):
+        self.assert_compile(
+            column("x").icontains(b"y"),
+            "lower(x) LIKE concat('%%', lower(%s), '%%')",
+            checkparams={"x_1": b"y"},
+            dialect="mysql",
+        )
+
+    def test_not_icontains_encoded_mysql(self):
+        self.assert_compile(
+            ~column("x").icontains(b"y"),
+            "lower(x) NOT LIKE concat('%%', lower(%s), '%%')",
+            checkparams={"x_1": b"y"},
+            dialect="mysql",
+        )
+
+    def test_not_icontains(self):
+        """
+        same as test_icontains but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").icontains("y"),
+            "lower(x) NOT LIKE '%' || lower(:x_1) || '%'",
+            checkparams={"x_1": "y"},
+        )
+
+    def test_not_icontains_pg(self):
+        """
+        same as test_icontains but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").icontains("y"),
+            "x NOT ILIKE '%%' || %(x_1)s || '%%'",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
+    def test_icontains_escape(self):
+        """
+        render same SQL statement as icontains but include the ESCAPE
+        keyword to establish that character as the escape character
+        """
+        self.assert_compile(
+            column("x").icontains("a%b_c", escape="\\"),
+            "lower(x) LIKE '%' || lower(:x_1) || '%' ESCAPE '\\'",
+            checkparams={"x_1": "a%b_c"},
+        )
+
+    def test_not_icontains_escape(self):
+        """
+        same as test_icontains_escape but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").icontains("a%b_c", escape="\\"),
+            "lower(x) NOT LIKE '%' || lower(:x_1) || '%' ESCAPE '\\'",
+            checkparams={"x_1": "a%b_c"},
+        )
+
+    def test_icontains_autoescape(self):
+        """
+        apply the escape character to all occurrences of "%", "_" and
+        the escape character itself
+        """
+        self.assert_compile(
+            column("x").icontains("a%b_c/d", autoescape=True),
+            "lower(x) LIKE '%' || lower(:x_1) || '%' ESCAPE '/'",
+            checkparams={"x_1": "a/%b/_c//d"},
+        )
+
+    def test_icontains_autoescape_custom_escape(self):
+        """
+        set an escape character to all occurrences of "%", "_" and
+        the escape character itself
+        """
+        self.assert_compile(
+            column("x").icontains("foo%bar^bat", escape="^", autoescape=True),
+            "lower(x) LIKE '%' || lower(:x_1) || '%' ESCAPE '^'",
+            checkparams={"x_1": "foo^%bar^^bat"},
+        )
+
+    def test_not_icontains_autoescape(self):
+        """
+        same as test_icontains_autoescape but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").icontains("a%b_c/d", autoescape=True),
+            "lower(x) NOT LIKE '%' || lower(:x_1) || '%' ESCAPE '/'",
+            checkparams={"x_1": "a/%b/_c//d"},
+        )
+
+    def test_icontains_literal(self):
+        self.assert_compile(
+            column("x").icontains(literal_column("y")),
+            "lower(x) LIKE '%' || lower(y) || '%'",
+            checkparams={},
+        )
+
+    def test_icontains_text(self):
+        self.assert_compile(
+            column("x").icontains(text("y")),
+            "lower(x) LIKE '%' || lower(y) || '%'",
+            checkparams={},
+        )
+
+    def test_icontains_concat(self):
+        self.assert_compile(
+            column("x").icontains("y"),
+            "lower(x) LIKE concat('%%', lower(%s), '%%')",
+            checkparams={"x_1": "y"},
+            dialect=mysql.dialect(),
+        )
+
+    def test_not_icontains_concat(self):
+        self.assert_compile(
+            ~column("x").icontains("y"),
+            "lower(x) NOT LIKE concat('%%', lower(%s), '%%')",
+            checkparams={"x_1": "y"},
+            dialect=mysql.dialect(),
+        )
+
+    def test_icontains_literal_concat(self):
+        self.assert_compile(
+            column("x").icontains(literal_column("y")),
+            "lower(x) LIKE concat('%%', lower(y), '%%')",
+            checkparams={},
+            dialect=mysql.dialect(),
+        )
+
+    def test_icontains_text_concat(self):
+        self.assert_compile(
+            column("x").icontains(text("y")),
+            "lower(x) LIKE concat('%%', lower(y), '%%')",
             checkparams={},
             dialect=mysql.dialect(),
         )
@@ -3377,6 +3599,171 @@ class ComposedLikeOperatorsTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             dialect=mysql.dialect(),
         )
 
+    def test_istartswith(self):
+        """
+        case insensitive startswith method
+        """
+        self.assert_compile(
+            column("x").istartswith("y"),
+            "lower(x) LIKE lower(:x_1) || '%'",
+            checkparams={"x_1": "y"},
+        )
+
+    def test_istartswith_pg(self):
+        """
+        case insensitive startswith method
+        """
+        self.assert_compile(
+            column("x").istartswith("y"),
+            "x ILIKE %(x_1)s || '%%'",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
+    def test_not_istartswith(self):
+        """
+        same as test_istartswith but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").istartswith("y"),
+            "lower(x) NOT LIKE lower(:x_1) || '%'",
+            checkparams={"x_1": "y"},
+        )
+
+    def test_not_istartswith_pg(self):
+        """
+        same as test_istartswith but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").istartswith("y"),
+            "x NOT ILIKE %(x_1)s || '%%'",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
+    def test_istartswith_escape(self):
+        """
+        render same SQL statement as istartswith but include the ESCAPE
+        keyword to establish that character as the escape character
+        """
+        self.assert_compile(
+            column("x").istartswith("a%b_c", escape="\\"),
+            "lower(x) LIKE lower(:x_1) || '%' ESCAPE '\\'",
+            checkparams={"x_1": "a%b_c"},
+        )
+
+    def test_not_istartswith_escape(self):
+        self.assert_compile(
+            ~column("x").istartswith("a%b_c", escape="\\"),
+            "lower(x) NOT LIKE lower(:x_1) || '%' ESCAPE '\\'",
+            checkparams={"x_1": "a%b_c"},
+        )
+
+    def test_istartswith_autoescape(self):
+        """
+        apply the escape character to all occurrences of "%", "_" and
+        the escape character itself
+        """
+        self.assert_compile(
+            column("x").istartswith("a%b_c/d", autoescape=True),
+            "lower(x) LIKE lower(:x_1) || '%' ESCAPE '/'",
+            checkparams={"x_1": "a/%b/_c//d"},
+        )
+
+    def test_not_istartswith_autoescape(self):
+        self.assert_compile(
+            ~column("x").istartswith("a%b_c/d", autoescape=True),
+            "lower(x) NOT LIKE lower(:x_1) || '%' ESCAPE '/'",
+            checkparams={"x_1": "a/%b/_c//d"},
+        )
+
+    def test_istartswith_autoescape_custom_escape(self):
+        """
+        set an escape character to all occurrences of "%", "_" and
+        the escape character itself
+        """
+        self.assert_compile(
+            column("x").istartswith("a%b_c/d^e", autoescape=True, escape="^"),
+            "lower(x) LIKE lower(:x_1) || '%' ESCAPE '^'",
+            checkparams={"x_1": "a^%b^_c/d^^e"},
+        )
+
+    def test_istartswith_encoded(self):
+        self.assert_compile(
+            column("x").istartswith(b"y"),
+            "lower(x) LIKE lower(:x_1) || '%'",
+            checkparams={"x_1": b"y"},
+        )
+
+    def test_not_istartswith_encoded(self):
+        self.assert_compile(
+            ~column("x").istartswith(b"y"),
+            "lower(x) NOT LIKE lower(:x_1) || '%'",
+            checkparams={"x_1": b"y"},
+        )
+
+    def test_istartswith_encoded_mysql(self):
+        self.assert_compile(
+            column("x").istartswith(b"y"),
+            "lower(x) LIKE concat(lower(%s), '%%')",
+            checkparams={"x_1": b"y"},
+            dialect="mysql",
+        )
+
+    def test_not_istartswith_encoded_mysql(self):
+        self.assert_compile(
+            ~column("x").istartswith(b"y"),
+            "lower(x) NOT LIKE concat(lower(%s), '%%')",
+            checkparams={"x_1": b"y"},
+            dialect="mysql",
+        )
+
+    def test_istartswith_literal(self):
+        self.assert_compile(
+            column("x").istartswith(literal_column("y")),
+            "lower(x) LIKE lower(y) || '%'",
+            checkparams={},
+        )
+
+    def test_istartswith_text(self):
+        self.assert_compile(
+            column("x").istartswith(text("y")),
+            "lower(x) LIKE lower(y) || '%'",
+            checkparams={},
+        )
+
+    def test_istartswith_concat(self):
+        self.assert_compile(
+            column("x").istartswith("y"),
+            "lower(x) LIKE concat(lower(%s), '%%')",
+            checkparams={"x_1": "y"},
+            dialect=mysql.dialect(),
+        )
+
+    def test_not_istartswith_concat(self):
+        self.assert_compile(
+            ~column("x").istartswith("y"),
+            "lower(x) NOT LIKE concat(lower(%s), '%%')",
+            checkparams={"x_1": "y"},
+            dialect=mysql.dialect(),
+        )
+
+    def test_istartswith_literal_mysql(self):
+        self.assert_compile(
+            column("x").istartswith(literal_column("y")),
+            "lower(x) LIKE concat(lower(y), '%%')",
+            checkparams={},
+            dialect=mysql.dialect(),
+        )
+
+    def test_istartswith_text_mysql(self):
+        self.assert_compile(
+            column("x").istartswith(text("y")),
+            "lower(x) LIKE concat(lower(y), '%%')",
+            checkparams={},
+            dialect=mysql.dialect(),
+        )
+
     def test_endswith(self):
         self.assert_compile(
             column("x").endswith("y"),
@@ -3451,6 +3838,14 @@ class ComposedLikeOperatorsTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             checkparams={"x_1": "y"},
         )
 
+    def test_not_endswith_pg(self):
+        self.assert_compile(
+            ~column("x").endswith("y"),
+            "x NOT LIKE '%%' || %(x_1)s",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
     def test_not_endswith_escape(self):
         self.assert_compile(
             ~column("x").endswith("a%b_c", escape="\\"),
@@ -3505,6 +3900,180 @@ class ComposedLikeOperatorsTest(fixtures.TestBase, testing.AssertsCompiledSQL):
         self.assert_compile(
             column("x").endswith(text("y")),
             "x LIKE concat('%%', y)",
+            checkparams={},
+            dialect=mysql.dialect(),
+        )
+
+    def test_iendswith(self):
+        """
+        case insensitive endswith method
+        """
+        self.assert_compile(
+            column("x").iendswith("y"),
+            "lower(x) LIKE '%' || lower(:x_1)",
+            checkparams={"x_1": "y"},
+        )
+
+    def test_iendswith_pg(self):
+        """
+        case insensitive endswith method
+        """
+        self.assert_compile(
+            column("x").iendswith("y"),
+            "x ILIKE '%%' || %(x_1)s",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
+    def test_not_iendswith(self):
+        """
+        same as test_iendswith but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").iendswith("y"),
+            "lower(x) NOT LIKE '%' || lower(:x_1)",
+            checkparams={"x_1": "y"},
+        )
+
+    def test_not_iendswith_pg(self):
+        """
+        same as test_iendswith but negate the statement
+        """
+        self.assert_compile(
+            ~column("x").iendswith("y"),
+            "x NOT ILIKE '%%' || %(x_1)s",
+            checkparams={"x_1": "y"},
+            dialect="postgresql",
+        )
+
+    def test_iendswith_encoded(self):
+        self.assert_compile(
+            column("x").iendswith(b"y"),
+            "lower(x) LIKE '%' || lower(:x_1)",
+            checkparams={"x_1": b"y"},
+        )
+
+    def test_not_iendswith_encoded(self):
+        self.assert_compile(
+            ~column("x").iendswith(b"y"),
+            "lower(x) NOT LIKE '%' || lower(:x_1)",
+            checkparams={"x_1": b"y"},
+        )
+
+    def test_iendswith_encoded_mysql(self):
+        self.assert_compile(
+            column("x").iendswith(b"y"),
+            "lower(x) LIKE concat('%%', lower(%s))",
+            checkparams={"x_1": b"y"},
+            dialect="mysql",
+        )
+
+    def test_iendswith_escape(self):
+        """
+        render same SQL statement as iendswith but include the ESCAPE
+        keyword to establish that character as the escape character
+        """
+        self.assert_compile(
+            column("x").iendswith("a%b_c", escape="\\"),
+            "lower(x) LIKE '%' || lower(:x_1) ESCAPE '\\'",
+            checkparams={"x_1": "a%b_c"},
+        )
+
+    def test_not_iendswith_escape(self):
+        self.assert_compile(
+            ~column("x").iendswith("a%b_c", escape="\\"),
+            "lower(x) NOT LIKE '%' || lower(:x_1) ESCAPE '\\'",
+            checkparams={"x_1": "a%b_c"},
+        )
+
+    def test_iendswith_autoescape(self):
+        """
+        apply the escape character to all occurrences of "%", "_" and
+        the escape character itself
+        """
+        self.assert_compile(
+            column("x").iendswith("a%b_c/d", autoescape=True),
+            "lower(x) LIKE '%' || lower(:x_1) ESCAPE '/'",
+            checkparams={"x_1": "a/%b/_c//d"},
+        )
+
+    def test_not_iendswith_autoescape(self):
+        self.assert_compile(
+            ~column("x").iendswith("a%b_c/d", autoescape=True),
+            "lower(x) NOT LIKE '%' || lower(:x_1) ESCAPE '/'",
+            checkparams={"x_1": "a/%b/_c//d"},
+        )
+
+    def test_iendswith_autoescape_custom_escape(self):
+        """
+        set an escape character to all occurrences of "%", "_" and
+        the escape character itself
+        """
+        self.assert_compile(
+            column("x").iendswith("a%b_c/d^e", autoescape=True, escape="^"),
+            "lower(x) LIKE '%' || lower(:x_1) ESCAPE '^'",
+            checkparams={"x_1": "a^%b^_c/d^^e"},
+        )
+
+    def test_iendswith_autoescape_warning(self):
+        with expect_warnings("The autoescape parameter is now a simple"):
+            self.assert_compile(
+                column("x").iendswith("a%b_c/d", autoescape="P"),
+                "lower(x) LIKE '%' || lower(:x_1) ESCAPE '/'",
+                checkparams={"x_1": "a/%b/_c//d"},
+            )
+
+    def test_iendswith_autoescape_nosqlexpr(self):
+        assert_raises_message(
+            TypeError,
+            "String value expected when autoescape=True",
+            column("x").iendswith,
+            literal_column("'a%b_c/d'"),
+            autoescape=True,
+        )
+
+    def test_iendswith_literal(self):
+        self.assert_compile(
+            column("x").iendswith(literal_column("y")),
+            "lower(x) LIKE '%' || lower(y)",
+            checkparams={},
+        )
+
+    def test_iendswith_text(self):
+        self.assert_compile(
+            column("x").iendswith(text("y")),
+            "lower(x) LIKE '%' || lower(y)",
+            checkparams={},
+        )
+
+    def test_iendswith_mysql(self):
+        self.assert_compile(
+            column("x").iendswith("y"),
+            "lower(x) LIKE concat('%%', lower(%s))",
+            checkparams={"x_1": "y"},
+            dialect=mysql.dialect(),
+        )
+
+    def test_not_iendswith_mysql(self):
+        self.assert_compile(
+            ~column("x").iendswith("y"),
+            "lower(x) NOT LIKE concat('%%', lower(%s))",
+            checkparams={"x_1": "y"},
+            dialect=mysql.dialect(),
+        )
+
+    def test_iendswith_literal_mysql(self):
+        self.assert_compile(
+            column("x").iendswith(literal_column("y")),
+            "lower(x) LIKE concat('%%', lower(y))",
+            checkparams={},
+            dialect=mysql.dialect(),
+        )
+
+    def test_iendswith_text_mysql(self):
+        self.assert_compile(
+            column("x").iendswith(text("y")),
+            "lower(x) LIKE concat('%%', lower(y))",
             checkparams={},
             dialect=mysql.dialect(),
         )
@@ -3792,85 +4361,61 @@ class AnyAllTest(fixtures.TestBase, testing.AssertsCompiledSQL):
 
         self.assert_compile(expr(col), "NULL = ANY (tab1.%s)" % col.name)
 
-    def test_any_array(self, t_fixture):
-        t = t_fixture
+    @testing.fixture(
+        params=[
+            ("ANY", any_),
+            ("ANY", lambda x: x.any_()),
+            ("ALL", all_),
+            ("ALL", lambda x: x.all_()),
+        ]
+    )
+    def operator(self, request):
+        return request.param
 
+    @testing.fixture(
+        params=[
+            ("ANY", lambda x, *o: x.any(*o)),
+            ("ALL", lambda x, *o: x.all(*o)),
+        ]
+    )
+    def array_op(self, request):
+        return request.param
+
+    def test_array(self, t_fixture, operator):
+        t = t_fixture
+        op, fn = operator
         self.assert_compile(
-            5 == any_(t.c.arrval),
-            ":param_1 = ANY (tab1.arrval)",
+            5 == fn(t.c.arrval),
+            f":param_1 = {op} (tab1.arrval)",
             checkparams={"param_1": 5},
         )
 
-    def test_any_array_method(self, t_fixture):
+    def test_comparator_array(self, t_fixture, operator):
         t = t_fixture
-
+        op, fn = operator
         self.assert_compile(
-            5 == t.c.arrval.any_(),
-            ":param_1 = ANY (tab1.arrval)",
+            5 > fn(t.c.arrval),
+            f":param_1 > {op} (tab1.arrval)",
             checkparams={"param_1": 5},
         )
 
-    def test_all_array(self, t_fixture):
+    def test_comparator_array_wexpr(self, t_fixture, operator):
         t = t_fixture
-
+        op, fn = operator
         self.assert_compile(
-            5 == all_(t.c.arrval),
-            ":param_1 = ALL (tab1.arrval)",
-            checkparams={"param_1": 5},
-        )
-
-    def test_all_array_method(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            5 == t.c.arrval.all_(),
-            ":param_1 = ALL (tab1.arrval)",
-            checkparams={"param_1": 5},
-        )
-
-    def test_any_comparator_array(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            5 > any_(t.c.arrval),
-            ":param_1 > ANY (tab1.arrval)",
-            checkparams={"param_1": 5},
-        )
-
-    def test_all_comparator_array(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            5 > all_(t.c.arrval),
-            ":param_1 > ALL (tab1.arrval)",
-            checkparams={"param_1": 5},
-        )
-
-    def test_any_comparator_array_wexpr(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            t.c.data > any_(t.c.arrval),
-            "tab1.data > ANY (tab1.arrval)",
+            t.c.data > fn(t.c.arrval),
+            f"tab1.data > {op} (tab1.arrval)",
             checkparams={},
         )
 
-    def test_all_comparator_array_wexpr(self, t_fixture):
+    def test_illegal_ops(self, t_fixture, operator):
         t = t_fixture
-
-        self.assert_compile(
-            t.c.data > all_(t.c.arrval),
-            "tab1.data > ALL (tab1.arrval)",
-            checkparams={},
-        )
-
-    def test_illegal_ops(self, t_fixture):
-        t = t_fixture
+        op, fn = operator
 
         assert_raises_message(
             exc.ArgumentError,
             "Only comparison operators may be used with ANY/ALL",
-            lambda: 5 + all_(t.c.arrval),
+            lambda: 5 + fn(t.c.arrval),
         )
 
         # TODO:
@@ -3878,69 +4423,47 @@ class AnyAllTest(fixtures.TestBase, testing.AssertsCompiledSQL):
         # as the left-hand side just does its thing.  Types
         # would need to reject their right-hand side.
         self.assert_compile(
-            t.c.data + all_(t.c.arrval), "tab1.data + ALL (tab1.arrval)"
+            t.c.data + fn(t.c.arrval), f"tab1.data + {op} (tab1.arrval)"
         )
 
-    @testing.combinations("all", "any", argnames="op")
-    def test_any_all_bindparam_coercion(self, t_fixture, op):
+    def test_bindparam_coercion(self, t_fixture, array_op):
         """test #7979"""
         t = t_fixture
+        op, fn = array_op
 
-        if op == "all":
-            expr = t.c.arrval.all(bindparam("param"))
-            expected = "%(param)s = ALL (tab1.arrval)"
-        elif op == "any":
-            expr = t.c.arrval.any(bindparam("param"))
-            expected = "%(param)s = ANY (tab1.arrval)"
-        else:
-            assert False
-
+        expr = fn(t.c.arrval, bindparam("param"))
+        expected = f"%(param)s = {op} (tab1.arrval)"
         is_(expr.left.type._type_affinity, Integer)
 
         self.assert_compile(expr, expected, dialect="postgresql")
 
-    def test_any_array_comparator_accessor(self, t_fixture):
+    def test_array_comparator_accessor(self, t_fixture, array_op):
         t = t_fixture
+        op, fn = array_op
 
         self.assert_compile(
-            t.c.arrval.any(5, operator.gt),
-            ":arrval_1 > ANY (tab1.arrval)",
+            fn(t.c.arrval, 5, operator.gt),
+            f":arrval_1 > {op} (tab1.arrval)",
             checkparams={"arrval_1": 5},
         )
 
-    def test_any_array_comparator_negate_accessor(self, t_fixture):
+    def test_array_comparator_negate_accessor(self, t_fixture, array_op):
         t = t_fixture
+        op, fn = array_op
 
         self.assert_compile(
-            ~t.c.arrval.any(5, operator.gt),
-            "NOT (:arrval_1 > ANY (tab1.arrval))",
+            ~fn(t.c.arrval, 5, operator.gt),
+            f"NOT (:arrval_1 > {op} (tab1.arrval))",
             checkparams={"arrval_1": 5},
         )
 
-    def test_all_array_comparator_accessor(self, t_fixture):
+    def test_array_expression(self, t_fixture, operator):
         t = t_fixture
+        op, fn = operator
 
         self.assert_compile(
-            t.c.arrval.all(5, operator.gt),
-            ":arrval_1 > ALL (tab1.arrval)",
-            checkparams={"arrval_1": 5},
-        )
-
-    def test_all_array_comparator_negate_accessor(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            ~t.c.arrval.all(5, operator.gt),
-            "NOT (:arrval_1 > ALL (tab1.arrval))",
-            checkparams={"arrval_1": 5},
-        )
-
-    def test_any_array_expression(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            5 == any_(t.c.arrval[5:6] + postgresql.array([3, 4])),
-            "%(param_1)s = ANY (tab1.arrval[%(arrval_1)s:%(arrval_2)s] || "
+            5 == fn(t.c.arrval[5:6] + postgresql.array([3, 4])),
+            f"%(param_1)s = {op} (tab1.arrval[%(arrval_1)s:%(arrval_2)s] || "
             "ARRAY[%(param_2)s, %(param_3)s])",
             checkparams={
                 "arrval_2": 6,
@@ -3952,61 +4475,35 @@ class AnyAllTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             dialect="postgresql",
         )
 
-    def test_all_array_expression(self, t_fixture):
+    def test_subq(self, t_fixture, operator):
         t = t_fixture
+        op, fn = operator
 
         self.assert_compile(
-            5 == all_(t.c.arrval[5:6] + postgresql.array([3, 4])),
-            "%(param_1)s = ALL (tab1.arrval[%(arrval_1)s:%(arrval_2)s] || "
-            "ARRAY[%(param_2)s, %(param_3)s])",
-            checkparams={
-                "arrval_2": 6,
-                "param_1": 5,
-                "param_3": 4,
-                "arrval_1": 5,
-                "param_2": 3,
-            },
-            dialect="postgresql",
-        )
-
-    def test_any_subq(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            5 == any_(select(t.c.data).where(t.c.data < 10).scalar_subquery()),
-            ":param_1 = ANY (SELECT tab1.data "
+            5 == fn(select(t.c.data).where(t.c.data < 10).scalar_subquery()),
+            f":param_1 = {op} (SELECT tab1.data "
             "FROM tab1 WHERE tab1.data < :data_1)",
             checkparams={"data_1": 10, "param_1": 5},
         )
 
-    def test_any_subq_method(self, t_fixture):
+    def test_scalar_values(self, t_fixture, operator):
         t = t_fixture
+        op, fn = operator
 
         self.assert_compile(
-            5
-            == select(t.c.data).where(t.c.data < 10).scalar_subquery().any_(),
-            ":param_1 = ANY (SELECT tab1.data "
-            "FROM tab1 WHERE tab1.data < :data_1)",
-            checkparams={"data_1": 10, "param_1": 5},
+            5 == fn(values(t.c.data).data([(1,), (42,)]).scalar_values()),
+            f":param_1 = {op} (VALUES (:param_2), (:param_3))",
+            checkparams={"param_1": 5, "param_2": 1, "param_3": 42},
         )
 
-    def test_all_subq(self, t_fixture):
+    @testing.combinations(any_, all_, argnames="fn")
+    def test_values_illegal(self, t_fixture, fn):
         t = t_fixture
 
-        self.assert_compile(
-            5 == all_(select(t.c.data).where(t.c.data < 10).scalar_subquery()),
-            ":param_1 = ALL (SELECT tab1.data "
-            "FROM tab1 WHERE tab1.data < :data_1)",
-            checkparams={"data_1": 10, "param_1": 5},
-        )
-
-    def test_all_subq_method(self, t_fixture):
-        t = t_fixture
-
-        self.assert_compile(
-            5
-            == select(t.c.data).where(t.c.data < 10).scalar_subquery().all_(),
-            ":param_1 = ALL (SELECT tab1.data "
-            "FROM tab1 WHERE tab1.data < :data_1)",
-            checkparams={"data_1": 10, "param_1": 5},
-        )
+        with expect_raises_message(
+            exc.ArgumentError,
+            "SQL expression element expected, got .* "
+            "To create a column expression from a VALUES clause, "
+            r"use the .scalar_values\(\) method.",
+        ):
+            fn(values(t.c.data).data([(1,), (42,)]))

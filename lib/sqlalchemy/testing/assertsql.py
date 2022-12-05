@@ -68,7 +68,7 @@ class CursorSQL(SQLMatchRule):
 
 class CompiledSQL(SQLMatchRule):
     def __init__(
-        self, statement, params=None, dialect="default", enable_returning=False
+        self, statement, params=None, dialect="default", enable_returning=True
     ):
         self.statement = statement
         self.params = params
@@ -90,6 +90,17 @@ class CompiledSQL(SQLMatchRule):
                 dialect.insert_returning = (
                     dialect.update_returning
                 ) = dialect.delete_returning = True
+                dialect.use_insertmanyvalues = True
+                dialect.supports_multivalues_insert = True
+                dialect.update_returning_multifrom = True
+                dialect.delete_returning_multifrom = True
+                # dialect.favor_returning_over_lastrowid = True
+                # dialect.insert_null_pk_still_autoincrements = True
+
+                # this is calculated but we need it to be True for this
+                # to look like all the current RETURNING dialects
+                assert dialect.insert_executemany_returning
+
             return dialect
         else:
             return url.URL.create(self.dialect).get_dialect()()
@@ -258,9 +269,9 @@ class DialectSQL(CompiledSQL):
         return received_stmt == stmt
 
     def _received_statement(self, execute_observed):
-        received_stmt, received_params = super(
-            DialectSQL, self
-        )._received_statement(execute_observed)
+        received_stmt, received_params = super()._received_statement(
+            execute_observed
+        )
 
         # TODO: why do we need this part?
         for real_stmt in execute_observed.statements:
@@ -360,6 +371,10 @@ class EachOf(AssertRule):
         self.rules = list(rules)
 
     def process_statement(self, execute_observed):
+        if not self.rules:
+            self.is_consumed = True
+            self.consume_statement = False
+
         while self.rules:
             rule = self.rules[0]
             rule.process_statement(execute_observed)
@@ -377,15 +392,15 @@ class EachOf(AssertRule):
         if self.rules and not self.rules[0].is_consumed:
             self.rules[0].no_more_statements()
         elif self.rules:
-            super(EachOf, self).no_more_statements()
+            super().no_more_statements()
 
 
 class Conditional(EachOf):
     def __init__(self, condition, rules, else_rules):
         if condition:
-            super(Conditional, self).__init__(*rules)
+            super().__init__(*rules)
         else:
-            super(Conditional, self).__init__(*else_rules)
+            super().__init__(*else_rules)
 
 
 class Or(AllOf):

@@ -152,7 +152,7 @@ class safe_reraise:
             raise value.with_traceback(traceback)
 
 
-def walk_subclasses(cls: type) -> Iterator[type]:
+def walk_subclasses(cls: Type[_T]) -> Iterator[Type[_T]]:
     seen: Set[Any] = set()
 
     stack = [cls]
@@ -178,7 +178,7 @@ def string_or_unprintable(element: Any) -> str:
 
 def clsname_as_plain_name(cls: Type[Any]) -> str:
     return " ".join(
-        n.lower() for n in re.findall(r"([A-Z][a-z]+)", cls.__name__)
+        n.lower() for n in re.findall(r"([A-Z][a-z]+|SQL)", cls.__name__)
     )
 
 
@@ -1448,7 +1448,7 @@ def duck_type_collection(
         else:
             return specimen.__emulates__  # type: ignore
 
-    isa = isinstance(specimen, type) and issubclass or isinstance
+    isa = issubclass if isinstance(specimen, type) else isinstance
     if isa(specimen, list):
         return list
     elif isa(specimen, set):
@@ -1522,7 +1522,7 @@ class classproperty(property):
     fget: Callable[[Any], Any]
 
     def __init__(self, fget: Callable[[Any], Any], *arg: Any, **kw: Any):
-        super(classproperty, self).__init__(fget, *arg, **kw)
+        super().__init__(fget, *arg, **kw)
         self.__doc__ = fget.__doc__
 
     def __get__(self, obj: Any, cls: Optional[type] = None) -> Any:
@@ -1542,6 +1542,32 @@ class hybridproperty(Generic[_T]):
             return self.func(instance)
 
     def classlevel(self, func: Callable[..., Any]) -> hybridproperty[_T]:
+        self.clslevel = func
+        return self
+
+
+class rw_hybridproperty(Generic[_T]):
+    def __init__(self, func: Callable[..., _T]):
+        self.func = func
+        self.clslevel = func
+        self.setfn: Optional[Callable[..., Any]] = None
+
+    def __get__(self, instance: Any, owner: Any) -> _T:
+        if instance is None:
+            clsval = self.clslevel(owner)
+            return clsval
+        else:
+            return self.func(instance)
+
+    def __set__(self, instance: Any, value: Any) -> None:
+        assert self.setfn is not None
+        self.setfn(instance, value)
+
+    def setter(self, func: Callable[..., Any]) -> rw_hybridproperty[_T]:
+        self.setfn = func
+        return self
+
+    def classlevel(self, func: Callable[..., Any]) -> rw_hybridproperty[_T]:
         self.clslevel = func
         return self
 
@@ -1577,11 +1603,6 @@ class symbol(int):
 
     Repeated calls of symbol('name') will all return the same instance.
 
-    In SQLAlchemy 2.0, symbol() is used for the implementation of
-    ``_FastIntFlag``, but otherwise should be mostly replaced by
-    ``enum.Enum`` and variants.
-
-
     """
 
     name: str
@@ -1606,7 +1627,17 @@ class symbol(int):
                 if doc:
                     sym.__doc__ = doc
 
+                # NOTE: we should ultimately get rid of this global thing,
+                # however, currently it is to support pickling.  The best
+                # change would be when we are on py3.11 at a minimum, we
+                # switch to stdlib enum.IntFlag.
                 cls.symbols[name] = sym
+            else:
+                if canonical and canonical != sym:
+                    raise TypeError(
+                        f"Can't replace canonical symbol for {name} "
+                        f"with new int value {canonical}"
+                    )
             return sym
 
     def __reduce__(self):
@@ -1639,8 +1670,16 @@ class _IntFlagMeta(type):
             setattr(cls, k, sym)
             items.append(sym)
 
+        cls.__members__ = _collections.immutabledict(
+            {sym.name: sym for sym in items}
+        )
+
     def __iter__(self) -> Iterator[symbol]:
-        return iter(self._items)
+        raise NotImplementedError(
+            "iter not implemented to ensure compatibility with "
+            "Python 3.11 IntFlag.  Please use __members__.  See "
+            "https://github.com/python/cpython/issues/99304"
+        )
 
 
 class _FastIntFlag(metaclass=_IntFlagMeta):
@@ -1754,7 +1793,7 @@ class _hash_limit_string(str):
         interpolated = (value % args) + (
             " (this warning may be suppressed after %d occurrences)" % num
         )
-        self = super(_hash_limit_string, cls).__new__(cls, interpolated)
+        self = super().__new__(cls, interpolated)
         self._hash = hash("%s_%d" % (value, hash(interpolated) % num))
         return self
 

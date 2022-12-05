@@ -94,12 +94,18 @@ class SupportsAnnotations(ExternallyTraversible):
     @util.memoized_property
     def _annotations_cache_key(self) -> Tuple[Any, ...]:
         anon_map_ = anon_map()
+
+        return self._gen_annotations_cache_key(anon_map_)
+
+    def _gen_annotations_cache_key(
+        self, anon_map: anon_map
+    ) -> Tuple[Any, ...]:
         return (
             "_annotations",
             tuple(
                 (
                     key,
-                    value._gen_cache_key(anon_map_, [])
+                    value._gen_cache_key(anon_map, [])
                     if isinstance(value, HasCacheKey)
                     else value,
                 )
@@ -415,6 +421,7 @@ def _deep_annotate(
     annotations: _AnnotationDict,
     exclude: Optional[Sequence[SupportsAnnotations]] = None,
     detect_subquery_cols: bool = False,
+    ind_cols_on_fromclause: bool = False,
 ) -> _SA:
     """Deep copy the given ClauseElement, annotating each element
     with the given annotations dictionary.
@@ -429,6 +436,16 @@ def _deep_annotate(
     cloned_ids: Dict[int, SupportsAnnotations] = {}
 
     def clone(elem: SupportsAnnotations, **kw: Any) -> SupportsAnnotations:
+
+        # ind_cols_on_fromclause means make sure an AnnotatedFromClause
+        # has its own .c collection independent of that which its proxying.
+        # this is used specifically by orm.LoaderCriteriaOption to break
+        # a reference cycle that it's otherwise prone to building,
+        # see test_relationship_criteria->
+        # test_loader_criteria_subquery_w_same_entity.  logic here was
+        # changed for #8796 and made explicit; previously it occurred
+        # by accident
+
         kw["detect_subquery_cols"] = detect_subquery_cols
         id_ = id(elem)
 
@@ -448,7 +465,11 @@ def _deep_annotate(
                 newelem = elem._annotate(annotations)
         else:
             newelem = elem
-        newelem._copy_internals(clone=clone)
+
+        newelem._copy_internals(
+            clone=clone, ind_cols_on_fromclause=ind_cols_on_fromclause
+        )
+
         cloned_ids[id_] = newelem
         return newelem
 
@@ -552,6 +573,8 @@ def _new_annotation_type(
     # e.g. BindParameter, add it if present.
     if cls.__dict__.get("inherit_cache", False):
         anno_cls.inherit_cache = True  # type: ignore
+    elif "inherit_cache" in cls.__dict__:
+        anno_cls.inherit_cache = cls.__dict__["inherit_cache"]  # type: ignore
 
     anno_cls._is_column_operators = issubclass(cls, operators.ColumnOperators)
 
@@ -559,7 +582,8 @@ def _new_annotation_type(
 
 
 def _prepare_annotations(
-    target_hierarchy: Type[SupportsAnnotations], base_cls: Type[Annotated]
+    target_hierarchy: Type[SupportsWrappingAnnotations],
+    base_cls: Type[Annotated],
 ) -> None:
     for cls in util.walk_subclasses(target_hierarchy):
         _new_annotation_type(cls, base_cls)

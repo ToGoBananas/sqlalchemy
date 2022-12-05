@@ -445,6 +445,15 @@ from ...sql._typing import is_sql_compiler
 _CX_ORACLE_MAGIC_LOB_SIZE = 131072
 
 
+_ORACLE_BIND_TRANSLATE_RE = re.compile(r"[%\(\):\[\]\.\/\? ]")
+
+# Oracle bind names can't start with digits or underscores.
+# currently we rely upon Oracle-specific quoting of bind names in most cases.
+# however for expanding params, the escape chars are used.
+# see #8708
+_ORACLE_BIND_TRANSLATE_CHARS = dict(zip("%():[]./? ", "PAZCCCCCCCC"))
+
+
 class _OracleInteger(sqltypes.Integer):
     def get_dbapi_type(self, dbapi):
         # see https://github.com/oracle/python-cx_Oracle/issues/
@@ -663,9 +672,7 @@ class _OracleBinary(_LOBDataType, sqltypes.LargeBinary):
         if not dialect.auto_convert_lobs:
             return None
         else:
-            return super(_OracleBinary, self).result_processor(
-                dialect, coltype
-            )
+            return super().result_processor(dialect, coltype)
 
 
 class _OracleInterval(oracle.INTERVAL):
@@ -693,6 +700,10 @@ class OracleCompiler_cx_oracle(OracleCompiler):
             quote is True
             or quote is not False
             and self.preparer._bindparam_requires_quotes(name)
+            # bind param quoting for Oracle doesn't work with post_compile
+            # params.  For those, the default bindparam_string will escape
+            # special chars, and the appending of a number "_1" etc. will
+            # take care of reserved words
             and not kw.get("post_compile", False)
         ):
             # interesting to note about expanding parameters - since the
@@ -703,6 +714,29 @@ class OracleCompiler_cx_oracle(OracleCompiler):
             quoted_name = '"%s"' % name
             kw["escaped_from"] = name
             name = quoted_name
+            return OracleCompiler.bindparam_string(self, name, **kw)
+
+        # TODO: we could likely do away with quoting altogether for
+        # Oracle parameters and use the custom escaping here
+        escaped_from = kw.get("escaped_from", None)
+        if not escaped_from:
+
+            if _ORACLE_BIND_TRANSLATE_RE.search(name):
+                # not quite the translate use case as we want to
+                # also get a quick boolean if we even found
+                # unusual characters in the name
+                new_name = _ORACLE_BIND_TRANSLATE_RE.sub(
+                    lambda m: _ORACLE_BIND_TRANSLATE_CHARS[m.group(0)],
+                    name,
+                )
+                if new_name[0].isdigit() or new_name[0] == "_":
+                    new_name = "D" + new_name
+                kw["escaped_from"] = name
+                name = new_name
+            elif name[0].isdigit() or name[0] == "_":
+                new_name = "D" + name
+                kw["escaped_from"] = name
+                name = new_name
 
         return OracleCompiler.bindparam_string(self, name, **kw)
 
@@ -897,6 +931,8 @@ class OracleDialect_cx_oracle(OracleDialect):
     supports_sane_multi_rowcount = True
 
     insert_executemany_returning = True
+    update_executemany_returning = True
+    delete_executemany_returning = True
 
     bind_typing = interfaces.BindTyping.SETINPUTSIZES
 
@@ -1095,10 +1131,33 @@ class OracleDialect_cx_oracle(OracleDialect):
         # NLS_TERRITORY or formatting behavior of the DB, we opt
         # to just look at it
 
-        self._decimal_char = connection.exec_driver_sql(
-            "select value from nls_session_parameters "
-            "where parameter = 'NLS_NUMERIC_CHARACTERS'"
-        ).scalar()[0]
+        dbapi_connection = connection.connection
+
+        with dbapi_connection.cursor() as cursor:
+            # issue #8744
+            # nls_session_parameters is not available in some Oracle
+            # modes like "mount mode".  But then, v$nls_parameters is not
+            # available if the connection doesn't have SYSDBA priv.
+            #
+            # simplify the whole thing and just use the method that we were
+            # doing in the test suite already, selecting a number
+
+            def output_type_handler(
+                cursor, name, defaultType, size, precision, scale
+            ):
+                return cursor.var(
+                    self.dbapi.STRING, 255, arraysize=cursor.arraysize
+                )
+
+            cursor.outputtypehandler = output_type_handler
+            cursor.execute("SELECT 1.1 FROM DUAL")
+            value = cursor.fetchone()[0]
+
+            decimal_char = value.lstrip("0")[1]
+            assert not decimal_char[0].isdigit()
+
+        self._decimal_char = decimal_char
+
         if self._decimal_char != ".":
             _detect_decimal = self._detect_decimal
             _to_decimal = self._to_decimal

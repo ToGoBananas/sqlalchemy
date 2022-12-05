@@ -26,6 +26,7 @@ from typing import Callable
 from typing import cast
 from typing import ClassVar
 from typing import Dict
+from typing import Generic
 from typing import Iterator
 from typing import List
 from typing import NamedTuple
@@ -65,6 +66,7 @@ from ..sql import visitors
 from ..sql.base import _NoArg
 from ..sql.base import ExecutableOption
 from ..sql.cache_key import HasCacheKey
+from ..sql.operators import ColumnOperators
 from ..sql.schema import Column
 from ..sql.type_api import TypeEngine
 from ..util.typing import RODescriptorReference
@@ -77,10 +79,12 @@ if typing.TYPE_CHECKING:
     from ._typing import _InternalEntityType
     from ._typing import _ORMAdapterProto
     from .attributes import InstrumentedAttribute
+    from .base import Mapped
     from .context import _MapperEntity
     from .context import ORMCompileState
     from .context import QueryContext
     from .decl_api import RegistryType
+    from .decl_base import _ClassScanMapperConfig
     from .loading import _PopulatorDict
     from .mapper import Mapper
     from .path_registry import AbstractEntityRegistry
@@ -154,9 +158,12 @@ class _IntrospectsAnnotations:
 
     def declarative_scan(
         self,
+        decl_scan: _ClassScanMapperConfig,
         registry: RegistryType,
         cls: Type[Any],
+        originating_module: Optional[str],
         key: str,
+        mapped_container: Optional[Type[Mapped[Any]]],
         annotation: Optional[_AnnotationScanType],
         extracted_mapped_annotation: Optional[_AnnotationScanType],
         is_dataclass_field: bool,
@@ -190,6 +197,7 @@ class _AttributeOptions(NamedTuple):
     dataclasses_repr: Union[_NoArg, bool]
     dataclasses_default: Union[_NoArg, Any]
     dataclasses_default_factory: Union[_NoArg, Callable[[], Any]]
+    dataclasses_compare: Union[_NoArg, bool]
     dataclasses_kw_only: Union[_NoArg, bool]
 
     def _as_dataclass_field(self) -> Any:
@@ -204,6 +212,8 @@ class _AttributeOptions(NamedTuple):
             kw["init"] = self.dataclasses_init
         if self.dataclasses_repr is not _NoArg.NO_ARG:
             kw["repr"] = self.dataclasses_repr
+        if self.dataclasses_compare is not _NoArg.NO_ARG:
+            kw["compare"] = self.dataclasses_compare
         if self.dataclasses_kw_only is not _NoArg.NO_ARG:
             kw["kw_only"] = self.dataclasses_kw_only
 
@@ -211,40 +221,84 @@ class _AttributeOptions(NamedTuple):
 
     @classmethod
     def _get_arguments_for_make_dataclass(
-        cls, key: str, annotation: Type[Any], elem: _T
+        cls,
+        key: str,
+        annotation: _AnnotationScanType,
+        mapped_container: Optional[Any],
+        elem: _T,
     ) -> Union[
-        Tuple[str, Type[Any]], Tuple[str, Type[Any], dataclasses.Field[Any]]
+        Tuple[str, _AnnotationScanType],
+        Tuple[str, _AnnotationScanType, dataclasses.Field[Any]],
     ]:
         """given attribute key, annotation, and value from a class, return
         the argument tuple we would pass to dataclasses.make_dataclass()
         for this attribute.
 
         """
-        if isinstance(elem, (MapperProperty, _MapsColumns)):
+        if isinstance(elem, _DCAttributeOptions):
             dc_field = elem._attribute_options._as_dataclass_field()
 
             return (key, annotation, dc_field)
         elif elem is not _NoArg.NO_ARG:
             # why is typing not erroring on this?
             return (key, annotation, elem)
+        elif mapped_container is not None:
+            # it's Mapped[], but there's no "element", which means declarative
+            # did not actually do anything for this field.  this shouldn't
+            # happen.
+            # previously, this would occur because _scan_attributes would
+            # skip a field that's on an already mapped superclass, but it
+            # would still include it in the annotations, leading
+            # to issue #8718
+
+            assert False, "Mapped[] received without a mapping declaration"
+
         else:
+            # plain dataclass field, not mapped.  Is only possible
+            # if __allow_unmapped__ is set up.  I can see this mode causing
+            # problems...
             return (key, annotation)
 
 
 _DEFAULT_ATTRIBUTE_OPTIONS = _AttributeOptions(
-    _NoArg.NO_ARG, _NoArg.NO_ARG, _NoArg.NO_ARG, _NoArg.NO_ARG, _NoArg.NO_ARG
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
+    _NoArg.NO_ARG,
 )
 
 
-class _MapsColumns(_MappedAttribute[_T]):
-    """interface for declarative-capable construct that delivers one or more
-    Column objects to the declarative process to be part of a Table.
+class _DCAttributeOptions:
+    """mixin for descriptors or configurational objects that include dataclass
+    field options.
+
+    This includes :class:`.MapperProperty`, :class:`._MapsColumn` within
+    the ORM, but also includes :class:`.AssociationProxy` within ext.
+    Can in theory be used for other descriptors that serve a similar role
+    as association proxy.   (*maybe* hybrids, not sure yet.)
+
     """
 
     __slots__ = ()
 
     _attribute_options: _AttributeOptions
+    """behavioral options for ORM-enabled Python attributes
+
+    .. versionadded:: 2.0
+
+    """
+
     _has_dataclass_arguments: bool
+
+
+class _MapsColumns(_DCAttributeOptions, _MappedAttribute[_T]):
+    """interface for declarative-capable construct that delivers one or more
+    Column objects to the declarative process to be part of a Table.
+    """
+
+    __slots__ = ()
 
     @property
     def mapper_property_to_assign(self) -> Optional[MapperProperty[_T]]:
@@ -271,7 +325,11 @@ class _MapsColumns(_MappedAttribute[_T]):
 # by typing tools
 @inspection._self_inspects
 class MapperProperty(
-    HasCacheKey, _MappedAttribute[_T], InspectionAttrInfo, util.MemoizedSlots
+    HasCacheKey,
+    _DCAttributeOptions,
+    _MappedAttribute[_T],
+    InspectionAttrInfo,
+    util.MemoizedSlots,
 ):
     """Represent a particular class attribute mapped by :class:`_orm.Mapper`.
 
@@ -331,13 +389,6 @@ class MapperProperty(
     doc: Optional[str]
     """optional documentation string"""
 
-    _attribute_options: _AttributeOptions
-    """behavioral options for ORM-enabled Python attributes
-
-    .. versionadded:: 2.0
-
-    """
-
     info: _InfoType
     """Info dictionary associated with the object, allowing user-defined
     data to be associated with this :class:`.InspectionAttr`.
@@ -358,8 +409,6 @@ class MapperProperty(
         :attr:`.SchemaItem.info`
 
     """
-
-    _has_dataclass_arguments: bool
 
     def _memoized_attr_info(self) -> _InfoType:
         """Info dictionary associated with the object, allowing user-defined
@@ -570,7 +619,7 @@ class MapperProperty(
 
 
 @inspection._self_inspects
-class PropComparator(SQLORMOperations[_T]):
+class PropComparator(SQLORMOperations[_T], Generic[_T], ColumnOperators):
     r"""Defines SQL operations for ORM mapped attributes.
 
     SQLAlchemy allows for operators to
@@ -651,7 +700,6 @@ class PropComparator(SQLORMOperations[_T]):
         :attr:`.TypeEngine.comparator_factory`
 
     """
-
     __slots__ = "prop", "_parententity", "_adapt_to_entity"
 
     __visit_name__ = "orm_prop_comparator"
@@ -763,7 +811,7 @@ class PropComparator(SQLORMOperations[_T]):
         ) -> ColumnElement[Any]:
             ...
 
-    def of_type(self, class_: _EntityType[_T]) -> PropComparator[_T]:
+    def of_type(self, class_: _EntityType[Any]) -> PropComparator[_T]:
         r"""Redefine this object in terms of a polymorphic subclass,
         :func:`_orm.with_polymorphic` construct, or :func:`_orm.aliased`
         construct.
@@ -781,7 +829,8 @@ class PropComparator(SQLORMOperations[_T]):
 
         .. seealso::
 
-            :ref:`queryguide_join_onclause` - in the :ref:`queryguide_toplevel`
+            :ref:`orm_queryguide_joining_relationships_aliased` - in the
+            :ref:`queryguide_toplevel`
 
             :ref:`inheritance_of_type`
 

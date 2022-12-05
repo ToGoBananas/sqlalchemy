@@ -27,7 +27,6 @@ from sqlalchemy import tuple_
 from sqlalchemy import TypeDecorator
 from sqlalchemy import union
 from sqlalchemy import union_all
-from sqlalchemy import util
 from sqlalchemy import values
 from sqlalchemy.dialects import mysql
 from sqlalchemy.dialects import postgresql
@@ -268,6 +267,8 @@ class CoreFixtures:
         ),
         lambda: (
             table("a", column("x"), column("y")),
+            table("a", column("x"), column("y"), schema="q"),
+            table("a", column("x"), column("y"), schema="y"),
             table("a", column("x"), column("y"))._annotate({"orm": True}),
             table("b", column("x"), column("y"))._annotate({"orm": True}),
         ),
@@ -624,6 +625,15 @@ class CoreFixtures:
                 column("mykey", Integer),
                 column("mytext", String),
                 column("myint", Integer),
+                name="myvalues",
+                literal_binds=True,
+            )
+            .data([(1, "textA", 99), (2, "textB", 88)])
+            ._annotate({"nocache": True}),
+            values(
+                column("mykey", Integer),
+                column("mytext", String),
+                column("myint", Integer),
                 name="myothervalues",
             )
             .data([(1, "textA", 99), (2, "textB", 88)])
@@ -646,15 +656,62 @@ class CoreFixtures:
             ._annotate({"nocache": True}),
             # TODO: difference in type
             # values(
-            #    [
-            #        column("mykey", Integer),
-            #        column("mytext", Text),
-            #        column("myint", Integer),
-            #    ],
-            #    (1, "textA", 99),
-            #    (2, "textB", 88),
-            #    alias_name="myvalues",
-            # ),
+            #     column("mykey", Integer),
+            #     column("mytext", Text),
+            #     column("myint", Integer),
+            #     name="myvalues",
+            # )
+            # .data([(1, "textA", 99), (2, "textB", 88)])
+            # ._annotate({"nocache": True}),
+        ),
+        lambda: (
+            values(
+                column("mykey", Integer),
+                column("mytext", String),
+                column("myint", Integer),
+                name="myvalues",
+            )
+            .data([(1, "textA", 99), (2, "textB", 88)])
+            .scalar_values()
+            ._annotate({"nocache": True}),
+            values(
+                column("mykey", Integer),
+                column("mytext", String),
+                column("myint", Integer),
+                name="myvalues",
+                literal_binds=True,
+            )
+            .data([(1, "textA", 99), (2, "textB", 88)])
+            .scalar_values()
+            ._annotate({"nocache": True}),
+            values(
+                column("mykey", Integer),
+                column("mytext", String),
+                column("myint", Integer),
+                name="myvalues",
+            )
+            .data([(1, "textA", 89), (2, "textG", 88)])
+            .scalar_values()
+            ._annotate({"nocache": True}),
+            values(
+                column("mykey", Integer),
+                column("mynottext", String),
+                column("myint", Integer),
+                name="myvalues",
+            )
+            .data([(1, "textA", 99), (2, "textB", 88)])
+            .scalar_values()
+            ._annotate({"nocache": True}),
+            # TODO: difference in type
+            # values(
+            #     column("mykey", Integer),
+            #     column("mytext", Text),
+            #     column("myint", Integer),
+            #     name="myvalues",
+            # )
+            # .data([(1, "textA", 99), (2, "textB", 88)])
+            # .scalar_values()
+            # ._annotate({"nocache": True}),
         ),
         lambda: (
             select(table_a.c.a),
@@ -1052,110 +1109,7 @@ class CoreFixtures:
     ]
 
 
-class CacheKeyFixture:
-    def _compare_equal(self, a, b, compare_values):
-        a_key = a._generate_cache_key()
-        b_key = b._generate_cache_key()
-
-        if a_key is None:
-            assert a._annotations.get("nocache")
-
-            assert b_key is None
-        else:
-
-            eq_(a_key.key, b_key.key)
-            eq_(hash(a_key.key), hash(b_key.key))
-
-            for a_param, b_param in zip(a_key.bindparams, b_key.bindparams):
-                assert a_param.compare(b_param, compare_values=compare_values)
-        return a_key, b_key
-
-    def _run_cache_key_fixture(self, fixture, compare_values):
-        case_a = fixture()
-        case_b = fixture()
-
-        for a, b in itertools.combinations_with_replacement(
-            range(len(case_a)), 2
-        ):
-            if a == b:
-                a_key, b_key = self._compare_equal(
-                    case_a[a], case_b[b], compare_values
-                )
-                if a_key is None:
-                    continue
-            else:
-                a_key = case_a[a]._generate_cache_key()
-                b_key = case_b[b]._generate_cache_key()
-
-                if a_key is None or b_key is None:
-                    if a_key is None:
-                        assert case_a[a]._annotations.get("nocache")
-                    if b_key is None:
-                        assert case_b[b]._annotations.get("nocache")
-                    continue
-
-                if a_key.key == b_key.key:
-                    for a_param, b_param in zip(
-                        a_key.bindparams, b_key.bindparams
-                    ):
-                        if not a_param.compare(
-                            b_param, compare_values=compare_values
-                        ):
-                            break
-                    else:
-                        # this fails unconditionally since we could not
-                        # find bound parameter values that differed.
-                        # Usually we intended to get two distinct keys here
-                        # so the failure will be more descriptive using the
-                        # ne_() assertion.
-                        ne_(a_key.key, b_key.key)
-                else:
-                    ne_(a_key.key, b_key.key)
-
-            # ClauseElement-specific test to ensure the cache key
-            # collected all the bound parameters that aren't marked
-            # as "literal execute"
-            if isinstance(case_a[a], ClauseElement) and isinstance(
-                case_b[b], ClauseElement
-            ):
-                assert_a_params = []
-                assert_b_params = []
-
-                for elem in visitors.iterate(case_a[a]):
-                    if elem.__visit_name__ == "bindparam":
-                        assert_a_params.append(elem)
-
-                for elem in visitors.iterate(case_b[b]):
-                    if elem.__visit_name__ == "bindparam":
-                        assert_b_params.append(elem)
-
-                # note we're asserting the order of the params as well as
-                # if there are dupes or not.  ordering has to be
-                # deterministic and matches what a traversal would provide.
-                eq_(
-                    sorted(a_key.bindparams, key=lambda b: b.key),
-                    sorted(
-                        util.unique_list(assert_a_params), key=lambda b: b.key
-                    ),
-                )
-                eq_(
-                    sorted(b_key.bindparams, key=lambda b: b.key),
-                    sorted(
-                        util.unique_list(assert_b_params), key=lambda b: b.key
-                    ),
-                )
-
-    def _run_cache_key_equal_fixture(self, fixture, compare_values):
-        case_a = fixture()
-        case_b = fixture()
-
-        for a, b in itertools.combinations_with_replacement(
-            range(len(case_a)), 2
-        ):
-            self._compare_equal(case_a[a], case_b[b], compare_values)
-
-
-class CacheKeyTest(CacheKeyFixture, CoreFixtures, fixtures.TestBase):
+class CacheKeyTest(fixtures.CacheKeyFixture, CoreFixtures, fixtures.TestBase):
     # we are slightly breaking the policy of not having external dialect
     # stuff in here, but use pg/mysql as test cases to ensure that these
     # objects don't report an inaccurate cache key, which is dependent
@@ -1363,7 +1317,7 @@ class CompareAndCopyTest(CoreFixtures, fixtures.TestBase):
         also included in the fixtures above.
 
         """
-        need = set(
+        need = {
             cls
             for cls in class_hierarchy(ClauseElement)
             if issubclass(cls, (ColumnElement, Selectable, LambdaElement))
@@ -1377,7 +1331,7 @@ class CompareAndCopyTest(CoreFixtures, fixtures.TestBase):
             and "compiler" not in cls.__module__
             and "crud" not in cls.__module__
             and "dialects" not in cls.__module__  # TODO: dialects?
-        ).difference({ColumnElement, UnaryExpression})
+        }.difference({ColumnElement, UnaryExpression})
 
         for fixture in self.fixtures + self.dont_compare_values_fixtures:
             case_a = fixture()
@@ -1406,9 +1360,8 @@ class CompareAndCopyTest(CoreFixtures, fixtures.TestBase):
                                 compare_annotations=True,
                                 compare_values=compare_values,
                             ),
-                            "%r != %r" % (case_a[a], case_b[b]),
+                            f"{case_a[a]!r} != {case_b[b]!r} (index {a} {b})",
                         )
-
                     else:
                         is_false(
                             case_a[a].compare(
@@ -1416,7 +1369,7 @@ class CompareAndCopyTest(CoreFixtures, fixtures.TestBase):
                                 compare_annotations=True,
                                 compare_values=compare_values,
                             ),
-                            "%r == %r" % (case_a[a], case_b[b]),
+                            f"{case_a[a]!r} == {case_b[b]!r} (index {a} {b})",
                         )
 
     def test_compare_col_identity(self):

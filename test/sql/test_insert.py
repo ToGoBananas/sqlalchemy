@@ -1,4 +1,3 @@
-#! coding:utf-8
 from __future__ import annotations
 
 from typing import Tuple
@@ -26,10 +25,12 @@ from sqlalchemy.sql import crud
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
+from sqlalchemy.testing import config
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import expect_warnings
 from sqlalchemy.testing import fixtures
+from sqlalchemy.testing.provision import normalize_sequence
 
 
 class ORMExpr:
@@ -143,7 +144,13 @@ class InsertTest(_InsertTestBase, fixtures.TablesTest, AssertsCompiledSQL):
         )
 
     def test_insert_literal_binds_sequence_notimplemented(self):
-        table = Table("x", MetaData(), Column("y", Integer, Sequence("y_seq")))
+        table = Table(
+            "x",
+            MetaData(),
+            Column(
+                "y", Integer, normalize_sequence(config, Sequence("y_seq"))
+            ),
+        )
         dialect = default.DefaultDialect()
         dialect.supports_sequences = True
 
@@ -407,7 +414,12 @@ class InsertTest(_InsertTestBase, fixtures.TablesTest, AssertsCompiledSQL):
         t1 = Table(
             "t",
             m,
-            Column("id", Integer, Sequence("id_seq"), primary_key=True),
+            Column(
+                "id",
+                Integer,
+                normalize_sequence(config, Sequence("id_seq")),
+                primary_key=True,
+            ),
             Column("data", String),
         )
 
@@ -428,7 +440,12 @@ class InsertTest(_InsertTestBase, fixtures.TablesTest, AssertsCompiledSQL):
         t1 = Table(
             "t",
             m,
-            Column("id", Integer, Sequence("id_seq"), primary_key=True),
+            Column(
+                "id",
+                Integer,
+                normalize_sequence(config, Sequence("id_seq")),
+                primary_key=True,
+            ),
             Column("data", String),
         )
 
@@ -453,7 +470,9 @@ class InsertTest(_InsertTestBase, fixtures.TablesTest, AssertsCompiledSQL):
             "t",
             m,
             Column("id", Integer, primary_key=True),
-            Column("counter", Sequence("counter_seq")),
+            Column(
+                "counter", normalize_sequence(config, Sequence("counter_seq"))
+            ),
             Column("data", String),
         )
 
@@ -469,13 +488,77 @@ class InsertTest(_InsertTestBase, fixtures.TablesTest, AssertsCompiledSQL):
             dialect=postgresql.dialect(),
         )
 
+    def test_heterogeneous_multi_values(self):
+        """for #6047, originally I thought we'd take any insert().values()
+        and be able to convert it to a "many" style execution that we can
+        cache.
+
+        however, this test shows that we cannot, at least not in the
+        general case, because SQL expressions are not guaranteed to be in
+        the same position each time, therefore each ``VALUES`` clause is not
+        of the same structure.
+
+        """
+
+        m = MetaData()
+
+        t1 = Table(
+            "t",
+            m,
+            Column("id", Integer, primary_key=True),
+            Column("x", Integer),
+            Column("y", Integer),
+            Column("z", Integer),
+        )
+
+        stmt = t1.insert().values(
+            [
+                {"x": 1, "y": func.sum(1, 2), "z": 2},
+                {"x": func.sum(1, 2), "y": 2, "z": 3},
+                {"x": func.sum(1, 2), "y": 2, "z": func.foo(10)},
+            ]
+        )
+
+        # SQL expressions in the params at arbitrary locations means
+        # we have to scan them at compile time, and the shape of the bound
+        # parameters is not predictable.   so for #6047 where I originally
+        # thought all of values() could be rewritten, this makes it not
+        # really worth it.
+        self.assert_compile(
+            stmt,
+            "INSERT INTO t (x, y, z) VALUES "
+            "(%(x_m0)s, sum(%(sum_1)s, %(sum_2)s), %(z_m0)s), "
+            "(sum(%(sum_3)s, %(sum_4)s), %(y_m1)s, %(z_m1)s), "
+            "(sum(%(sum_5)s, %(sum_6)s), %(y_m2)s, foo(%(foo_1)s))",
+            checkparams={
+                "x_m0": 1,
+                "sum_1": 1,
+                "sum_2": 2,
+                "z_m0": 2,
+                "sum_3": 1,
+                "sum_4": 2,
+                "y_m1": 2,
+                "z_m1": 3,
+                "sum_5": 1,
+                "sum_6": 2,
+                "y_m2": 2,
+                "foo_1": 10,
+            },
+            dialect=postgresql.dialect(),
+        )
+
     def test_insert_seq_pk_multi_values_seq_not_supported(self):
         m = MetaData()
 
         t1 = Table(
             "t",
             m,
-            Column("id", Integer, Sequence("id_seq"), primary_key=True),
+            Column(
+                "id",
+                Integer,
+                normalize_sequence(config, Sequence("id_seq")),
+                primary_key=True,
+            ),
             Column("data", String),
         )
 
@@ -1525,14 +1608,12 @@ class MultirowTest(_InsertTestBase, fixtures.TablesTest, AssertsCompiledSQL):
         stmt = table.insert().values(values)
 
         eq_(
-            dict(
-                [
-                    (k, v.type._type_affinity)
-                    for (k, v) in stmt.compile(
-                        dialect=postgresql.dialect()
-                    ).binds.items()
-                ]
-            ),
+            {
+                k: v.type._type_affinity
+                for (k, v) in stmt.compile(
+                    dialect=postgresql.dialect()
+                ).binds.items()
+            },
             {
                 "foo": Integer,
                 "data_m2": String,
@@ -1673,14 +1754,12 @@ class MultirowTest(_InsertTestBase, fixtures.TablesTest, AssertsCompiledSQL):
 
         stmt = table.insert().values(values)
         eq_(
-            dict(
-                [
-                    (k, v.type._type_affinity)
-                    for (k, v) in stmt.compile(
-                        dialect=postgresql.dialect()
-                    ).binds.items()
-                ]
-            ),
+            {
+                k: v.type._type_affinity
+                for (k, v) in stmt.compile(
+                    dialect=postgresql.dialect()
+                ).binds.items()
+            },
             {
                 "foo": Integer,
                 "data_m2": String,

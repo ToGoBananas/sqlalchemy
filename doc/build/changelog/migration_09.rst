@@ -60,8 +60,7 @@ Using a :class:`_query.Query` in conjunction with a composite attribute now retu
 type maintained by that composite, rather than being broken out into individual
 columns.   Using the mapping setup at :ref:`mapper_composite`::
 
-    >>> session.query(Vertex.start, Vertex.end).\
-    ...     filter(Vertex.start == Point(3, 4)).all()
+    >>> session.query(Vertex.start, Vertex.end).filter(Vertex.start == Point(3, 4)).all()
     [(Point(x=3, y=4), Point(x=5, y=6))]
 
 This change is backwards-incompatible with code that expects the individual attribute
@@ -69,8 +68,9 @@ to be expanded into individual columns.  To get that behavior, use the ``.clause
 accessor::
 
 
-    >>> session.query(Vertex.start.clauses, Vertex.end.clauses).\
-    ...     filter(Vertex.start == Point(3, 4)).all()
+    >>> session.query(Vertex.start.clauses, Vertex.end.clauses).filter(
+    ...     Vertex.start == Point(3, 4)
+    ... ).all()
     [(3, 4, 5, 6)]
 
 .. seealso::
@@ -93,11 +93,15 @@ Consider the following example against the usual ``User`` mapping::
 
     select_stmt = select([User]).where(User.id == 7).alias()
 
-    q = session.query(User).\
-               join(select_stmt, User.id == select_stmt.c.id).\
-               filter(User.name == 'ed')
+    q = (
+        session.query(User)
+        .join(select_stmt, User.id == select_stmt.c.id)
+        .filter(User.name == "ed")
+    )
 
-The above statement predictably renders SQL like the following::
+The above statement predictably renders SQL like the following:
+
+.. sourcecode:: sql
 
     SELECT "user".id AS user_id, "user".name AS user_name
     FROM "user" JOIN (SELECT "user".id AS id, "user".name AS name
@@ -109,14 +113,18 @@ If we wanted to reverse the order of the left and right elements of the
 JOIN, the documentation would lead us to believe we could use
 :meth:`_query.Query.select_from` to do so::
 
-    q = session.query(User).\
-            select_from(select_stmt).\
-            join(User, User.id == select_stmt.c.id).\
-            filter(User.name == 'ed')
+    q = (
+        session.query(User)
+        .select_from(select_stmt)
+        .join(User, User.id == select_stmt.c.id)
+        .filter(User.name == "ed")
+    )
 
 However, in version 0.8 and earlier, the above use of :meth:`_query.Query.select_from`
 would apply the ``select_stmt`` to **replace** the ``User`` entity, as it
-selects from the ``user`` table which is compatible with ``User``::
+selects from the ``user`` table which is compatible with ``User``:
+
+.. sourcecode:: sql
 
     -- SQLAlchemy 0.8 and earlier...
     SELECT anon_1.id AS anon_1_id, anon_1.name AS anon_1_name
@@ -137,10 +145,12 @@ to selecting from a customized :func:`.aliased` construct::
     select_stmt = select([User]).where(User.id == 7)
     user_from_stmt = aliased(User, select_stmt.alias())
 
-    q = session.query(user_from_stmt).filter(user_from_stmt.name == 'ed')
+    q = session.query(user_from_stmt).filter(user_from_stmt.name == "ed")
 
 So with SQLAlchemy 0.9, our query that selects from ``select_stmt`` produces
-the SQL we expect::
+the SQL we expect:
+
+.. sourcecode:: sql
 
     -- SQLAlchemy 0.9
     SELECT "user".id AS user_id, "user".name AS user_name
@@ -180,16 +190,19 @@ The change is illustrated as follows::
 
     Base = declarative_base()
 
+
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
         id = Column(Integer, primary_key=True)
+
 
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
 
         id = Column(Integer, primary_key=True)
-        a_id = Column(Integer, ForeignKey('a.id'))
+        a_id = Column(Integer, ForeignKey("a.id"))
         a = relationship("A", backref=backref("bs", viewonly=True))
+
 
     e = create_engine("sqlite://")
     Base.metadata.create_all(e)
@@ -229,16 +242,17 @@ the "association" row being present or not when the comparison is against
 Consider this mapping::
 
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
 
         id = Column(Integer, primary_key=True)
 
-        b_id = Column(Integer, ForeignKey('b.id'), primary_key=True)
+        b_id = Column(Integer, ForeignKey("b.id"), primary_key=True)
         b = relationship("B")
         b_value = association_proxy("b", "value")
 
+
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
         id = Column(Integer, primary_key=True)
         value = Column(String)
 
@@ -246,7 +260,9 @@ Up through 0.8, a query like the following::
 
     s.query(A).filter(A.b_value == None).all()
 
-would produce::
+would produce:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a
@@ -254,7 +270,9 @@ would produce::
     FROM b
     WHERE b.id = a.b_id AND b.value IS NULL)
 
-In 0.9, it now produces::
+In 0.9, it now produces:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a
@@ -268,7 +286,9 @@ results versus prior versions, for a system that uses this type of
 comparison where some parent rows have no association row.
 
 More critically, a correct expression is emitted for ``A.b_value != None``.
-In 0.8, this would return ``True`` for ``A`` rows that had no ``b``::
+In 0.8, this would return ``True`` for ``A`` rows that had no ``b``:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a
@@ -278,7 +298,9 @@ In 0.8, this would return ``True`` for ``A`` rows that had no ``b``::
 
 Now in 0.9, the check has been reworked so that it ensures
 the A.b_id row is present, in addition to ``B.value`` being
-non-NULL::
+non-NULL:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a
@@ -293,7 +315,9 @@ being present or not::
 
     s.query(A).filter(A.b_value.has()).all()
 
-output::
+output:
+
+.. sourcecode:: sql
 
     SELECT a.id AS a_id, a.b_id AS a_b_id
     FROM a
@@ -323,20 +347,23 @@ proxied value.  E.g.::
 
     Base = declarative_base()
 
+
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
 
         id = Column(Integer, primary_key=True)
         b = relationship("B", uselist=False)
 
         bname = association_proxy("b", "name")
 
+
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
 
         id = Column(Integer, primary_key=True)
-        a_id = Column(Integer, ForeignKey('a.id'))
+        a_id = Column(Integer, ForeignKey("a.id"))
         name = Column(String)
+
 
     a1 = A()
 
@@ -370,17 +397,19 @@ This is a small change demonstrated as follows::
 
     Base = declarative_base()
 
+
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
         id = Column(Integer, primary_key=True)
         data = Column(String)
+
 
     e = create_engine("sqlite://", echo=True)
     Base.metadata.create_all(e)
 
     sess = Session(e)
 
-    a1 = A(data='a1')
+    a1 = A(data="a1")
     sess.add(a1)
     sess.commit()  # a1 is now expired
 
@@ -388,11 +417,23 @@ This is a small change demonstrated as follows::
     assert inspect(a1).attrs.data.history == (None, None, None)
 
     # in 0.8, this would fail to load the unloaded state.
-    assert attributes.get_history(a1, 'data') == ((), ['a1',], ())
+    assert attributes.get_history(a1, "data") == (
+        (),
+        [
+            "a1",
+        ],
+        (),
+    )
 
     # load_history() is now equivalent to get_history() with
     # passive=PASSIVE_OFF ^ INIT_OK
-    assert inspect(a1).attrs.data.load_history() == ((), ['a1',], ())
+    assert inspect(a1).attrs.data.load_history() == (
+        (),
+        [
+            "a1",
+        ],
+        (),
+    )
 
 :ticket:`2787`
 
@@ -419,8 +460,9 @@ arguments which were silently ignored::
 
 This was a very old bug for which a deprecation warning was added to the
 0.8 series, but because nobody ever runs Python with the "-W" flag, it
-was mostly never seen::
+was mostly never seen:
 
+.. sourcecode:: text
 
     $ python -W always::DeprecationWarning ~/dev/sqlalchemy/test.py
     /Users/classic/dev/sqlalchemy/test.py:5: SADeprecationWarning: Passing arguments to
@@ -452,14 +494,10 @@ use the :meth:`.TypeEngine.with_variant` method::
     from sqlalchemy.dialects.mysql import INTEGER
 
     d = Date().with_variant(
-            DATE(storage_format="%(day)02d.%(month)02d.%(year)04d"),
-            "sqlite"
-        )
+        DATE(storage_format="%(day)02d.%(month)02d.%(year)04d"), "sqlite"
+    )
 
-    i = Integer().with_variant(
-            INTEGER(display_width=5),
-            "mysql"
-        )
+    i = Integer().with_variant(INTEGER(display_width=5), "mysql")
 
 :meth:`.TypeEngine.with_variant` isn't new, it was added in SQLAlchemy
 0.7.2.  So code that is running on the 0.8 series can be corrected to use
@@ -525,7 +563,9 @@ in that it escaped spaces as plus signs.  The stringification of a URL
 now only encodes ":", "@", or "/" and nothing else, and is now applied to both the
 ``username`` and ``password`` fields (previously it only applied to the
 password).   On parsing, encoded characters are converted, but plus signs and
-spaces are passed through as is::
+spaces are passed through as is:
+
+.. sourcecode:: text
 
     # password: "pass word + other:words"
     dbtype://user:pass word + other%3Awords@host/dbname
@@ -549,16 +589,20 @@ The precedence rules for COLLATE have been changed
 
 Previously, an expression like the following::
 
-    print((column('x') == 'somevalue').collate("en_EN"))
+    print((column("x") == "somevalue").collate("en_EN"))
 
-would produce an expression like this::
+would produce an expression like this:
+
+.. sourcecode:: sql
 
     -- 0.8 behavior
     (x = :x_1) COLLATE en_EN
 
 The above is misunderstood by MSSQL and is generally not the syntax suggested
 for any database.  The expression will now produce the syntax illustrated
-by that of most database documentation::
+by that of most database documentation:
+
+.. sourcecode:: sql
 
     -- 0.9 behavior
     x = :x_1 COLLATE en_EN
@@ -567,14 +611,18 @@ The potentially backwards incompatible change arises if the
 :meth:`.ColumnOperators.collate` operator is being applied to the right-hand
 column, as follows::
 
-    print(column('x') == literal('somevalue').collate("en_EN"))
+    print(column("x") == literal("somevalue").collate("en_EN"))
 
-In 0.8, this produces::
+In 0.8, this produces:
+
+.. sourcecode:: sql
 
     x = :param_1 COLLATE en_EN
 
 However in 0.9, will now produce the more accurate, but probably not what you
-want, form of::
+want, form of:
+
+.. sourcecode:: sql
 
     x = (:param_1 COLLATE en_EN)
 
@@ -584,11 +632,11 @@ The :meth:`.ColumnOperators.collate` operator now works more appropriately withi
 generated::
 
     >>> # 0.8
-    >>> print(column('x').collate('en_EN').desc())
+    >>> print(column("x").collate("en_EN").desc())
     (x COLLATE en_EN) DESC
 
     >>> # 0.9
-    >>> print(column('x').collate('en_EN').desc())
+    >>> print(column("x").collate("en_EN").desc())
     x COLLATE en_EN DESC
 
 :ticket:`2879`
@@ -604,7 +652,7 @@ The :class:`_postgresql.ENUM` type will now apply escaping to single quote
 signs within the enumerated values::
 
     >>> from sqlalchemy.dialects import postgresql
-    >>> type = postgresql.ENUM('one', 'two', "three's", name="myenum")
+    >>> type = postgresql.ENUM("one", "two", "three's", name="myenum")
     >>> from sqlalchemy.dialects.postgresql import base
     >>> print(base.CreateEnumType(type).compile(dialect=postgresql.dialect()))
     CREATE TYPE myenum AS ENUM ('one','two','three''s')
@@ -632,6 +680,7 @@ from all locations in which it had been established::
     def my_before_insert(mapper, connection, target):
         """listen for before_insert"""
         # ...
+
 
     event.remove(MyClass, "before_insert", my_before_insert)
 
@@ -689,13 +738,9 @@ Setting an option on path that is based on a subclass requires that all
 links in the path be spelled out as class bound attributes, since the
 :meth:`.PropComparator.of_type` method needs to be called::
 
-    session.query(Company).\
-        options(
-            subqueryload_all(
-                Company.employees.of_type(Engineer),
-                Engineer.machines
-            )
-        )
+    session.query(Company).options(
+        subqueryload_all(Company.employees.of_type(Engineer), Engineer.machines)
+    )
 
 **New Way**
 
@@ -703,12 +748,9 @@ Only those elements in the path that actually need :meth:`.PropComparator.of_typ
 need to be set as a class-bound attribute, string-based names can be resumed
 afterwards::
 
-    session.query(Company).\
-        options(
-            subqueryload(Company.employees.of_type(Engineer)).
-            subqueryload("machines")
-            )
-        )
+    session.query(Company).options(
+        subqueryload(Company.employees.of_type(Engineer)).subqueryload("machines")
+    )
 
 **Old Way**
 
@@ -725,7 +767,6 @@ path where the existing loader style should be unchanged.  More verbose
 but the intent is clearer::
 
     query(User).options(defaultload("orders").defaultload("items").subqueryload("keywords"))
-
 
 The dotted style can still be taken advantage of, particularly in the case
 of skipping over several path elements::
@@ -791,7 +832,6 @@ others::
     # undefer all Address columns
     query(User).options(defaultload(User.addresses).undefer("*"))
 
-
 :ticket:`1418`
 
 
@@ -806,17 +846,16 @@ The :func:`_expression.text` construct gains new methods:
   to be set flexibly::
 
       # setup values
-      stmt = text("SELECT id, name FROM user "
-            "WHERE name=:name AND timestamp=:timestamp").\
-            bindparams(name="ed", timestamp=datetime(2012, 11, 10, 15, 12, 35))
+      stmt = text(
+          "SELECT id, name FROM user WHERE name=:name AND timestamp=:timestamp"
+      ).bindparams(name="ed", timestamp=datetime(2012, 11, 10, 15, 12, 35))
 
       # setup types and/or values
-      stmt = text("SELECT id, name FROM user "
-            "WHERE name=:name AND timestamp=:timestamp").\
-            bindparams(
-                bindparam("name", value="ed"),
-                bindparam("timestamp", type_=DateTime()
-            ).bindparam(timestamp=datetime(2012, 11, 10, 15, 12, 35))
+      stmt = (
+          text("SELECT id, name FROM user WHERE name=:name AND timestamp=:timestamp")
+          .bindparams(bindparam("name", value="ed"), bindparam("timestamp", type_=DateTime()))
+          .bindparam(timestamp=datetime(2012, 11, 10, 15, 12, 35))
+      )
 
 * :meth:`_expression.TextClause.columns` supersedes the ``typemap`` option
   of :func:`_expression.text`, returning a new construct :class:`.TextAsFrom`::
@@ -826,7 +865,8 @@ The :func:`_expression.text` construct gains new methods:
       stmt = stmt.alias()
 
       stmt = select([addresses]).select_from(
-                    addresses.join(stmt), addresses.c.user_id == stmt.c.id)
+          addresses.join(stmt), addresses.c.user_id == stmt.c.id
+      )
 
 
       # or into a cte():
@@ -834,7 +874,8 @@ The :func:`_expression.text` construct gains new methods:
       stmt = stmt.cte("x")
 
       stmt = select([addresses]).select_from(
-                    addresses.join(stmt), addresses.c.user_id == stmt.c.id)
+          addresses.join(stmt), addresses.c.user_id == stmt.c.id
+      )
 
 :ticket:`2877`
 
@@ -850,9 +891,9 @@ compatible construct can be passed to the new method :meth:`_expression.Insert.f
 where it will be used to render an ``INSERT .. SELECT`` construct::
 
     >>> from sqlalchemy.sql import table, column
-    >>> t1 = table('t1', column('a'), column('b'))
-    >>> t2 = table('t2', column('x'), column('y'))
-    >>> print(t1.insert().from_select(['a', 'b'], t2.select().where(t2.c.y == 5)))
+    >>> t1 = table("t1", column("a"), column("b"))
+    >>> t2 = table("t2", column("x"), column("y"))
+    >>> print(t1.insert().from_select(["a", "b"], t2.select().where(t2.c.y == 5)))
     INSERT INTO t1 (a, b) SELECT t2.x, t2.y
     FROM t2
     WHERE t2.y = :y_1
@@ -861,10 +902,12 @@ The construct is smart enough to also accommodate ORM objects such as classes
 and :class:`_query.Query` objects::
 
     s = Session()
-    q = s.query(User.id, User.name).filter_by(name='ed')
+    q = s.query(User.id, User.name).filter_by(name="ed")
     ins = insert(Address).from_select((Address.id, Address.email_address), q)
 
-rendering::
+rendering:
+
+.. sourcecode:: sql
 
     INSERT INTO addresses (id, email_address)
     SELECT users.id AS users_id, users.name AS users_name
@@ -887,7 +930,9 @@ string codes::
 
     stmt = select([table]).with_for_update(read=True, nowait=True, of=table)
 
-On Posgtresql the above statement might render like::
+On Posgtresql the above statement might render like:
+
+.. sourcecode:: sql
 
     SELECT table.a, table.b FROM table FOR SHARE OF table NOWAIT
 
@@ -920,9 +965,10 @@ for ``.decimal_return_scale`` if it is not otherwise specified.   If both
     from sqlalchemy.dialects.mysql import DOUBLE
     import decimal
 
-    data = Table('data', metadata,
-        Column('double_value',
-                    mysql.DOUBLE(decimal_return_scale=12, asdecimal=True))
+    data = Table(
+        "data",
+        metadata,
+        Column("double_value", mysql.DOUBLE(decimal_return_scale=12, asdecimal=True)),
     )
 
     conn.execute(
@@ -937,7 +983,6 @@ for ``.decimal_return_scale`` if it is not otherwise specified.   If both
     # now we get 12, as requested, as MySQL can support this
     # much precision for DOUBLE
     assert result == decimal.Decimal("45.768392065789")
-
 
 :ticket:`2867`
 
@@ -1004,8 +1049,9 @@ from a backref::
 
     Base = declarative_base()
 
+
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
 
         id = Column(Integer, primary_key=True)
         bs = relationship("B", backref="a")
@@ -1015,20 +1061,21 @@ from a backref::
             print("A.bs validator")
             return item
 
+
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
 
         id = Column(Integer, primary_key=True)
-        a_id = Column(Integer, ForeignKey('a.id'))
+        a_id = Column(Integer, ForeignKey("a.id"))
 
         @validates("a", include_backrefs=False)
         def validate_a(self, key, item):
             print("B.a validator")
             return item
 
+
     a1 = A()
     a1.bs.append(B())  # prints only "A.bs validator"
-
 
 :ticket:`1535`
 
@@ -1121,11 +1168,15 @@ Many JOIN and LEFT OUTER JOIN expressions will no longer be wrapped in (SELECT *
 
 For many years, the SQLAlchemy ORM has been held back from being able to nest
 a JOIN inside the right side of an existing JOIN (typically a LEFT OUTER JOIN,
-as INNER JOINs could always be flattened)::
+as INNER JOINs could always be flattened):
+
+.. sourcecode:: sql
 
     SELECT a.*, b.*, c.* FROM a LEFT OUTER JOIN (b JOIN c ON b.id = c.id) ON a.id
 
-This was due to the fact that SQLite up until version **3.7.16** cannot parse a statement of the above format::
+This was due to the fact that SQLite up until version **3.7.16** cannot parse a statement of the above format:
+
+.. sourcecode:: text
 
     SQLite version 3.7.15.2 2013-01-09 11:53:05
     Enter ".help" for instructions
@@ -1138,7 +1189,9 @@ This was due to the fact that SQLite up until version **3.7.16** cannot parse a 
 
 Right-outer-joins are of course another way to work around right-side
 parenthesization; this would be significantly complicated and visually unpleasant
-to implement, but fortunately SQLite doesn't support RIGHT OUTER JOIN either :)::
+to implement, but fortunately SQLite doesn't support RIGHT OUTER JOIN either :):
+
+.. sourcecode:: sql
 
     sqlite> select a.id, b.id, c.id from b join c on b.id=c.id
        ...> right outer join a on b.id=a.id;
@@ -1149,7 +1202,9 @@ but today it seems clear every database tested except SQLite now supports it
 (Oracle 8, a very old database, doesn't support the JOIN keyword at all,
 but SQLAlchemy has always had a simple rewriting scheme in place for Oracle's syntax).
 To make matters worse, SQLAlchemy's usual workaround of applying a
-SELECT often degrades performance on platforms like PostgreSQL and MySQL::
+SELECT often degrades performance on platforms like PostgreSQL and MySQL:
+
+.. sourcecode:: sql
 
     SELECT a.*, anon_1.* FROM a LEFT OUTER JOIN (
                     SELECT b.id AS b_id, c.id AS c_id
@@ -1168,7 +1223,9 @@ where special criteria is present in the ON clause. Consider an eager load join 
     session.query(Order).outerjoin(Order.items)
 
 Assuming a many-to-many from ``Order`` to ``Item`` which actually refers to a subclass
-like ``Subitem``, the SQL for the above would look like::
+like ``Subitem``, the SQL for the above would look like:
+
+.. sourcecode:: sql
 
     SELECT order.id, order.name
     FROM order LEFT OUTER JOIN order_item ON order.id = order_item.order_id
@@ -1186,7 +1243,9 @@ JOIN (which currently is only SQLite - if other backends have this issue please
 let us know!).
 
 So a regular ``query(Parent).join(Subclass)`` will now usually produce a simpler
-expression::
+expression:
+
+.. sourcecode:: sql
 
     SELECT parent.id AS parent_id
     FROM parent JOIN (
@@ -1194,7 +1253,9 @@ expression::
             ON base_table.id = subclass_table.id) ON parent.id = base_table.parent_id
 
 Joined eager loads like ``query(Parent).options(joinedload(Parent.subclasses))``
-will alias the individual tables instead of wrapping in an ``ANON_1``::
+will alias the individual tables instead of wrapping in an ``ANON_1``:
+
+.. sourcecode:: sql
 
     SELECT parent.*, base_table_1.*, subclass_table_1.* FROM parent
         LEFT OUTER JOIN (
@@ -1202,7 +1263,9 @@ will alias the individual tables instead of wrapping in an ``ANON_1``::
             ON base_table_1.id = subclass_table_1.id)
             ON parent.id = base_table_1.parent_id
 
-Many-to-many joins and eagerloads will right nest the "secondary" and "right" tables::
+Many-to-many joins and eagerloads will right nest the "secondary" and "right" tables:
+
+.. sourcecode:: sql
 
     SELECT order.id, order.name
     FROM order LEFT OUTER JOIN
@@ -1215,7 +1278,9 @@ are candidates for "join rewriting", which is the process of rewriting all those
 joins into nested SELECT statements, while maintaining the identical labeling used by
 the :class:`_expression.Select`.  So SQLite, the one database that won't support this very
 common SQL syntax even in 2013, shoulders the extra complexity itself,
-with the above queries rewritten as::
+with the above queries rewritten as:
+
+.. sourcecode:: sql
 
     -- sqlite only!
     SELECT parent.id AS parent_id
@@ -1262,16 +1327,13 @@ without any subqueries generated::
 
     employee_alias = with_polymorphic(Person, [Engineer, Manager], flat=True)
 
-    session.query(Company).join(
-                        Company.employees.of_type(employee_alias)
-                    ).filter(
-                        or_(
-                            Engineer.primary_language == 'python',
-                            Manager.manager_name == 'dilbert'
-                        )
-                    )
+    session.query(Company).join(Company.employees.of_type(employee_alias)).filter(
+        or_(Engineer.primary_language == "python", Manager.manager_name == "dilbert")
+    )
 
-Generates (everywhere except SQLite)::
+Generates (everywhere except SQLite):
+
+.. sourcecode:: sql
 
     SELECT companies.company_id AS companies_company_id, companies.name AS companies_name
     FROM companies JOIN (
@@ -1295,23 +1357,31 @@ on the right side.
 
 Normally, a joined eager load chain like the following::
 
-    query(User).options(joinedload("orders", innerjoin=False).joinedload("items", innerjoin=True))
+    query(User).options(
+        joinedload("orders", innerjoin=False).joinedload("items", innerjoin=True)
+    )
 
 Would not produce an inner join; because of the LEFT OUTER JOIN from user->order,
 joined eager loading could not use an INNER join from order->items without changing
 the user rows that are returned, and would instead ignore the "chained" ``innerjoin=True``
-directive.  How 0.9.0 should have delivered this would be that instead of::
+directive.  How 0.9.0 should have delivered this would be that instead of:
+
+.. sourcecode:: sql
 
     FROM users LEFT OUTER JOIN orders ON <onclause> LEFT OUTER JOIN items ON <onclause>
 
-the new "right-nested joins are OK" logic would kick in, and we'd get::
+the new "right-nested joins are OK" logic would kick in, and we'd get:
+
+.. sourcecode:: sql
 
     FROM users LEFT OUTER JOIN (orders JOIN items ON <onclause>) ON <onclause>
 
 Since we missed the boat on that, to avoid further regressions we've added the above
 functionality by specifying the string ``"nested"`` to :paramref:`_orm.joinedload.innerjoin`::
 
-    query(User).options(joinedload("orders", innerjoin=False).joinedload("items", innerjoin="nested"))
+    query(User).options(
+        joinedload("orders", innerjoin=False).joinedload("items", innerjoin="nested")
+    )
 
 This feature is new in 0.9.4.
 
@@ -1351,7 +1421,9 @@ DISTINCT keyword will be applied to the innermost SELECT when the join is
 targeting columns that do not comprise the primary key, as in when loading
 along a many to one.
 
-That is, when subquery loading on a many-to-one from A->B::
+That is, when subquery loading on a many-to-one from A->B:
+
+.. sourcecode:: sql
 
     SELECT b.id AS b_id, b.name AS b_name, anon_1.b_id AS a_b_id
     FROM (SELECT DISTINCT a_b_id FROM a) AS anon_1
@@ -1406,16 +1478,18 @@ replacement operation, which in turn should cause the item to be removed from a
 previous collection::
 
     class Parent(Base):
-        __tablename__ = 'parent'
+        __tablename__ = "parent"
 
         id = Column(Integer, primary_key=True)
         children = relationship("Child", backref="parent")
 
+
     class Child(Base):
-        __tablename__ = 'child'
+        __tablename__ = "child"
 
         id = Column(Integer, primary_key=True)
-        parent_id = Column(ForeignKey('parent.id'))
+        parent_id = Column(ForeignKey("parent.id"))
+
 
     p1 = Parent()
     p2 = Parent()
@@ -1520,7 +1594,7 @@ Starting with a table such as this::
 
     from sqlalchemy import Table, Boolean, Integer, Column, MetaData
 
-    t1 = Table('t', MetaData(), Column('x', Boolean()), Column('y', Integer))
+    t1 = Table("t", MetaData(), Column("x", Boolean()), Column("y", Integer))
 
 A select construct will now render the boolean column as a binary expression
 on backends that don't feature ``true``/``false`` constant behavior::
@@ -1535,8 +1609,9 @@ The :func:`.and_` and :func:`.or_` constructs will now exhibit quasi
 "short circuit" behavior, that is truncating a rendered expression, when a
 :func:`.true` or :func:`.false` constant is present::
 
-    >>> print(select([t1]).where(and_(t1.c.y > 5, false())).compile(
-    ...     dialect=postgresql.dialect()))
+    >>> print(
+    ...     select([t1]).where(and_(t1.c.y > 5, false())).compile(dialect=postgresql.dialect())
+    ... )
     SELECT t.x, t.y FROM t WHERE false
 
 :func:`.true` can be used as the base to build up an expression::
@@ -1549,8 +1624,7 @@ The :func:`.and_` and :func:`.or_` constructs will now exhibit quasi
 The boolean constants :func:`.true` and :func:`.false` themselves render as
 ``0 = 1`` and ``1 = 1`` for a backend with no boolean constants::
 
-    >>> print(select([t1]).where(and_(t1.c.y > 5, false())).compile(
-    ...     dialect=mysql.dialect()))
+    >>> print(select([t1]).where(and_(t1.c.y > 5, false())).compile(dialect=mysql.dialect()))
     SELECT t.x, t.y FROM t WHERE 0 = 1
 
 Interpretation of ``None``, while not particularly valid SQL, is at least
@@ -1581,19 +1655,23 @@ E.g. an example like::
 
     from sqlalchemy.sql import table, column, select, func
 
-    t = table('t', column('c1'), column('c2'))
+    t = table("t", column("c1"), column("c2"))
     expr = (func.foo(t.c.c1) + t.c.c2).label("expr")
 
     stmt = select([expr]).order_by(expr)
 
     print(stmt)
 
-Prior to 0.9 would render as::
+Prior to 0.9 would render as:
+
+.. sourcecode:: sql
 
     SELECT foo(t.c1) + t.c2 AS expr
     FROM t ORDER BY foo(t.c1) + t.c2
 
-And now renders as::
+And now renders as:
+
+.. sourcecode:: sql
 
     SELECT foo(t.c1) + t.c2 AS expr
     FROM t ORDER BY expr
@@ -1620,16 +1698,16 @@ The ``__eq__()`` method now compares both sides as a tuple and also
 an ``__lt__()`` method has been added::
 
     users.insert().execute(
-            dict(user_id=1, user_name='foo'),
-            dict(user_id=2, user_name='bar'),
-            dict(user_id=3, user_name='def'),
-        )
+        dict(user_id=1, user_name="foo"),
+        dict(user_id=2, user_name="bar"),
+        dict(user_id=3, user_name="def"),
+    )
 
     rows = users.select().order_by(users.c.user_name).execute().fetchall()
 
-    eq_(rows, [(2, 'bar'), (3, 'def'), (1, 'foo')])
+    eq_(rows, [(2, "bar"), (3, "def"), (1, "foo")])
 
-    eq_(sorted(rows), [(1, 'foo'), (2, 'bar'), (3, 'def')])
+    eq_(sorted(rows), [(1, "foo"), (2, "bar"), (3, "def")])
 
 :ticket:`2848`
 
@@ -1667,7 +1745,7 @@ Above, ``bp`` remains unchanged, but the ``String`` type will be used when
 the statement is executed, which we can see by examining the ``binds`` dictionary::
 
     >>> compiled = stmt.compile()
-    >>> compiled.binds['some_col'].type
+    >>> compiled.binds["some_col"].type
     String
 
 The feature allows custom types to take their expected effect within INSERT/UPDATE
@@ -1727,10 +1805,10 @@ Scenarios which now work correctly include:
 
     >>> from sqlalchemy import Table, MetaData, Column, Integer, ForeignKey
     >>> metadata = MetaData()
-    >>> t2 = Table('t2', metadata, Column('t1id', ForeignKey('t1.id')))
+    >>> t2 = Table("t2", metadata, Column("t1id", ForeignKey("t1.id")))
     >>> t2.c.t1id.type
     NullType()
-    >>> t1 = Table('t1', metadata, Column('id', Integer, primary_key=True))
+    >>> t1 = Table("t1", metadata, Column("id", Integer, primary_key=True))
     >>> t2.c.t1id.type
     Integer()
 
@@ -1738,16 +1816,23 @@ Scenarios which now work correctly include:
 
     >>> from sqlalchemy import Table, MetaData, Column, Integer, ForeignKeyConstraint
     >>> metadata = MetaData()
-    >>> t2 = Table('t2', metadata,
-    ...     Column('t1a'), Column('t1b'),
-    ...     ForeignKeyConstraint(['t1a', 't1b'], ['t1.a', 't1.b']))
+    >>> t2 = Table(
+    ...     "t2",
+    ...     metadata,
+    ...     Column("t1a"),
+    ...     Column("t1b"),
+    ...     ForeignKeyConstraint(["t1a", "t1b"], ["t1.a", "t1.b"]),
+    ... )
     >>> t2.c.t1a.type
     NullType()
     >>> t2.c.t1b.type
     NullType()
-    >>> t1 = Table('t1', metadata,
-    ...     Column('a', Integer, primary_key=True),
-    ...     Column('b', Integer, primary_key=True))
+    >>> t1 = Table(
+    ...     "t1",
+    ...     metadata,
+    ...     Column("a", Integer, primary_key=True),
+    ...     Column("b", Integer, primary_key=True),
+    ... )
     >>> t2.c.t1a.type
     Integer()
     >>> t2.c.t1b.type
@@ -1758,13 +1843,13 @@ Scenarios which now work correctly include:
 
     >>> from sqlalchemy import Table, MetaData, Column, Integer, ForeignKey
     >>> metadata = MetaData()
-    >>> t2 = Table('t2', metadata, Column('t1id', ForeignKey('t1.id')))
-    >>> t3 = Table('t3', metadata, Column('t2t1id', ForeignKey('t2.t1id')))
+    >>> t2 = Table("t2", metadata, Column("t1id", ForeignKey("t1.id")))
+    >>> t3 = Table("t3", metadata, Column("t2t1id", ForeignKey("t2.t1id")))
     >>> t2.c.t1id.type
     NullType()
     >>> t3.c.t2t1id.type
     NullType()
-    >>> t1 = Table('t1', metadata, Column('id', Integer, primary_key=True))
+    >>> t1 = Table("t1", metadata, Column("id", Integer, primary_key=True))
     >>> t2.c.t1id.type
     Integer()
     >>> t3.c.t2t1id.type

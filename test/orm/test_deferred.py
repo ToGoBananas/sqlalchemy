@@ -6,6 +6,7 @@ from sqlalchemy import null
 from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
+from sqlalchemy import union_all
 from sqlalchemy import util
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import attributes
@@ -162,8 +163,9 @@ class DeferredTest(AssertsCompiledSQL, _fixtures.FixtureTest):
             )
             self.assert_compile(
                 select(Order).options(undefer_group("g1")),
-                "SELECT orders.isopen, orders.description, orders.id, "
-                "orders.user_id, orders.address_id FROM orders",
+                "SELECT orders.id, orders.user_id, orders.address_id, "
+                "orders.isopen, orders.description "
+                "FROM orders",
             )
         else:
             self.assert_compile(
@@ -583,11 +585,11 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
             go,
             [
                 (
-                    "SELECT orders.user_id AS orders_user_id, "
+                    "SELECT orders.id AS orders_id, "
+                    "orders.user_id AS orders_user_id, "
+                    "orders.address_id AS orders_address_id, "
                     "orders.description AS orders_description, "
-                    "orders.isopen AS orders_isopen, "
-                    "orders.id AS orders_id, "
-                    "orders.address_id AS orders_address_id "
+                    "orders.isopen AS orders_isopen "
                     "FROM orders ORDER BY orders.id",
                     {},
                 )
@@ -628,11 +630,12 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
             go,
             [
                 (
-                    "SELECT orders.user_id AS orders_user_id, "
-                    "orders.description AS orders_description, "
-                    "orders.isopen AS orders_isopen, "
+                    "SELECT "
                     "orders.id AS orders_id, "
-                    "orders.address_id AS orders_address_id "
+                    "orders.user_id AS orders_user_id, "
+                    "orders.address_id AS orders_address_id, "
+                    "orders.description AS orders_description, "
+                    "orders.isopen AS orders_isopen "
                     "FROM orders ORDER BY orders.id",
                     {},
                 )
@@ -673,11 +676,12 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
             go,
             [
                 (
-                    "SELECT orders.user_id AS orders_user_id, "
-                    "orders.description AS orders_description, "
-                    "orders.isopen AS orders_isopen, "
+                    "SELECT "
                     "orders.id AS orders_id, "
-                    "orders.address_id AS orders_address_id "
+                    "orders.user_id AS orders_user_id, "
+                    "orders.address_id AS orders_address_id, "
+                    "orders.description AS orders_description, "
+                    "orders.isopen AS orders_isopen "
                     "FROM orders ORDER BY orders.id",
                     {},
                 )
@@ -735,11 +739,11 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
                     {"id_1": 7},
                 ),
                 (
-                    "SELECT orders.user_id AS orders_user_id, "
-                    "orders.description "
-                    "AS orders_description, orders.isopen AS orders_isopen, "
-                    "orders.id AS orders_id, orders.address_id "
-                    "AS orders_address_id "
+                    "SELECT orders.id AS orders_id, "
+                    "orders.user_id AS orders_user_id, "
+                    "orders.address_id AS orders_address_id, "
+                    "orders.description AS orders_description, "
+                    "orders.isopen AS orders_isopen "
                     "FROM orders WHERE :param_1 = orders.user_id "
                     "ORDER BY orders.id",
                     {"param_1": 7},
@@ -798,11 +802,12 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
                     {"id_1": 7},
                 ),
                 (
-                    "SELECT orders.user_id AS orders_user_id, "
-                    "orders.description "
-                    "AS orders_description, orders.isopen AS orders_isopen, "
+                    "SELECT "
                     "orders.id AS orders_id, "
+                    "orders.user_id AS orders_user_id, "
                     "orders.address_id AS orders_address_id, "
+                    "orders.description AS orders_description, "
+                    "orders.isopen AS orders_isopen, "
                     "anon_1.users_id AS anon_1_users_id "
                     "FROM (SELECT users.id AS "
                     "users_id FROM users WHERE users.id = :id_1) AS anon_1 "
@@ -860,11 +865,12 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
             [
                 (
                     "SELECT users.id AS users_id, users.name AS users_name, "
+                    "orders_1.id AS orders_1_id, "
                     "orders_1.user_id AS orders_1_user_id, "
+                    "orders_1.address_id AS orders_1_address_id, "
                     "orders_1.description AS orders_1_description, "
-                    "orders_1.isopen AS orders_1_isopen, "
-                    "orders_1.id AS orders_1_id, orders_1.address_id AS "
-                    "orders_1_address_id FROM users "
+                    "orders_1.isopen AS orders_1_isopen "
+                    "FROM users "
                     "LEFT OUTER JOIN orders AS orders_1 ON users.id = "
                     "orders_1.user_id WHERE users.id = :id_1 "
                     "ORDER BY orders_1.id",
@@ -923,12 +929,13 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
             [
                 (
                     "SELECT users.id AS users_id, users.name AS users_name, "
-                    "orders_1.user_id AS orders_1_user_id, "
                     "lower(orders_1.description) AS lower_1, "
-                    "orders_1.isopen AS orders_1_isopen, "
                     "orders_1.id AS orders_1_id, "
+                    "orders_1.user_id AS orders_1_user_id, "
                     "orders_1.address_id AS orders_1_address_id, "
-                    "orders_1.description AS orders_1_description FROM users "
+                    "orders_1.description AS orders_1_description, "
+                    "orders_1.isopen AS orders_1_isopen "
+                    "FROM users "
                     "LEFT OUTER JOIN orders AS orders_1 ON users.id = "
                     "orders_1.user_id WHERE users.id = :id_1 "
                     "ORDER BY orders_1.id",
@@ -956,11 +963,12 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
         q = sess.query(Order).options(Load(Order).undefer("*"))
         self.assert_compile(
             q,
-            "SELECT orders.user_id AS orders_user_id, "
-            "orders.description AS orders_description, "
-            "orders.isopen AS orders_isopen, "
+            "SELECT "
             "orders.id AS orders_id, "
-            "orders.address_id AS orders_address_id "
+            "orders.user_id AS orders_user_id, "
+            "orders.address_id AS orders_address_id, "
+            "orders.description AS orders_description, "
+            "orders.isopen AS orders_isopen "
             "FROM orders",
         )
 
@@ -1322,9 +1330,8 @@ class DeferredOptionsTest(AssertsCompiledSQL, _fixtures.FixtureTest):
         )
         self.assert_compile(
             q,
-            "SELECT orders.description AS orders_description, "
-            "orders.id AS orders_id, "
-            "orders.user_id AS orders_user_id, "
+            "SELECT orders.id AS orders_id, orders.user_id AS orders_user_id, "
+            "orders.description AS orders_description, "
             "orders.isopen AS orders_isopen FROM orders",
         )
 
@@ -1629,7 +1636,7 @@ class InheritanceTest(_Polymorphic):
 
     @classmethod
     def setup_mappers(cls):
-        super(InheritanceTest, cls).setup_mappers()
+        super().setup_mappers()
         from sqlalchemy import inspect
 
         inspect(Company).add_property(
@@ -2048,6 +2055,14 @@ class WithExpressionTest(fixtures.DeclarativeMappedTest):
 
             bs = relationship("B", order_by="B.id")
 
+        class A_default(fixtures.ComparableEntity, Base):
+            __tablename__ = "a_default"
+            id = Column(Integer, primary_key=True)
+            x = Column(Integer)
+            y = Column(Integer)
+
+            my_expr = query_expression(default_expr=literal(15))
+
         class B(fixtures.ComparableEntity, Base):
             __tablename__ = "b"
             id = Column(Integer, primary_key=True)
@@ -2066,7 +2081,7 @@ class WithExpressionTest(fixtures.DeclarativeMappedTest):
 
     @classmethod
     def insert_data(cls, connection):
-        A, B, C = cls.classes("A", "B", "C")
+        A, A_default, B, C = cls.classes("A", "A_default", "B", "C")
         s = Session(connection)
 
         s.add_all(
@@ -2077,6 +2092,8 @@ class WithExpressionTest(fixtures.DeclarativeMappedTest):
                 A(id=4, x=2, y=10, bs=[B(id=4, p=19, q=8), B(id=5, p=5, q=5)]),
                 C(id=1, x=1),
                 C(id=2, x=2),
+                A_default(id=1, x=1, y=2),
+                A_default(id=2, x=2, y=3),
             ]
         )
 
@@ -2251,6 +2268,149 @@ class WithExpressionTest(fixtures.DeclarativeMappedTest):
         q.first()
         eq_(a1.my_expr, 5)
 
+    @testing.combinations("core", "orm", argnames="use_core")
+    @testing.combinations(
+        "from_statement", "aliased", argnames="use_from_statement"
+    )
+    @testing.combinations(
+        "same_name", "different_name", argnames="use_same_labelname"
+    )
+    @testing.combinations(
+        "has_default", "no_default", argnames="attr_has_default"
+    )
+    def test_expr_from_subq_plain(
+        self,
+        use_core,
+        use_from_statement,
+        use_same_labelname,
+        attr_has_default,
+    ):
+        """test #8881"""
+
+        if attr_has_default == "has_default":
+            A = self.classes.A_default
+        else:
+            A = self.classes.A
+
+        s = fixture_session()
+
+        if use_same_labelname == "same_name":
+            labelname = "my_expr"
+        else:
+            labelname = "hi"
+
+        if use_core == "core":
+            stmt = select(A.__table__, literal(12).label(labelname))
+        else:
+            stmt = select(A, literal(12).label(labelname))
+
+        if use_from_statement == "aliased":
+            subq = stmt.subquery()
+            a1 = aliased(A, subq)
+            stmt = select(a1).options(
+                with_expression(a1.my_expr, subq.c[labelname])
+            )
+        else:
+            subq = stmt
+            stmt = (
+                select(A)
+                .options(
+                    with_expression(
+                        A.my_expr, subq.selected_columns[labelname]
+                    )
+                )
+                .from_statement(subq)
+            )
+
+        a_obj = s.scalars(stmt).first()
+
+        if (
+            use_same_labelname == "same_name"
+            and attr_has_default == "has_default"
+            and use_core == "orm"
+        ):
+            eq_(a_obj.my_expr, 15)
+        else:
+            eq_(a_obj.my_expr, 12)
+
+    @testing.combinations("core", "orm", argnames="use_core")
+    @testing.combinations(
+        "from_statement", "aliased", argnames="use_from_statement"
+    )
+    @testing.combinations(
+        "same_name", "different_name", argnames="use_same_labelname"
+    )
+    @testing.combinations(
+        "has_default", "no_default", argnames="attr_has_default"
+    )
+    def test_expr_from_subq_union(
+        self,
+        use_core,
+        use_from_statement,
+        use_same_labelname,
+        attr_has_default,
+    ):
+        """test #8881"""
+
+        if attr_has_default == "has_default":
+            A = self.classes.A_default
+        else:
+            A = self.classes.A
+
+        s = fixture_session()
+
+        if use_same_labelname == "same_name":
+            labelname = "my_expr"
+        else:
+            labelname = "hi"
+
+        if use_core == "core":
+            stmt = union_all(
+                select(A.__table__, literal(12).label(labelname)).where(
+                    A.__table__.c.id == 1
+                ),
+                select(A.__table__, literal(18).label(labelname)).where(
+                    A.__table__.c.id == 2
+                ),
+            )
+
+        else:
+            stmt = union_all(
+                select(A, literal(12).label(labelname)).where(A.id == 1),
+                select(A, literal(18).label(labelname)).where(A.id == 2),
+            )
+
+        if use_from_statement == "aliased":
+            subq = stmt.subquery()
+            a1 = aliased(A, subq)
+            stmt = select(a1).options(
+                with_expression(a1.my_expr, subq.c[labelname])
+            )
+        else:
+            subq = stmt
+            stmt = (
+                select(A)
+                .options(
+                    with_expression(
+                        A.my_expr, subq.selected_columns[labelname]
+                    )
+                )
+                .from_statement(subq)
+            )
+
+        a_objs = s.scalars(stmt).all()
+
+        if (
+            use_same_labelname == "same_name"
+            and attr_has_default == "has_default"
+            and use_core == "orm"
+        ):
+            eq_(a_objs[0].my_expr, 15)
+            eq_(a_objs[1].my_expr, 15)
+        else:
+            eq_(a_objs[0].my_expr, 12)
+            eq_(a_objs[1].my_expr, 18)
+
 
 class RaiseLoadTest(fixtures.DeclarativeMappedTest):
     @classmethod
@@ -2309,6 +2469,23 @@ class RaiseLoadTest(fixtures.DeclarativeMappedTest):
         s.close()
 
         a1 = s.query(A).options(defer(A.x, raiseload=True)).first()
+        assert_raises_message(
+            sa.exc.InvalidRequestError,
+            "'A.x' is not available due to raiseload=True",
+            getattr,
+            a1,
+            "x",
+        )
+
+    def test_load_only_raise_option_raise_column_plain(self):
+        A = self.classes.A
+        s = fixture_session()
+        a1 = s.query(A).options(defer(A.x)).first()
+        a1.x
+
+        s.close()
+
+        a1 = s.query(A).options(load_only(A.y, A.z, raiseload=True)).first()
         assert_raises_message(
             sa.exc.InvalidRequestError,
             "'A.x' is not available due to raiseload=True",

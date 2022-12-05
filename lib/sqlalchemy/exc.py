@@ -49,7 +49,7 @@ class HasDescriptionCode:
         code = kw.pop("code", None)
         if code is not None:
             self.code = code
-        super(HasDescriptionCode, self).__init__(*arg, **kw)
+        super().__init__(*arg, **kw)
 
     def _code_str(self) -> str:
         if not self.code:
@@ -65,7 +65,7 @@ class HasDescriptionCode:
             )
 
     def __str__(self) -> str:
-        message = super(HasDescriptionCode, self).__str__()
+        message = super().__str__()
         if self.code:
             message = "%s %s" % (message, self._code_str())
         return message
@@ -125,6 +125,15 @@ class ArgumentError(SQLAlchemyError):
     """
 
 
+class DuplicateColumnError(ArgumentError):
+    """a Column is being added to a Table that would replace another
+    Column, without appropriate parameters to allow this in place.
+
+    .. versionadded:: 2.0.0b4
+
+    """
+
+
 class ObjectNotExecutableError(ArgumentError):
     """Raised when an object is passed to .execute() that can't be
     executed as SQL.
@@ -134,9 +143,7 @@ class ObjectNotExecutableError(ArgumentError):
     """
 
     def __init__(self, target: Any):
-        super(ObjectNotExecutableError, self).__init__(
-            "Not an executable object: %r" % target
-        )
+        super().__init__("Not an executable object: %r" % target)
         self.target = target
 
     def __reduce__(self) -> Union[str, Tuple[Any, ...]]:
@@ -223,7 +230,7 @@ class UnsupportedCompilationError(CompileError):
         element_type: Type[ClauseElement],
         message: Optional[str] = None,
     ):
-        super(UnsupportedCompilationError, self).__init__(
+        super().__init__(
             "Compiler %r can't render element of type %s%s"
             % (compiler, element_type, ": %s" % message if message else "")
         )
@@ -557,7 +564,7 @@ class DBAPIError(StatementError):
         dbapi_base_err: Type[Exception],
         hide_parameters: bool = False,
         connection_invalidated: bool = False,
-        dialect: Optional["Dialect"] = None,
+        dialect: Optional[Dialect] = None,
         ismulti: Optional[bool] = None,
     ) -> StatementError:
         ...
@@ -572,7 +579,7 @@ class DBAPIError(StatementError):
         dbapi_base_err: Type[Exception],
         hide_parameters: bool = False,
         connection_invalidated: bool = False,
-        dialect: Optional["Dialect"] = None,
+        dialect: Optional[Dialect] = None,
         ismulti: Optional[bool] = None,
     ) -> DontWrapMixin:
         ...
@@ -587,7 +594,7 @@ class DBAPIError(StatementError):
         dbapi_base_err: Type[Exception],
         hide_parameters: bool = False,
         connection_invalidated: bool = False,
-        dialect: Optional["Dialect"] = None,
+        dialect: Optional[Dialect] = None,
         ismulti: Optional[bool] = None,
     ) -> BaseException:
         ...
@@ -601,7 +608,7 @@ class DBAPIError(StatementError):
         dbapi_base_err: Type[Exception],
         hide_parameters: bool = False,
         connection_invalidated: bool = False,
-        dialect: Optional["Dialect"] = None,
+        dialect: Optional[Dialect] = None,
         ismulti: Optional[bool] = None,
     ) -> Union[BaseException, DontWrapMixin]:
         # Don't ever wrap these, just return them directly as if
@@ -792,7 +799,7 @@ class Base20DeprecationWarning(SADeprecationWarning):
 
     def __str__(self) -> str:
         return (
-            super(Base20DeprecationWarning, self).__str__()
+            super().__str__()
             + " (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)"
         )
 

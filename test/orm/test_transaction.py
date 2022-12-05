@@ -360,7 +360,7 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
 
         sess.commit()
 
-        eq_(set(sess.query(User).all()), set([u2]))
+        eq_(set(sess.query(User).all()), {u2})
         sess.rollback()
 
         sess.begin()
@@ -371,7 +371,7 @@ class SessionTransactionTest(fixtures.RemovesEvents, FixtureTest):
         n1.commit()  # commit the nested transaction
         sess.rollback()
 
-        eq_(set(sess.query(User).all()), set([u2]))
+        eq_(set(sess.query(User).all()), {u2})
 
         sess.close()
 
@@ -2108,7 +2108,7 @@ class TransactionFlagsTest(fixtures.TestBase):
             eq_(s1.in_transaction(), True)
             is_(s1.get_transaction(), trans)
 
-            subtrans = s1.begin(_subtrans=True)
+            subtrans = s1._autobegin_t()._begin()
             is_(s1.get_transaction(), trans)
             eq_(s1.in_transaction(), True)
 

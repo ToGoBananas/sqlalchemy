@@ -39,6 +39,7 @@ from . import collections
 from . import exc as orm_exc
 from . import interfaces
 from ._typing import insp_is_aliased_class
+from .base import _DeclarativeMapped
 from .base import ATTR_EMPTY
 from .base import ATTR_WAS_SET
 from .base import CALLABLES_OK
@@ -69,6 +70,7 @@ from .base import PASSIVE_RETURN_NO_VALUE
 from .base import PassiveFlag
 from .base import RELATED_OBJECT_OK  # noqa
 from .base import SQL_OK  # noqa
+from .base import SQLORMExpression
 from .base import state_str
 from .. import event
 from .. import exc
@@ -93,11 +95,11 @@ if TYPE_CHECKING:
     from ._typing import _O
     from .collections import _AdaptedCollectionProtocol
     from .collections import CollectionAdapter
-    from .dynamic import DynamicAttributeImpl
     from .interfaces import MapperProperty
-    from .relationships import Relationship
+    from .relationships import RelationshipProperty
     from .state import InstanceState
     from .util import AliasedInsp
+    from .writeonly import WriteOnlyAttributeImpl
     from ..event.base import _Dispatch
     from ..sql._typing import _ColumnExpressionArgument
     from ..sql._typing import _DMLColumnArgument
@@ -130,8 +132,8 @@ SelfQueryableAttribute = TypeVar(
 
 @inspection._self_inspects
 class QueryableAttribute(
-    roles.ExpressionElementRole[_T],
-    interfaces._MappedAttribute[_T],
+    _DeclarativeMapped[_T],
+    SQLORMExpression[_T],
     interfaces.InspectionAttr,
     interfaces.PropComparator[_T],
     roles.JoinTargetRole,
@@ -393,7 +395,7 @@ class QueryableAttribute(
             parententity=adapt_to_entity,
         )
 
-    def of_type(self, entity: _EntityType[_T]) -> QueryableAttribute[_T]:
+    def of_type(self, entity: _EntityType[Any]) -> QueryableAttribute[_T]:
         return QueryableAttribute(
             self.class_,
             self.key,
@@ -408,7 +410,7 @@ class QueryableAttribute(
         self, *clauses: _ColumnExpressionArgument[bool]
     ) -> interfaces.PropComparator[bool]:
         if TYPE_CHECKING:
-            assert isinstance(self.comparator, Relationship.Comparator)
+            assert isinstance(self.comparator, RelationshipProperty.Comparator)
 
         exprs = tuple(
             coercions.expect(roles.WhereHavingRole, clause)
@@ -507,16 +509,23 @@ class InstrumentedAttribute(QueryableAttribute[_T]):
     __slots__ = ()
 
     inherit_cache = True
+    """:meta private:"""
 
-    #    if not TYPE_CHECKING:
+    # hack to make __doc__ writeable on instances of
+    # InstrumentedAttribute, while still keeping classlevel
+    # __doc__ correct
 
-    @property  # type: ignore
+    @util.rw_hybridproperty  # type: ignore
     def __doc__(self) -> Optional[str]:  # type: ignore
         return self._doc
 
-    @__doc__.setter
-    def __doc__(self, value: Optional[str]) -> None:
+    @__doc__.setter  # type: ignore
+    def __doc__(self, value: Optional[str]) -> None:  # type: ignore
         self._doc = value
+
+    @__doc__.classlevel  # type: ignore
+    def __doc__(cls) -> Optional[str]:  # type: ignore
+        return super().__doc__
 
     def __set__(self, instance: object, value: Any) -> None:
         self.impl.set(
@@ -1192,7 +1201,7 @@ class ScalarAttributeImpl(AttributeImpl):
     __slots__ = "_replace_token", "_append_token", "_remove_token"
 
     def __init__(self, *arg, **kw):
-        super(ScalarAttributeImpl, self).__init__(*arg, **kw)
+        super().__init__(*arg, **kw)
         self._replace_token = self._append_token = AttributeEventToken(
             self, OP_REPLACE
         )
@@ -1620,7 +1629,7 @@ class CollectionAttributeImpl(HasCollectionAdapter, AttributeImpl):
         compare_function=None,
         **kwargs,
     ):
-        super(CollectionAttributeImpl, self).__init__(
+        super().__init__(
             class_,
             key,
             callable_,
@@ -1933,7 +1942,13 @@ class CollectionAttributeImpl(HasCollectionAdapter, AttributeImpl):
 
         self.dispatch.bulk_replace(state, new_values, evt, keys=new_keys)
 
-        old = self.get(state, dict_, passive=PASSIVE_ONLY_PERSISTENT)
+        # propagate NO_RAISE in passive through to the get() for the
+        # existing object (ticket #8862)
+        old = self.get(
+            state,
+            dict_,
+            passive=PASSIVE_ONLY_PERSISTENT ^ (passive & PassiveFlag.NO_RAISE),
+        )
         if old is PASSIVE_NO_RESULT:
             old = self._default_value(state, dict_)
         elif old is orig_iterable:
@@ -2573,9 +2588,9 @@ def register_attribute_impl(
     impl: AttributeImpl
 
     if impl_class:
-        # TODO: this appears to be the DynamicAttributeImpl constructor
-        # which is hardcoded
-        impl = cast("Type[DynamicAttributeImpl]", impl_class)(
+        # TODO: this appears to be the WriteOnlyAttributeImpl /
+        # DynamicAttributeImpl constructor which is hardcoded
+        impl = cast("Type[WriteOnlyAttributeImpl]", impl_class)(
             class_, key, typecallable, dispatch, **kw
         )
     elif uselist:
@@ -2612,7 +2627,7 @@ def register_descriptor(
         class_, key, comparator=comparator, parententity=parententity
     )
 
-    descriptor.__doc__ = doc
+    descriptor.__doc__ = doc  # type: ignore
 
     manager.instrument_attribute(key, descriptor)
     return descriptor
@@ -2664,7 +2679,9 @@ def init_state_collection(
         attr._dispose_previous_collection(state, old, old_collection, False)
 
     user_data = attr._default_value(state, dict_)
-    adapter: CollectionAdapter = attr.get_collection(state, dict_, user_data)
+    adapter: CollectionAdapter = attr.get_collection(
+        state, dict_, user_data, passive=PassiveFlag.PASSIVE_NO_FETCH
+    )
     adapter._reset_empty()
 
     return adapter

@@ -34,9 +34,10 @@ jobs:
           - "3.8"
           - "3.9"
           - "3.10"
-          # waiting on https://foss.heptapod.net/pypy/pypy/-/issues/3690
-          # which also seems to be in 3.9
-          # - "pypy-3.9"
+          - "3.11"
+          # greenlet doesn't build as of 2022-12-01
+          # - "3.12.0-alpha - 3.12"
+          - "pypy-3.9"
         build-type:
           - "cext"
           - "nocext"
@@ -46,11 +47,16 @@ jobs:
 
         include:
           # autocommit tests fail on the ci for some reason
-          # - python-version: "pypy-3.9"
-          #   pytest-args: "-k 'not test_autocommit_on and not test_turn_autocommit_off_via_default_iso_level and not test_autocommit_isolation_level'"
-          # add aiosqlite on linux
+          - python-version: "pypy-3.9"
+            pytest-args: "-k 'not test_autocommit_on and not test_turn_autocommit_off_via_default_iso_level and not test_autocommit_isolation_level'"
           - os: "ubuntu-latest"
             pytest-args: "--dbdriver pysqlite --dbdriver aiosqlite"
+          # do not run aiosqlite on python 3.11
+          # wait for https://github.com/python/cpython/issues/99205 to be fixed
+          - os: "ubuntu-latest"
+            python-version: "3.11"
+            pytest-args: "--dbdriver pysqlite"
+
 
         exclude:
           # linux and osx do not have x86 python
@@ -58,12 +64,12 @@ jobs:
             architecture: x86
           - os: "macos-latest"
             architecture: x86
-          # pypy does not have cext
-          # - python-version: "pypy-3.9"
-          #   build-type: "cext"
-          # - os: "windows-latest"
-          #   python-version: "pypy-3.9"
-          #   architecture: x86
+          # pypy does not have cext or x86
+          - python-version: "pypy-3.9"
+            build-type: "cext"
+          - os: "windows-latest"
+            python-version: "pypy-3.9"
+            architecture: x86
 
       fail-fast: false
 
@@ -86,6 +92,7 @@ jobs:
 
       - name: Run tests
         run: tox -e github-${{ matrix.build-type }} -- -q --nomemory --notimingintensive ${{ matrix.pytest-args }}
+        continue-on-error: ${{ matrix.python-version == 'pypy-3.9' }}
 
   run-test-arm64:
     name: ${{ matrix.python-version }}-${{ matrix.build-type }}-arm64-ubuntu-latest
@@ -97,6 +104,7 @@ jobs:
           - cp38-cp38
           - cp39-cp39
           - cp310-cp310
+          - cp311-cp311
         build-type:
           - "cext"
           - "nocext"
@@ -135,6 +143,7 @@ jobs:
         python-version:
           - "3.9"
           - "3.10"
+          - "3.11"
 
       fail-fast: false
 
@@ -167,7 +176,7 @@ jobs:
         os:
           - "ubuntu-latest"
         python-version:
-          - "3.10"
+          - "3.11"
 
       fail-fast: false
 
@@ -201,6 +210,7 @@ jobs:
           - "ubuntu-latest"
         python-version:
           - "3.10"
+          - "3.11"
 
       fail-fast: false
 

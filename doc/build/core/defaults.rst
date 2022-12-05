@@ -59,9 +59,7 @@ Scalar Defaults
 
 The simplest kind of default is a scalar value used as the default value of a column::
 
-    Table("mytable", metadata_obj,
-        Column("somecolumn", Integer, default=12)
-    )
+    Table("mytable", metadata_obj, Column("somecolumn", Integer, default=12))
 
 Above, the value "12" will be bound as the column value during an INSERT if no
 other value is supplied.
@@ -70,10 +68,7 @@ A scalar value may also be associated with an UPDATE statement, though this is
 not very common (as UPDATE statements are usually looking for dynamic
 defaults)::
 
-    Table("mytable", metadata_obj,
-        Column("somecolumn", Integer, onupdate=25)
-    )
-
+    Table("mytable", metadata_obj, Column("somecolumn", Integer, onupdate=25))
 
 Python-Executed Functions
 -------------------------
@@ -86,13 +81,18 @@ incrementing counter to a primary key column::
 
     # a function which counts upwards
     i = 0
+
+
     def mydefault():
         global i
         i += 1
         return i
 
-    t = Table("mytable", metadata_obj,
-        Column('id', Integer, primary_key=True, default=mydefault),
+
+    t = Table(
+        "mytable",
+        metadata_obj,
+        Column("id", Integer, primary_key=True, default=mydefault),
     )
 
 It should be noted that for real "incrementing sequence" behavior, the
@@ -109,11 +109,12 @@ the :paramref:`_schema.Column.onupdate` attribute::
 
     import datetime
 
-    t = Table("mytable", metadata_obj,
-        Column('id', Integer, primary_key=True),
-
+    t = Table(
+        "mytable",
+        metadata_obj,
+        Column("id", Integer, primary_key=True),
         # define 'last_updated' to be populated with datetime.now()
-        Column('last_updated', DateTime, onupdate=datetime.datetime.now),
+        Column("last_updated", DateTime, onupdate=datetime.datetime.now),
     )
 
 When an update statement executes and no value is passed for ``last_updated``,
@@ -139,11 +140,14 @@ updated on the row. To access the context, provide a function that accepts a
 single ``context`` argument::
 
     def mydefault(context):
-        return context.get_current_parameters()['counter'] + 12
+        return context.get_current_parameters()["counter"] + 12
 
-    t = Table('mytable', metadata_obj,
-        Column('counter', Integer),
-        Column('counter_plus_twelve', Integer, default=mydefault, onupdate=mydefault)
+
+    t = Table(
+        "mytable",
+        metadata_obj,
+        Column("counter", Integer),
+        Column("counter_plus_twelve", Integer, default=mydefault, onupdate=mydefault),
     )
 
 The above default generation function is applied so that it will execute for
@@ -184,18 +188,21 @@ The :paramref:`_schema.Column.default` and :paramref:`_schema.Column.onupdate` k
 also be passed SQL expressions, which are in most cases rendered inline within the
 INSERT or UPDATE statement::
 
-    t = Table("mytable", metadata_obj,
-        Column('id', Integer, primary_key=True),
-
+    t = Table(
+        "mytable",
+        metadata_obj,
+        Column("id", Integer, primary_key=True),
         # define 'create_date' to default to now()
-        Column('create_date', DateTime, default=func.now()),
-
+        Column("create_date", DateTime, default=func.now()),
         # define 'key' to pull its default from the 'keyvalues' table
-        Column('key', String(20), default=select(keyvalues.c.key).where(keyvalues.c.type='type1')),
-
+        Column(
+            "key",
+            String(20),
+            default=select(keyvalues.c.key).where(keyvalues.c.type="type1"),
+        ),
         # define 'last_modified' to use the current_timestamp SQL function on update
-        Column('last_modified', DateTime, onupdate=func.utc_timestamp())
-        )
+        Column("last_modified", DateTime, onupdate=func.utc_timestamp()),
+    )
 
 Above, the ``create_date`` column will be populated with the result of the
 ``now()`` SQL function (which, depending on backend, compiles into ``NOW()``
@@ -257,13 +264,17 @@ placed in the CREATE TABLE statement during a :meth:`_schema.Table.create` opera
 
 .. sourcecode:: python+sql
 
-    t = Table('test', metadata_obj,
-        Column('abc', String(20), server_default='abc'),
-        Column('created_at', DateTime, server_default=func.sysdate()),
-        Column('index_value', Integer, server_default=text("0"))
+    t = Table(
+        "test",
+        metadata_obj,
+        Column("abc", String(20), server_default="abc"),
+        Column("created_at", DateTime, server_default=func.sysdate()),
+        Column("index_value", Integer, server_default=text("0")),
     )
 
-A create call for the above table will produce::
+A create call for the above table will produce:
+
+.. sourcecode:: sql
 
     CREATE TABLE test (
         abc varchar(20) default 'abc',
@@ -296,10 +307,12 @@ may be called out using :class:`.FetchedValue` as a marker::
 
     from sqlalchemy.schema import FetchedValue
 
-    t = Table('test', metadata_obj,
-        Column('id', Integer, primary_key=True),
-        Column('abc', TIMESTAMP, server_default=FetchedValue()),
-        Column('def', String(20), server_onupdate=FetchedValue())
+    t = Table(
+        "test",
+        metadata_obj,
+        Column("id", Integer, primary_key=True),
+        Column("abc", TIMESTAMP, server_default=FetchedValue()),
+        Column("def", String(20), server_onupdate=FetchedValue()),
     )
 
 The :class:`.FetchedValue` indicator does not affect the rendered DDL for the
@@ -335,58 +348,133 @@ Defining Sequences
 SQLAlchemy represents database sequences using the
 :class:`~sqlalchemy.schema.Sequence` object, which is considered to be a
 special case of "column default". It only has an effect on databases which have
-explicit support for sequences, which currently includes PostgreSQL, Oracle,
-MariaDB 10.3 or greater, and Firebird. The :class:`~sqlalchemy.schema.Sequence`
-object is otherwise ignored.
+explicit support for sequences, which among SQLAlchemy's included dialects
+includes PostgreSQL, Oracle, MS SQL Server, and MariaDB.  The
+:class:`~sqlalchemy.schema.Sequence` object is otherwise ignored.
+
+.. tip::
+
+    In newer database engines, the :class:`.Identity` construct should likely
+    be preferred vs. :class:`.Sequence` for generation of integer primary key
+    values. See the section :ref:`identity_ddl` for background on this
+    construct.
 
 The :class:`~sqlalchemy.schema.Sequence` may be placed on any column as a
 "default" generator to be used during INSERT operations, and can also be
 configured to fire off during UPDATE operations if desired. It is most
 commonly used in conjunction with a single integer primary key column::
 
-    table = Table("cartitems", metadata_obj,
+    table = Table(
+        "cartitems",
+        metadata_obj,
         Column(
             "cart_id",
             Integer,
-            Sequence('cart_id_seq', metadata=metadata_obj), primary_key=True),
+            Sequence("cart_id_seq", start=1),
+            primary_key=True,
+        ),
         Column("description", String(40)),
-        Column("createdate", DateTime())
+        Column("createdate", DateTime()),
     )
 
-Where above, the table "cartitems" is associated with a sequence named
-"cart_id_seq". When INSERT statements take place for "cartitems", and no value
-is passed for the "cart_id" column, the "cart_id_seq" sequence will be used to
-generate a value.   Typically, the sequence function is embedded in the
-INSERT statement, which is combined with RETURNING so that the newly generated
-value can be returned to the Python code::
+Where above, the table ``cartitems`` is associated with a sequence named
+``cart_id_seq``.   Emitting :meth:`.MetaData.create_all` for the above
+table will include:
+
+.. sourcecode:: sql
+
+    CREATE SEQUENCE cart_id_seq START WITH 1
+
+    CREATE TABLE cartitems (
+      cart_id INTEGER NOT NULL,
+      description VARCHAR(40),
+      createdate TIMESTAMP WITHOUT TIME ZONE,
+      PRIMARY KEY (cart_id)
+    )
+
+.. tip::
+
+  When using tables with explicit schema names (detailed at
+  :ref:`schema_table_schema_name`), the configured schema of the :class:`.Table`
+  is **not** automatically shared by an embedded :class:`.Sequence`, instead,
+  specify :paramref:`.Sequence.schema`::
+
+    Sequence("cart_id_seq", start=1, schema="some_schema")
+
+  The :class:`.Sequence` may also be made to automatically make use of the
+  :paramref:`.MetaData.schema` setting on the :class:`.MetaData` in use;
+  see :ref:`sequence_metadata` for background.
+
+When :class:`_dml.Insert` DML constructs are invoked against the ``cartitems``
+table, without an explicit value passed for the ``cart_id`` column, the
+``cart_id_seq`` sequence will be used to generate a value on participating
+backends. Typically, the sequence function is embedded in the INSERT statement,
+which is combined with RETURNING so that the newly generated value can be
+returned to the Python process:
+
+.. sourcecode:: sql
 
     INSERT INTO cartitems (cart_id, description, createdate)
     VALUES (next_val(cart_id_seq), 'some description', '2015-10-15 12:00:15')
     RETURNING cart_id
 
+When using :meth:`.Connection.execute` to invoke an :class:`_dml.Insert` construct,
+newly generated primary key identifiers, including but not limited to those
+generated using :class:`.Sequence`, are available from the :class:`.CursorResult`
+construct using the :attr:`.CursorResult.inserted_primary_key` attribute.
+
 When the :class:`~sqlalchemy.schema.Sequence` is associated with a
 :class:`_schema.Column` as its **Python-side** default generator, the
 :class:`.Sequence` will also be subject to "CREATE SEQUENCE" and "DROP
-SEQUENCE" DDL when similar DDL is emitted for the owning :class:`_schema.Table`.
-This is a limited scope convenience feature that does not accommodate for
-inheritance of other aspects of the :class:`_schema.MetaData`, such as the default
-schema.  Therefore, it is best practice that for a :class:`.Sequence` which
-is local to a certain :class:`_schema.Column` / :class:`_schema.Table`, that it be
-explicitly associated with the :class:`_schema.MetaData` using the
-:paramref:`.Sequence.metadata` parameter.  See the section
-:ref:`sequence_metadata` for more background on this.
+SEQUENCE" DDL when similar DDL is emitted for the owning :class:`_schema.Table`,
+such as when using :meth:`.MetaData.create_all` to generate DDL for a series
+of tables.
+
+The :class:`.Sequence` may also be associated with a
+:class:`.MetaData` construct directly.  This allows the :class:`.Sequence`
+to be used in more than one :class:`.Table` at a time and also allows the
+:paramref:`.MetaData.schema` parameter to be inherited.  See the section
+:ref:`sequence_metadata` for background.
 
 Associating a Sequence on a SERIAL column
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 PostgreSQL's SERIAL datatype is an auto-incrementing type that implies
 the implicit creation of a PostgreSQL sequence when CREATE TABLE is emitted.
-If a :class:`_schema.Column` specifies an explicit :class:`.Sequence` object
-which also specifies a ``True`` value for the :paramref:`.Sequence.optional`
-boolean flag, the :class:`.Sequence` will not take effect under PostgreSQL,
-and the SERIAL datatype will proceed normally.   Instead, the :class:`.Sequence`
-will only take effect when used against other sequence-supporting
-databases, currently Oracle and Firebird.
+The :class:`.Sequence` construct, when indicated for a :class:`_schema.Column`,
+may indicate that it should not be used in this specific case by specifying
+a value of ``True`` for the :paramref:`.Sequence.optional` parameter.
+This allows the given :class:`.Sequence` to be used for backends that have no
+alternative primary key generation system but to ignore it for backends
+such as PostgreSQL which will automatically generate a sequence for a particular
+column::
+
+    table = Table(
+        "cartitems",
+        metadata_obj,
+        Column(
+            "cart_id",
+            Integer,
+            # use an explicit Sequence where available, but not on
+            # PostgreSQL where SERIAL will be used
+            Sequence("cart_id_seq", start=1, optional=True),
+            primary_key=True,
+        ),
+        Column("description", String(40)),
+        Column("createdate", DateTime()),
+    )
+
+In the above example, ``CREATE TABLE`` for PostgreSQL will make use of the
+``SERIAL`` datatype for the ``cart_id`` column, and the ``cart_id_seq``
+sequence will be ignored.  However on Oracle, the ``cart_id_seq`` sequence
+will be created explicitly.
+
+.. tip::
+
+    This particular interaction of SERIAL and SEQUENCE is fairly legacy, and
+    as in other cases, using :class:`.Identity` instead will simplify the
+    operation to simply use ``IDENTITY`` on all supported backends.
+
 
 Executing a Sequence Standalone
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -397,7 +485,7 @@ object, it can be invoked with its "next value" instruction by
 passing it directly to a SQL execution method::
 
     with my_engine.connect() as conn:
-        seq = Sequence('some_sequence')
+        seq = Sequence("some_sequence", start=1)
         nextid = conn.execute(seq)
 
 In order to embed the "next value" function of a :class:`.Sequence`
@@ -405,7 +493,7 @@ inside of a SQL statement like a SELECT or INSERT, use the :meth:`.Sequence.next
 method, which will render at statement compilation time a SQL function that is
 appropriate for the target backend::
 
-    >>> my_seq = Sequence('some_sequence')
+    >>> my_seq = Sequence("some_sequence", start=1)
     >>> stmt = select(my_seq.next_value())
     >>> print(stmt.compile(dialect=postgresql.dialect()))
     SELECT nextval('some_sequence') AS next_value_1
@@ -415,60 +503,40 @@ appropriate for the target backend::
 Associating a Sequence with the MetaData
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For many years, the SQLAlchemy documentation referred to the
-example of associating a :class:`.Sequence` with a table as follows::
+For a :class:`.Sequence` that is to be associated with arbitrary
+:class:`.Table` objects, the :class:`.Sequence` may be associated with
+a particular :class:`_schema.MetaData`, using the
+:paramref:`.Sequence.metadata` parameter::
 
-    table = Table("cartitems", metadata_obj,
-        Column("cart_id", Integer, Sequence('cart_id_seq'),
-               primary_key=True),
+    seq = Sequence("my_general_seq", metadata=metadata_obj, start=1)
+
+Such a sequence can then be associated with columns in the usual way::
+
+    table = Table(
+        "cartitems",
+        metadata_obj,
+        seq,
         Column("description", String(40)),
-        Column("createdate", DateTime())
+        Column("createdate", DateTime()),
     )
 
-While the above is a prominent idiomatic pattern, it is recommended that
-the :class:`.Sequence` in most cases be explicitly associated with the
-:class:`_schema.MetaData`, using the :paramref:`.Sequence.metadata` parameter::
-
-    table = Table("cartitems", metadata_obj,
-        Column(
-            "cart_id",
-            Integer,
-            Sequence('cart_id_seq', metadata=metadata_obj), primary_key=True),
-        Column("description", String(40)),
-        Column("createdate", DateTime())
-    )
-
-The :class:`.Sequence` object is a first class
-schema construct that can exist independently of any table in a database, and
-can also be shared among tables.   Therefore SQLAlchemy does not implicitly
-modify the :class:`.Sequence` when it is associated with a :class:`_schema.Column`
-object as either the Python-side or server-side default  generator.  While the
-CREATE SEQUENCE / DROP SEQUENCE DDL is emitted for a  :class:`.Sequence`
-defined as a Python side generator at the same time the table itself is subject
-to CREATE or DROP, this is a convenience feature that does not imply that the
-:class:`.Sequence` is fully associated with the :class:`_schema.MetaData` object.
+In the above example, the :class:`.Sequence` object is treated as an
+independent schema construct that can exist on its own or be shared among
+tables.
 
 Explicitly associating the :class:`.Sequence` with :class:`_schema.MetaData`
 allows for the following behaviors:
 
 * The :class:`.Sequence` will inherit the :paramref:`_schema.MetaData.schema`
   parameter specified to the target :class:`_schema.MetaData`, which
-  affects the production of CREATE / DROP DDL, if any.
-
-* The :meth:`.Sequence.create` and :meth:`.Sequence.drop` methods
-  automatically use the engine bound to the :class:`_schema.MetaData`
-  object, if any.
+  affects the production of CREATE / DROP DDL as well as how the
+  :meth:`.Sequence.next_value` function is rendered in SQL statements.
 
 * The :meth:`_schema.MetaData.create_all` and :meth:`_schema.MetaData.drop_all`
   methods will emit CREATE / DROP for this :class:`.Sequence`,
   even if the :class:`.Sequence` is not associated with any
   :class:`_schema.Table` / :class:`_schema.Column` that's a member of this
   :class:`_schema.MetaData`.
-
-Since the vast majority of cases that deal with :class:`.Sequence` expect
-that :class:`.Sequence` to be fully "owned" by the associated :class:`_schema.Table`
-and that options like default schema are propagated, setting the
-:paramref:`.Sequence.metadata` parameter should be considered a best practice.
 
 Associating a Sequence as the Server Side Default
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -480,8 +548,11 @@ The preceding sections illustrate how to associate a :class:`.Sequence` with a
 :class:`_schema.Column` as the **Python side default generator**::
 
     Column(
-        "cart_id", Integer, Sequence('cart_id_seq', metadata=metadata_obj),
-        primary_key=True)
+        "cart_id",
+        Integer,
+        Sequence("cart_id_seq", metadata=metadata_obj, start=1),
+        primary_key=True,
+    )
 
 In the above case, the :class:`.Sequence` will automatically be subject
 to CREATE SEQUENCE / DROP SEQUENCE DDL when the related :class:`_schema.Table`
@@ -497,29 +568,37 @@ we illustrate the same :class:`.Sequence` being associated with the
 :class:`_schema.Column` both as the Python-side default generator as well as
 the server-side default generator::
 
-    cart_id_seq = Sequence('cart_id_seq', metadata=metadata_obj)
-    table = Table("cartitems", metadata_obj,
+    cart_id_seq = Sequence("cart_id_seq", metadata=metadata_obj, start=1)
+    table = Table(
+        "cartitems",
+        metadata_obj,
         Column(
-            "cart_id", Integer, cart_id_seq,
-            server_default=cart_id_seq.next_value(), primary_key=True),
+            "cart_id",
+            Integer,
+            cart_id_seq,
+            server_default=cart_id_seq.next_value(),
+            primary_key=True,
+        ),
         Column("description", String(40)),
-        Column("createdate", DateTime())
+        Column("createdate", DateTime()),
     )
 
 or with the ORM::
 
     class CartItem(Base):
-        __tablename__ = 'cartitems'
+        __tablename__ = "cartitems"
 
-        cart_id_seq = Sequence('cart_id_seq', metadata=Base.metadata)
+        cart_id_seq = Sequence("cart_id_seq", metadata=Base.metadata, start=1)
         cart_id = Column(
-            Integer, cart_id_seq,
-            server_default=cart_id_seq.next_value(), primary_key=True)
+            Integer, cart_id_seq, server_default=cart_id_seq.next_value(), primary_key=True
+        )
         description = Column(String(40))
         createdate = Column(DateTime)
 
 When the "CREATE TABLE" statement is emitted, on PostgreSQL it would be
-emitted as::
+emitted as:
+
+.. sourcecode:: sql
 
     CREATE TABLE cartitems (
         cart_id INTEGER DEFAULT nextval('cart_id_seq') NOT NULL,
@@ -579,7 +658,9 @@ Example::
     )
 
 The DDL for the ``square`` table when run on a PostgreSQL 12 backend will look
-like::
+like:
+
+.. sourcecode:: sql
 
     CREATE TABLE square (
         id SERIAL NOT NULL,
@@ -629,8 +710,6 @@ eagerly fetched.
 
 * SQLite as of version 3.31
 
-* Firebird
-
 When :class:`.Computed` is used with an unsupported backend, if the target
 dialect does not support it, a :class:`.CompileError` is raised when attempting
 to render the construct.  Otherwise, if the dialect supports it but the
@@ -658,19 +737,21 @@ shares most of its option to control the database behaviour with
 
 Example::
 
-    from sqlalchemy import Table, Column, MetaData, Integer, Computed
+    from sqlalchemy import Table, Column, MetaData, Integer, Identity, String
 
     metadata_obj = MetaData()
 
     data = Table(
         "data",
         metadata_obj,
-        Column('id', Integer, Identity(start=42, cycle=True), primary_key=True),
-        Column('data', String)
+        Column("id", Integer, Identity(start=42, cycle=True), primary_key=True),
+        Column("data", String),
     )
 
 The DDL for the ``data`` table when run on a PostgreSQL 12 backend will look
-like::
+like:
+
+.. sourcecode:: sql
 
     CREATE TABLE data (
         id INTEGER GENERATED BY DEFAULT AS IDENTITY (START WITH 42 CYCLE) NOT NULL,
@@ -686,7 +767,9 @@ of the column, ignoring the value passed with the statement or raising an
 error, depending on the backend. To activate this mode, set the parameter
 :paramref:`_schema.Identity.always` to ``True`` in the
 :class:`.Identity` construct. Updating the previous
-example to include this parameter will generate the following DDL::
+example to include this parameter will generate the following DDL:
+
+.. sourcecode:: sql
 
     CREATE TABLE data (
         id INTEGER GENERATED ALWAYS AS IDENTITY (START WITH 42 CYCLE) NOT NULL,

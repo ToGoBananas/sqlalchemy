@@ -1,4 +1,4 @@
-# ext/declarative/api.py
+# orm/declarative/api.py
 # Copyright (C) 2005-2022 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
@@ -14,6 +14,7 @@ import re
 import typing
 from typing import Any
 from typing import Callable
+from typing import cast
 from typing import ClassVar
 from typing import Dict
 from typing import FrozenSet
@@ -23,6 +24,7 @@ from typing import Mapping
 from typing import Optional
 from typing import overload
 from typing import Set
+from typing import Tuple
 from typing import Type
 from typing import TYPE_CHECKING
 from typing import TypeVar
@@ -57,11 +59,12 @@ from .descriptor_props import Synonym as _orm_synonym
 from .mapper import Mapper
 from .properties import ColumnProperty
 from .properties import MappedColumn
-from .relationships import Relationship
+from .relationships import RelationshipProperty
 from .state import InstanceState
 from .. import exc
 from .. import inspection
 from .. import util
+from ..sql import sqltypes
 from ..sql.base import _NoArg
 from ..sql.elements import SQLCoreOperations
 from ..sql.schema import MetaData
@@ -70,6 +73,7 @@ from ..util import hybridmethod
 from ..util import hybridproperty
 from ..util import typing as compat_typing
 from ..util.typing import CallableReference
+from ..util.typing import is_generic
 from ..util.typing import Literal
 
 if TYPE_CHECKING:
@@ -80,6 +84,7 @@ if TYPE_CHECKING:
     from .interfaces import MapperProperty
     from .state import InstanceState  # noqa
     from ..sql._typing import _TypeEngineArgument
+    from ..util.typing import GenericProtocol
 
 _T = TypeVar("_T", bound=Any)
 
@@ -141,7 +146,7 @@ class DeclarativeAttributeIntercept(
 @compat_typing.dataclass_transform(
     field_descriptors=(
         MappedColumn[Any],
-        Relationship[Any],
+        RelationshipProperty[Any],
         Composite[Any],
         ColumnProperty[Any],
         Synonym[Any],
@@ -581,7 +586,6 @@ class MappedAsDataclass(metaclass=DCTransformDeclarative):
         match_args: Union[_NoArg, bool] = _NoArg.NO_ARG,
         kw_only: Union[_NoArg, bool] = _NoArg.NO_ARG,
     ) -> None:
-
         apply_dc_transforms: _DataclassArguments = {
             "init": init,
             "repr": repr,
@@ -683,9 +687,13 @@ class DeclarativeBase(
 
         __name__: ClassVar[str]
         __mapper__: ClassVar[Mapper[Any]]
-        __table__: ClassVar[Optional[FromClause]]
+        __table__: ClassVar[FromClause]
 
-        __tablename__: ClassVar[Any]
+        # pyright/pylance do not consider a classmethod a ClassVar so use Any
+        # https://github.com/microsoft/pylance-release/issues/3484
+        __tablename__: Any
+        __mapper_args__: Any
+        __table_args__: Any
 
         def __init__(self, **kw: Any):
             ...
@@ -696,6 +704,7 @@ class DeclarativeBase(
             _setup_declarative_base(cls)
         else:
             _as_declarative(cls._sa_registry, cls, cls.__dict__)
+        super().__init_subclass__()
 
 
 def _check_not_declarative(cls: Type[Any], base: Type[Any]) -> None:
@@ -1014,6 +1023,37 @@ class registry:
             }
         )
 
+    def _resolve_type(
+        self, python_type: Union[GenericProtocol[Any], Type[Any]]
+    ) -> Optional[sqltypes.TypeEngine[Any]]:
+
+        search: Tuple[Union[GenericProtocol[Any], Type[Any]], ...]
+
+        if is_generic(python_type):
+            python_type_type: Type[Any] = python_type.__origin__
+            search = (python_type,)
+        else:
+            # don't know why is_generic() TypeGuard[GenericProtocol[Any]]
+            # check above is not sufficient here
+            python_type_type = cast("Type[Any]", python_type)
+            search = python_type_type.__mro__
+
+        for pt in search:
+            sql_type = self.type_annotation_map.get(pt)
+            if sql_type is None:
+                sql_type = sqltypes._type_map_get(pt)  # type: ignore  # noqa: E501
+
+            if sql_type is not None:
+                sql_type_inst = sqltypes.to_instance(sql_type)  # type: ignore
+
+                resolved_sql_type = sql_type_inst._resolve_for_python_type(
+                    python_type_type, pt
+                )
+                if resolved_sql_type is not None:
+                    return resolved_sql_type
+
+        return None
+
     @property
     def mappers(self) -> FrozenSet[Mapper[Any]]:
         """read only collection of all :class:`_orm.Mapper` objects."""
@@ -1270,7 +1310,7 @@ class registry:
         if isinstance(cls, type):
             class_dict["__doc__"] = cls.__doc__
 
-        if self.constructor:
+        if self.constructor is not None:
             class_dict["__init__"] = self.constructor
 
         class_dict["__abstract__"] = True
@@ -1290,7 +1330,7 @@ class registry:
     @compat_typing.dataclass_transform(
         field_descriptors=(
             MappedColumn[Any],
-            Relationship[Any],
+            RelationshipProperty[Any],
             Composite[Any],
             ColumnProperty[Any],
             Synonym[Any],
@@ -1548,6 +1588,10 @@ class registry:
 
 
 RegistryType = registry
+
+if not TYPE_CHECKING:
+    # allow for runtime type resolution of ``ClassVar[_RegistryType]``
+    _RegistryType = registry  # noqa
 
 
 def as_declarative(**kw: Any) -> Callable[[Type[_T]], Type[_T]]:

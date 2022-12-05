@@ -316,8 +316,7 @@ def visit_binary_product(
             if isinstance(element, ColumnClause):
                 yield element
             for elem in element.get_children():
-                for e in visit(elem):
-                    yield e
+                yield from visit(elem)
 
     list(visit(expr))
     visit = None  # type: ignore  # remove gc cycles
@@ -433,12 +432,10 @@ def expand_column_list_from_order_by(collist, order_by):
     in the collist.
 
     """
-    cols_already_present = set(
-        [
-            col.element if col._order_by_label_element is not None else col
-            for col in collist
-        ]
-    )
+    cols_already_present = {
+        col.element if col._order_by_label_element is not None else col
+        for col in collist
+    }
 
     to_look_for = list(chain(*[unwrap_order_by(o) for o in order_by]))
 
@@ -463,13 +460,10 @@ def clause_is_present(clause, search):
 
 def tables_from_leftmost(clause: FromClause) -> Iterator[FromClause]:
     if isinstance(clause, Join):
-        for t in tables_from_leftmost(clause.left):
-            yield t
-        for t in tables_from_leftmost(clause.right):
-            yield t
+        yield from tables_from_leftmost(clause.left)
+        yield from tables_from_leftmost(clause.right)
     elif isinstance(clause, FromGrouping):
-        for t in tables_from_leftmost(clause.element):
-            yield t
+        yield from tables_from_leftmost(clause.element)
     else:
         yield clause
 
@@ -581,12 +575,18 @@ class _repr_base:
         return rep
 
 
+def _repr_single_value(value):
+    rp = _repr_base()
+    rp.max_chars = 300
+    return rp.trunc(value)
+
+
 class _repr_row(_repr_base):
     """Provide a string view of a row."""
 
     __slots__ = ("row",)
 
-    def __init__(self, row: "Row[Any]", max_chars: int = 300):
+    def __init__(self, row: Row[Any], max_chars: int = 300):
         self.row = row
         self.max_chars = max_chars
 
@@ -598,6 +598,21 @@ class _repr_row(_repr_base):
         )
 
 
+class _long_statement(str):
+    def __str__(self) -> str:
+        lself = len(self)
+        if lself > 500:
+            lleft = 250
+            lright = 100
+            trunc = lself - lleft - lright
+            return (
+                f"{self[0:lleft]} ... {trunc} "
+                f"characters truncated ... {self[-lright:]}"
+            )
+        else:
+            return str.__str__(self)
+
+
 class _repr_params(_repr_base):
     """Provide a string view of bound parameters.
 
@@ -606,12 +621,13 @@ class _repr_params(_repr_base):
 
     """
 
-    __slots__ = "params", "batches", "ismulti"
+    __slots__ = "params", "batches", "ismulti", "max_params"
 
     def __init__(
         self,
         params: Optional[_AnyExecuteParams],
         batches: int,
+        max_params: int = 100,
         max_chars: int = 300,
         ismulti: Optional[bool] = None,
     ):
@@ -619,6 +635,7 @@ class _repr_params(_repr_base):
         self.ismulti = ismulti
         self.batches = batches
         self.max_chars = max_chars
+        self.max_params = max_params
 
     def __repr__(self) -> str:
         if self.ismulti is None:
@@ -693,29 +710,110 @@ class _repr_params(_repr_base):
         else:
             return "(%s)" % elements
 
+    def _get_batches(self, params: Iterable[Any]) -> Any:
+
+        lparams = list(params)
+        lenparams = len(lparams)
+        if lenparams > self.max_params:
+            lleft = self.max_params // 2
+            return (
+                lparams[0:lleft],
+                lparams[-lleft:],
+                lenparams - self.max_params,
+            )
+        else:
+            return lparams, None, None
+
     def _repr_params(
         self,
         params: _AnySingleExecuteParams,
         typ: int,
     ) -> str:
-        trunc = self.trunc
         if typ is self._DICT:
-            return "{%s}" % (
-                ", ".join(
-                    "%r: %s" % (key, trunc(value))
-                    for key, value in cast(
-                        "_CoreSingleExecuteParams", params
-                    ).items()
-                )
+            return self._repr_param_dict(
+                cast("_CoreSingleExecuteParams", params)
             )
         elif typ is self._TUPLE:
-            seq_params = cast("Sequence[Any]", params)
-            return "(%s%s)" % (
-                ", ".join(trunc(value) for value in seq_params),
-                "," if len(seq_params) == 1 else "",
+            return self._repr_param_tuple(cast("Sequence[Any]", params))
+        else:
+            return self._repr_param_list(params)
+
+    def _repr_param_dict(self, params: _CoreSingleExecuteParams) -> str:
+        trunc = self.trunc
+        (
+            items_first_batch,
+            items_second_batch,
+            trunclen,
+        ) = self._get_batches(params.items())
+
+        if items_second_batch:
+            text = "{%s" % (
+                ", ".join(
+                    f"{key!r}: {trunc(value)}"
+                    for key, value in items_first_batch
+                )
+            )
+            text += f" ... {trunclen} parameters truncated ... "
+            text += "%s}" % (
+                ", ".join(
+                    f"{key!r}: {trunc(value)}"
+                    for key, value in items_second_batch
+                )
             )
         else:
-            return "[%s]" % (", ".join(trunc(value) for value in params))
+            text = "{%s}" % (
+                ", ".join(
+                    f"{key!r}: {trunc(value)}"
+                    for key, value in items_first_batch
+                )
+            )
+        return text
+
+    def _repr_param_tuple(self, params: Sequence[Any]) -> str:
+        trunc = self.trunc
+
+        (
+            items_first_batch,
+            items_second_batch,
+            trunclen,
+        ) = self._get_batches(params)
+
+        if items_second_batch:
+            text = "(%s" % (
+                ", ".join(trunc(value) for value in items_first_batch)
+            )
+            text += f" ... {trunclen} parameters truncated ... "
+            text += "%s)" % (
+                ", ".join(trunc(value) for value in items_second_batch),
+            )
+        else:
+            text = "(%s%s)" % (
+                ", ".join(trunc(value) for value in items_first_batch),
+                "," if len(items_first_batch) == 1 else "",
+            )
+        return text
+
+    def _repr_param_list(self, params: _AnySingleExecuteParams) -> str:
+        trunc = self.trunc
+        (
+            items_first_batch,
+            items_second_batch,
+            trunclen,
+        ) = self._get_batches(params)
+
+        if items_second_batch:
+            text = "[%s" % (
+                ", ".join(trunc(value) for value in items_first_batch)
+            )
+            text += f" ... {trunclen} parameters truncated ... "
+            text += "%s]" % (
+                ", ".join(trunc(value) for value in items_second_batch)
+            )
+        else:
+            text = "[%s]" % (
+                ", ".join(trunc(value) for value in items_first_batch)
+            )
+        return text
 
 
 def adapt_criterion_to_null(crit: _CE, nulls: Collection[Any]) -> _CE:
@@ -1099,7 +1197,9 @@ class ClauseAdapter(visitors.ReplacingExternalTraversal):
         elif self.exclude_fn and self.exclude_fn(col):
             return None
         else:
-            return self._corresponding_column(col, True)  # type: ignore
+            return self._corresponding_column(  # type: ignore
+                col, require_embedded=True
+            )
 
 
 class _ColumnLookup(Protocol):

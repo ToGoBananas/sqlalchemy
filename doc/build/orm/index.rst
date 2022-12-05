@@ -14,13 +14,9 @@ tutorial.
     quickstart
     mapper_config
     relationships
-    loading_objects
+    queryguide/index
     session
     extending
     extensions/index
     examples
 
-.. toctree::
-    :hidden:
-
-    tutorial

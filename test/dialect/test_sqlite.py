@@ -1,5 +1,3 @@
-#!coding: utf-8
-
 """SQLite-specific tests."""
 import datetime
 import json
@@ -1881,6 +1879,20 @@ class ConstraintReflectionTest(fixtures.TestBase):
             )
 
             conn.exec_driver_sql(
+                "CREATE TABLE deferrable_test (id INTEGER PRIMARY KEY, "
+                "c1 INTEGER, c2 INTEGER, c3 INTEGER, c4 INTEGER, "
+                "CONSTRAINT fk1 FOREIGN KEY (c1) REFERENCES a1(id) "
+                "DEFERRABLE,"
+                "CONSTRAINT fk2 FOREIGN KEY (c2) REFERENCES a1(id) "
+                "NOT DEFERRABLE,"
+                "CONSTRAINT fk3 FOREIGN KEY (c3) REFERENCES a2(id) "
+                "ON UPDATE CASCADE "
+                "DEFERRABLE INITIALLY DEFERRED,"
+                "CONSTRAINT fk4 FOREIGN KEY (c4) REFERENCES a2(id) "
+                "NOT DEFERRABLE INITIALLY IMMEDIATE)"
+            )
+
+            conn.exec_driver_sql(
                 "CREATE TABLE cp ("
                 "q INTEGER check (q > 1 AND q < 6),\n"
                 "CONSTRAINT cq CHECK (q == 1 OR (q > 2 AND q < 5))\n"
@@ -2250,6 +2262,51 @@ class ConstraintReflectionTest(fixtures.TestBase):
             ],
         )
 
+    def test_foreign_key_deferrable_initially(self):
+        inspector = inspect(testing.db)
+        fks = inspector.get_foreign_keys("deferrable_test")
+        eq_(
+            fks,
+            [
+                {
+                    "referred_table": "a1",
+                    "referred_columns": ["id"],
+                    "referred_schema": None,
+                    "name": "fk1",
+                    "constrained_columns": ["c1"],
+                    "options": {"deferrable": True},
+                },
+                {
+                    "referred_table": "a1",
+                    "referred_columns": ["id"],
+                    "referred_schema": None,
+                    "name": "fk2",
+                    "constrained_columns": ["c2"],
+                    "options": {"deferrable": False},
+                },
+                {
+                    "referred_table": "a2",
+                    "referred_columns": ["id"],
+                    "referred_schema": None,
+                    "name": "fk3",
+                    "constrained_columns": ["c3"],
+                    "options": {
+                        "deferrable": True,
+                        "initially": "DEFERRED",
+                        "onupdate": "CASCADE",
+                    },
+                },
+                {
+                    "referred_table": "a2",
+                    "referred_columns": ["id"],
+                    "referred_schema": None,
+                    "name": "fk4",
+                    "constrained_columns": ["c4"],
+                    "options": {"deferrable": False, "initially": "IMMEDIATE"},
+                },
+            ],
+        )
+
     def test_foreign_key_options_unnamed_inline(self):
         with testing.db.begin() as conn:
             conn.exec_driver_sql(
@@ -2282,6 +2339,7 @@ class ConstraintReflectionTest(fixtures.TestBase):
                     "unique": 1,
                     "name": "sqlite_autoindex_o_1",
                     "column_names": ["foo"],
+                    "dialect_options": {},
                 }
             ],
         )
@@ -2297,8 +2355,58 @@ class ConstraintReflectionTest(fixtures.TestBase):
                     "unique": 0,
                     "name": "ix_main_l_bar",
                     "column_names": ["bar"],
+                    "dialect_options": {},
                 }
             ],
+        )
+
+    def test_reflect_partial_indexes(self, connection):
+        connection.exec_driver_sql(
+            "create table foo_with_partial_index (x integer, y integer)"
+        )
+        connection.exec_driver_sql(
+            "create unique index ix_partial on "
+            "foo_with_partial_index (x) where y > 10"
+        )
+        connection.exec_driver_sql(
+            "create unique index ix_no_partial on "
+            "foo_with_partial_index (x)"
+        )
+        connection.exec_driver_sql(
+            "create unique index ix_partial2 on "
+            "foo_with_partial_index (x, y) where "
+            "y = 10 or abs(x) < 5"
+        )
+
+        inspector = inspect(connection)
+        indexes = inspector.get_indexes("foo_with_partial_index")
+        eq_(
+            indexes,
+            [
+                {
+                    "unique": 1,
+                    "name": "ix_no_partial",
+                    "column_names": ["x"],
+                    "dialect_options": {},
+                },
+                {
+                    "unique": 1,
+                    "name": "ix_partial",
+                    "column_names": ["x"],
+                    "dialect_options": {"sqlite_where": mock.ANY},
+                },
+                {
+                    "unique": 1,
+                    "name": "ix_partial2",
+                    "column_names": ["x", "y"],
+                    "dialect_options": {"sqlite_where": mock.ANY},
+                },
+            ],
+        )
+        eq_(indexes[1]["dialect_options"]["sqlite_where"].text, "y > 10")
+        eq_(
+            indexes[2]["dialect_options"]["sqlite_where"].text,
+            "y = 10 or abs(x) < 5",
         )
 
     def test_unique_constraint_named(self):

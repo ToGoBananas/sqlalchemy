@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import platform
 
+from . import asyncio as _test_asyncio
 from . import config
 from . import exclusions
 from . import only_on
@@ -424,6 +425,15 @@ class SuiteRequirements(Requirements):
         )
 
     @property
+    def insertmanyvalues(self):
+        return exclusions.only_if(
+            lambda config: config.db.dialect.supports_multivalues_insert
+            and config.db.dialect.insert_returning
+            and config.db.dialect.use_insertmanyvalues,
+            "%(database)s %(does_support)s 'insertmanyvalues functionality",
+        )
+
+    @property
     def tuple_in(self):
         """Target platform supports the syntax
         "(x, y) IN ((x1, y1), (x2, y2), ...)"
@@ -698,6 +708,11 @@ class SuiteRequirements(Requirements):
     @property
     def temp_table_names(self):
         """target dialect supports listing of temporary table names"""
+        return exclusions.closed()
+
+    @property
+    def has_temp_table(self):
+        """target dialect supports checking a single temp table name"""
         return exclusions.closed()
 
     @property
@@ -1406,10 +1421,26 @@ class SuiteRequirements(Requirements):
         )
 
     @property
+    def python310(self):
+        return exclusions.only_if(
+            lambda: util.py310, "Python 3.10 or above required"
+        )
+
+    @property
+    def python311(self):
+        return exclusions.only_if(
+            lambda: util.py311, "Python 3.11 or above required"
+        )
+
+    @property
     def cpython(self):
         return exclusions.only_if(
             lambda: util.cpython, "cPython interpreter needed"
         )
+
+    @property
+    def is64bit(self):
+        return exclusions.only_if(lambda: util.is64bit, "64bit required")
 
     @property
     def patch_library(self):
@@ -1483,6 +1514,9 @@ class SuiteRequirements(Requirements):
     @property
     def greenlet(self):
         def go(config):
+            if not _test_asyncio.ENABLE_ASYNCIO:
+                return False
+
             try:
                 import greenlet  # noqa: F401
             except ImportError:

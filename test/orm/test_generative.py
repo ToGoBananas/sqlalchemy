@@ -4,9 +4,11 @@ from sqlalchemy import func
 from sqlalchemy import Integer
 from sqlalchemy import testing
 from sqlalchemy.orm import relationship
+from sqlalchemy.testing import config
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing.fixtures import fixture_session
+from sqlalchemy.testing.provision import normalize_sequence
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 from test.orm import _fixtures
@@ -21,7 +23,12 @@ class GenerativeQueryTest(fixtures.MappedTest):
         Table(
             "foo",
             metadata,
-            Column("id", Integer, sa.Sequence("foo_id_seq"), primary_key=True),
+            Column(
+                "id",
+                Integer,
+                normalize_sequence(config, sa.Sequence("foo_id_seq")),
+                primary_key=True,
+            ),
             Column("bar", Integer),
             Column("range", Integer),
         )
@@ -290,7 +297,7 @@ class RelationshipsTest(_fixtures.FixtureTest):
             .outerjoin(Order.addresses)
             .filter(sa.or_(Order.id == None, Address.id == 1))
         )  # noqa
-        eq_(set([User(id=7), User(id=8), User(id=10)]), set(q.all()))
+        eq_({User(id=7), User(id=8), User(id=10)}, set(q.all()))
 
     def test_outer_join_count(self):
         """test the join and outerjoin functions on Query"""
@@ -331,7 +338,7 @@ class RelationshipsTest(_fixtures.FixtureTest):
             .select_from(sel)
             .filter(sa.or_(Order.id == None, Address.id == 1))
         )  # noqa
-        eq_(set([User(id=7), User(id=8), User(id=10)]), set(q.all()))
+        eq_({User(id=7), User(id=8), User(id=10)}, set(q.all()))
 
 
 class CaseSensitiveTest(fixtures.MappedTest):

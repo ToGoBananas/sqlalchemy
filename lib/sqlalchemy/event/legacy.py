@@ -58,7 +58,7 @@ def _legacy_signature(
 
 
 def _wrap_fn_for_legacy(
-    dispatch_collection: "_ClsLevelDispatch[_ET]",
+    dispatch_collection: _ClsLevelDispatch[_ET],
     fn: _ListenerFnType,
     argspec: FullArgSpec,
 ) -> _ListenerFnType:
@@ -120,7 +120,7 @@ def _indent(text: str, indent: str) -> str:
 
 
 def _standard_listen_example(
-    dispatch_collection: "_ClsLevelDispatch[_ET]",
+    dispatch_collection: _ClsLevelDispatch[_ET],
     sample_target: Any,
     fn: _ListenerFnType,
 ) -> str:
@@ -161,7 +161,7 @@ def _standard_listen_example(
 
 
 def _legacy_listen_examples(
-    dispatch_collection: "_ClsLevelDispatch[_ET]",
+    dispatch_collection: _ClsLevelDispatch[_ET],
     sample_target: str,
     fn: _ListenerFnType,
 ) -> str:
@@ -189,14 +189,14 @@ def _legacy_listen_examples(
 
 
 def _version_signature_changes(
-    parent_dispatch_cls: Type["_HasEventsDispatch[_ET]"],
-    dispatch_collection: "_ClsLevelDispatch[_ET]",
+    parent_dispatch_cls: Type[_HasEventsDispatch[_ET]],
+    dispatch_collection: _ClsLevelDispatch[_ET],
 ) -> str:
     since, args, conv = dispatch_collection.legacy_signatures[0]
     return (
-        "\n.. deprecated:: %(since)s\n"
-        "    The :class:`.%(clsname)s.%(event_name)s` event now accepts the \n"
-        "    arguments ``%(named_event_arguments)s%(has_kw_arguments)s``.\n"
+        "\n.. versionchanged:: %(since)s\n"
+        "    The :meth:`.%(clsname)s.%(event_name)s` event now accepts the \n"
+        "    arguments %(named_event_arguments)s%(has_kw_arguments)s.\n"
         "    Support for listener functions which accept the previous \n"
         '    argument signature(s) listed above as "deprecated" will be \n'
         "    removed in a future release."
@@ -204,15 +204,23 @@ def _version_signature_changes(
             "since": since,
             "clsname": parent_dispatch_cls.__name__,
             "event_name": dispatch_collection.name,
-            "named_event_arguments": ", ".join(dispatch_collection.arg_names),
+            "named_event_arguments": ", ".join(
+                ":paramref:`.%(clsname)s.%(event_name)s.%(param_name)s`"
+                % {
+                    "clsname": parent_dispatch_cls.__name__,
+                    "event_name": dispatch_collection.name,
+                    "param_name": param_name,
+                }
+                for param_name in dispatch_collection.arg_names
+            ),
             "has_kw_arguments": ", **kw" if dispatch_collection.has_kw else "",
         }
     )
 
 
 def _augment_fn_docs(
-    dispatch_collection: "_ClsLevelDispatch[_ET]",
-    parent_dispatch_cls: Type["_HasEventsDispatch[_ET]"],
+    dispatch_collection: _ClsLevelDispatch[_ET],
+    parent_dispatch_cls: Type[_HasEventsDispatch[_ET]],
     fn: _ListenerFnType,
 ) -> str:
     header = (

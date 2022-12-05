@@ -91,11 +91,13 @@ does not properly handle the exception.    For example::
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.ext.declarative import declarative_base
 
-    Base = declarative_base(create_engine('sqlite://'))
+    Base = declarative_base(create_engine("sqlite://"))
+
 
     class Foo(Base):
-        __tablename__ = 'foo'
+        __tablename__ = "foo"
         id = Column(Integer, primary_key=True)
+
 
     Base.metadata.create_all()
 
@@ -113,17 +115,16 @@ does not properly handle the exception.    For example::
     # continue using session without rolling back
     session.commit()
 
-
 The usage of the :class:`.Session` should fit within a structure similar to this::
 
     try:
-        <use session>
+        # <use session>
         session.commit()
     except:
-       session.rollback()
-       raise
+        session.rollback()
+        raise
     finally:
-       session.close()  # optional, depends on use case
+        session.close()  # optional, depends on use case
 
 Many things can cause a failure within the try/except besides flushes.
 Applications should ensure some system of "framing" is applied to ORM-oriented
@@ -154,7 +155,9 @@ any time and be exactly consistent with what's been flushed to the database.
 While this is theoretically possible, the usefulness of the enhancement is
 greatly decreased by the fact that many database operations require a ROLLBACK
 in any case. Postgres in particular has operations which, once failed, the
-transaction is not allowed to continue::
+transaction is not allowed to continue:
+
+.. sourcecode:: text
 
     test=> create table foo(id integer primary key);
     NOTICE:  CREATE TABLE / PRIMARY KEY will create implicit index "foo_pkey" for table "foo"
@@ -186,13 +189,13 @@ point of view there is still a transaction that is now in an inactive state.
 
 Given a block such as::
 
-  sess = Session()   # begins a logical transaction
-  try:
-      sess.flush()
+    sess = Session()  # begins a logical transaction
+    try:
+        sess.flush()
 
-      sess.commit()
-  except:
-      sess.rollback()
+        sess.commit()
+    except:
+        sess.rollback()
 
 Above, when a :class:`.Session` is first created, assuming "autocommit mode"
 isn't used, a logical transaction is established within the :class:`.Session`.
@@ -234,10 +237,10 @@ My Query does not return the same number of objects as query.count() tells me - 
 
 The :class:`_query.Query` object, when asked to return a list of ORM-mapped objects,
 will **deduplicate the objects based on primary key**.   That is, if we
-for example use the ``User`` mapping described at :ref:`ormtutorial_toplevel`,
+for example use the ``User`` mapping described at :ref:`tutorial_orm_table_metadata`,
 and we had a SQL query like the following::
 
-    q = session.query(User).outerjoin(User.addresses).filter(User.name == 'jack')
+    q = session.query(User).outerjoin(User.addresses).filter(User.name == "jack")
 
 Above, the sample data used in the tutorial has two rows in the ``addresses``
 table for the ``users`` row with the name ``'jack'``, primary key value 5.
@@ -257,7 +260,9 @@ This is because when the :class:`_query.Query` object returns full entities, the
 are **deduplicated**.    This does not occur if we instead request individual
 columns back::
 
-  >>> session.query(User.id, User.name).outerjoin(User.addresses).filter(User.name == 'jack').all()
+  >>> session.query(User.id, User.name).outerjoin(User.addresses).filter(
+  ...     User.name == "jack"
+  ... ).all()
   [(5, 'jack'), (5, 'jack')]
 
 There are two main reasons the :class:`_query.Query` will deduplicate:
@@ -338,9 +343,12 @@ one::
             print("ITER!")
             return iter([1, 2, 3, 4, 5])
 
+
     list(Iterates())
 
-output::
+output:
+
+.. sourcecode:: text
 
     ITER!
     LEN!
@@ -396,14 +404,21 @@ an "expire" event of the :func:`_orm.relationship` in which it's involved.  This
 that for the following sequence::
 
     o = session.scalars(select(SomeClass).limit(1)).first()
-    assert o.foo is None  # accessing an un-set attribute sets it to None
+
+    # assume the existing o.foo_id value is None;
+    # accessing o.foo will reconcile this as ``None``, but will effectively
+    # "load" the value of None
+    assert o.foo is None
+
+    # now set foo_id to something.  o.foo will not be immediately affected
     o.foo_id = 7
 
-``o.foo`` is initialized to ``None`` when we first accessed it.  Setting
-``o.foo_id = 7`` will have the value of "7" as pending, but no flush
+``o.foo`` is loaded with its effective database value of ``None`` when it
+is first accessed.  Setting
+``o.foo_id = 7`` will have the value of "7" as a pending change, but no flush
 has occurred - so ``o.foo`` is still ``None``::
 
-    # attribute is already set to None, has not been
+    # attribute is already "loaded" as None, has not been
     # reconciled with o.foo_id = 7 yet
     assert o.foo is None
 
@@ -411,18 +426,19 @@ For ``o.foo`` to load based on the foreign key mutation is usually achieved
 naturally after the commit, which both flushes the new foreign key value
 and expires all state::
 
-    Session.commit()  # expires all attributes
+    session.commit()  # expires all attributes
 
     foo_7 = session.get(Foo, 7)
 
-    assert o.foo is foo_7  # o.foo lazyloads on access
+    # o.foo will lazyload again, this time getting the new object
+    assert o.foo is foo_7
 
 A more minimal operation is to expire the attribute individually - this can
 be performed for any :term:`persistent` object using :meth:`.Session.expire`::
 
     o = session.scalars(select(SomeClass).limit(1)).first()
     o.foo_id = 7
-    Session.expire(o, ['foo'])  # object must be persistent for this
+    Session.expire(o, ["foo"])  # object must be persistent for this
 
     foo_7 = session.get(Foo, 7)
 
@@ -438,16 +454,14 @@ have meaning until the row is inserted; otherwise there is no row yet::
 
     Session.add(new_obj)
 
-    # accessing an un-set attribute sets it to None
+    # returns None but this is not a "lazyload", as the object is not
+    # persistent in the DB yet, and the None value is not part of the
+    # object's state
     assert new_obj.foo is None
 
     Session.flush()  # emits INSERT
 
-    # expire this because we already set .foo to None
-    Session.expire(o, ['foo'])
-
     assert new_obj.foo is foo_7  # now it loads
-
 
 .. topic:: Attribute loading for non-persistent objects
 
@@ -504,21 +518,21 @@ The function can be demonstrated as follows::
 
 
     class A(Base):
-        __tablename__ = 'a'
+        __tablename__ = "a"
         id = Column(Integer, primary_key=True)
         bs = relationship("B", backref="a")
 
 
     class B(Base):
-        __tablename__ = 'b'
+        __tablename__ = "b"
         id = Column(Integer, primary_key=True)
-        a_id = Column(ForeignKey('a.id'))
-        c_id = Column(ForeignKey('c.id'))
+        a_id = Column(ForeignKey("a.id"))
+        c_id = Column(ForeignKey("c.id"))
         c = relationship("C", backref="bs")
 
 
     class C(Base):
-        __tablename__ = 'c'
+        __tablename__ = "c"
         id = Column(Integer, primary_key=True)
 
 
@@ -528,7 +542,9 @@ The function can be demonstrated as follows::
     for obj in walk(a1):
         print(obj)
 
-Output::
+Output:
+
+.. sourcecode:: text
 
     <__main__.A object at 0x10303b190>
     <__main__.B object at 0x103025210>

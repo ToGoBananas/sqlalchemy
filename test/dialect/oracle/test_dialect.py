@@ -1,5 +1,3 @@
-# coding: utf-8
-
 from multiprocessing import get_context
 import re
 from unittest import mock
@@ -100,7 +98,7 @@ class OracledbMode(fixtures.TestBase):
     def _run_in_process(self, fn):
         ctx = get_context("spawn")
         queue = ctx.Queue()
-        process = ctx.Process(target=fn, args=(str(config.db_url), queue))
+        process = ctx.Process(target=fn, args=(config.db_url, queue))
         try:
             process.start()
             process.join(10)

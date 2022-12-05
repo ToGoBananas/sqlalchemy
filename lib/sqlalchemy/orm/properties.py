@@ -27,9 +27,11 @@ from typing import TypeVar
 
 from . import attributes
 from . import strategy_options
-from .descriptor_props import Composite
+from .base import _DeclarativeMapped
+from .base import class_mapper
+from .descriptor_props import CompositeProperty
 from .descriptor_props import ConcreteInheritedProperty
-from .descriptor_props import Synonym
+from .descriptor_props import SynonymProperty
 from .interfaces import _AttributeOptions
 from .interfaces import _DEFAULT_ATTRIBUTE_OPTIONS
 from .interfaces import _IntrospectsAnnotations
@@ -37,23 +39,24 @@ from .interfaces import _MapsColumns
 from .interfaces import MapperProperty
 from .interfaces import PropComparator
 from .interfaces import StrategizedProperty
-from .relationships import Relationship
+from .relationships import RelationshipProperty
 from .. import exc as sa_exc
 from .. import ForeignKey
 from .. import log
 from .. import util
 from ..sql import coercions
 from ..sql import roles
-from ..sql import sqltypes
 from ..sql.base import _NoArg
-from ..sql.elements import SQLCoreOperations
+from ..sql.roles import DDLConstraintColumnRole
 from ..sql.schema import Column
 from ..sql.schema import SchemaConst
 from ..util.typing import de_optionalize_union_types
 from ..util.typing import de_stringify_annotation
+from ..util.typing import de_stringify_union_elements
 from ..util.typing import is_fwd_ref
+from ..util.typing import is_optional_union
 from ..util.typing import is_pep593
-from ..util.typing import NoneType
+from ..util.typing import is_union
 from ..util.typing import Self
 from ..util.typing import typing_get_args
 
@@ -62,6 +65,8 @@ if TYPE_CHECKING:
     from ._typing import _InstanceDict
     from ._typing import _ORMColumnExprArgument
     from ._typing import _RegistryType
+    from .base import Mapped
+    from .decl_base import _ClassScanMapperConfig
     from .mapper import Mapper
     from .session import Session
     from .state import _InstallLoaderCallableProto
@@ -79,10 +84,10 @@ _NC = TypeVar("_NC", bound="NamedColumn[Any]")
 
 __all__ = [
     "ColumnProperty",
-    "Composite",
+    "CompositeProperty",
     "ConcreteInheritedProperty",
-    "Relationship",
-    "Synonym",
+    "RelationshipProperty",
+    "SynonymProperty",
 ]
 
 
@@ -93,7 +98,8 @@ class ColumnProperty(
     _IntrospectsAnnotations,
     log.Identified,
 ):
-    """Describes an object attribute that corresponds to a table column.
+    """Describes an object attribute that corresponds to a table column
+    or other column expression.
 
     Public constructor is the :func:`_orm.column_property` function.
 
@@ -101,6 +107,8 @@ class ColumnProperty(
 
     strategy_wildcard_key = strategy_options._COLUMN_TOKEN
     inherit_cache = True
+    """:meta private:"""
+
     _links_to_entity = False
 
     columns: List[NamedColumn[Any]]
@@ -143,9 +151,7 @@ class ColumnProperty(
         doc: Optional[str] = None,
         _instrument: bool = True,
     ):
-        super(ColumnProperty, self).__init__(
-            attribute_options=attribute_options
-        )
+        super().__init__(attribute_options=attribute_options)
         columns = (column,) + additional_columns
         self.columns = [
             coercions.expect(roles.LabeledColumnExprRole, c) for c in columns
@@ -187,9 +193,12 @@ class ColumnProperty(
 
     def declarative_scan(
         self,
+        decl_scan: _ClassScanMapperConfig,
         registry: _RegistryType,
         cls: Type[Any],
+        originating_module: Optional[str],
         key: str,
+        mapped_container: Optional[Type[Mapped[Any]]],
         annotation: Optional[_AnnotationScanType],
         extracted_mapped_annotation: Optional[_AnnotationScanType],
         is_dataclass_field: bool,
@@ -201,7 +210,7 @@ class ColumnProperty(
             column.name = key
 
     @property
-    def mapper_property_to_assign(self) -> Optional["MapperProperty[_T]"]:
+    def mapper_property_to_assign(self) -> Optional[MapperProperty[_T]]:
         return self
 
     @property
@@ -214,6 +223,9 @@ class ColumnProperty(
         ]
 
     def _memoized_attr__renders_in_subqueries(self) -> bool:
+        if ("query_expression", True) in self.strategy_key:
+            return self.strategy._have_default_expression  # type: ignore
+
         return ("deferred", True) not in self.strategy_key or (
             self not in self.parent._readonly_props  # type: ignore
         )
@@ -429,7 +441,7 @@ class ColumnProperty(
             try:
                 return ce.info  # type: ignore
             except AttributeError:
-                return self.prop.info
+                return self.prop.info  # type: ignore
 
         def _memoized_attr_expressions(self) -> Sequence[NamedColumn[Any]]:
             """The full sequence of columns referenced by this
@@ -472,10 +484,29 @@ class ColumnProperty(
         return str(self.parent.class_.__name__) + "." + self.key
 
 
+class MappedSQLExpression(ColumnProperty[_T], _DeclarativeMapped[_T]):
+    """Declarative front-end for the :class:`.ColumnProperty` class.
+
+    Public constructor is the :func:`_orm.column_property` function.
+
+    .. versionchanged:: 2.0 Added :class:`_orm.MappedSQLExpression` as
+       a Declarative compatible subclass for :class:`_orm.ColumnProperty`.
+
+    .. seealso::
+
+        :class:`.MappedColumn`
+
+    """
+
+    inherit_cache = True
+    """:meta private:"""
+
+
 class MappedColumn(
-    SQLCoreOperations[_T],
+    DDLConstraintColumnRole,
     _IntrospectsAnnotations,
     _MapsColumns[_T],
+    _DeclarativeMapped[_T],
 ):
     """Maps a single :class:`_schema.Column` on a class.
 
@@ -502,6 +533,7 @@ class MappedColumn(
         "deferred_raiseload",
         "_attribute_options",
         "_has_dataclass_arguments",
+        "_use_existing_column",
     )
 
     deferred: bool
@@ -516,6 +548,8 @@ class MappedColumn(
         self._attribute_options = attr_opts = kw.pop(
             "attribute_options", _DEFAULT_ATTRIBUTE_OPTIONS
         )
+
+        self._use_existing_column = kw.pop("use_existing_column", False)
 
         self._has_dataclass_arguments = False
 
@@ -563,6 +597,7 @@ class MappedColumn(
         new._attribute_options = self._attribute_options
         new._has_insert_default = self._has_insert_default
         new._has_dataclass_arguments = self._has_dataclass_arguments
+        new._use_existing_column = self._use_existing_column
         util.set_creation_order(new)
         return new
 
@@ -571,7 +606,7 @@ class MappedColumn(
         return self.column.name
 
     @property
-    def mapper_property_to_assign(self) -> Optional["MapperProperty[_T]"]:
+    def mapper_property_to_assign(self) -> Optional[MapperProperty[_T]]:
         if self.deferred:
             return ColumnProperty(
                 self.column,
@@ -606,14 +641,29 @@ class MappedColumn(
 
     def declarative_scan(
         self,
+        decl_scan: _ClassScanMapperConfig,
         registry: _RegistryType,
         cls: Type[Any],
+        originating_module: Optional[str],
         key: str,
+        mapped_container: Optional[Type[Mapped[Any]]],
         annotation: Optional[_AnnotationScanType],
         extracted_mapped_annotation: Optional[_AnnotationScanType],
         is_dataclass_field: bool,
     ) -> None:
         column = self.column
+
+        if self._use_existing_column and decl_scan.inherits:
+            if decl_scan.is_deferred:
+                raise sa_exc.ArgumentError(
+                    "Can't use use_existing_column with deferred mappers"
+                )
+            supercls_mapper = class_mapper(decl_scan.inherits, False)
+
+            column = self.column = supercls_mapper.local_table.c.get(  # type: ignore # noqa: E501
+                key, column
+            )
+
         if column.key is None:
             column.key = key
         if column.name is None:
@@ -628,7 +678,7 @@ class MappedColumn(
                 return
 
         self._init_column_for_annotation(
-            cls, registry, extracted_mapped_annotation
+            cls, registry, extracted_mapped_annotation, originating_module
         )
 
     @util.preload_module("sqlalchemy.orm.decl_base")
@@ -636,33 +686,46 @@ class MappedColumn(
         self,
         registry: _RegistryType,
         cls: Type[Any],
+        originating_module: Optional[str],
         key: str,
         param_name: str,
         param_annotation: _AnnotationScanType,
     ) -> None:
         decl_base = util.preloaded.orm_decl_base
         decl_base._undefer_column_name(param_name, self.column)
-        self._init_column_for_annotation(cls, registry, param_annotation)
+        self._init_column_for_annotation(
+            cls, registry, param_annotation, originating_module
+        )
 
     def _init_column_for_annotation(
         self,
         cls: Type[Any],
         registry: _RegistryType,
         argument: _AnnotationScanType,
+        originating_module: Optional[str],
     ) -> None:
         sqltype = self.column.type
 
-        nullable = False
+        if isinstance(argument, str) or is_fwd_ref(
+            argument, check_generic=True
+        ):
+            assert originating_module is not None
+            argument = de_stringify_annotation(
+                cls, argument, originating_module, include_generic=True
+            )
 
-        if hasattr(argument, "__origin__"):
-            nullable = NoneType in argument.__args__  # type: ignore
+        if is_union(argument):
+            assert originating_module is not None
+            argument = de_stringify_union_elements(
+                cls, argument, originating_module
+            )
+
+        nullable = is_optional_union(argument)
 
         if not self._has_nullable:
             self.column.nullable = nullable
 
         our_type = de_optionalize_union_types(argument)
-        if is_fwd_ref(our_type):
-            our_type = de_stringify_annotation(cls, our_type)
 
         use_args_from = None
         if is_pep593(our_type):
@@ -692,10 +755,8 @@ class MappedColumn(
                 checks = (our_type,)
 
             for check_type in checks:
-                if registry.type_annotation_map:
-                    new_sqltype = registry.type_annotation_map.get(check_type)
-                if new_sqltype is None:
-                    new_sqltype = sqltypes._type_map_get(check_type)  # type: ignore  # noqa: E501
+
+                new_sqltype = registry._resolve_type(check_type)
                 if new_sqltype is not None:
                     break
             else:
@@ -704,4 +765,4 @@ class MappedColumn(
                     f"type for Python type: {our_type}"
                 )
 
-            self.column.type = sqltypes.to_instance(new_sqltype)
+            self.column._set_type(new_sqltype)

@@ -1,5 +1,3 @@
-# coding: utf-8
-
 import collections.abc as collections_abc
 from contextlib import contextmanager
 from contextlib import nullcontext
@@ -53,6 +51,7 @@ from sqlalchemy.testing import is_false
 from sqlalchemy.testing import is_not
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing.assertsql import CompiledSQL
+from sqlalchemy.testing.provision import normalize_sequence
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 from sqlalchemy.testing.util import gc_collect
@@ -506,7 +505,7 @@ class ExecuteTest(fixtures.TablesTest):
     def test_stmt_exception_bytestring_utf8(self):
         # uncommon case for Py3K, bytestring object passed
         # as the error message
-        message = "some message méil".encode("utf-8")
+        message = "some message méil".encode()
 
         err = tsa.exc.SQLAlchemyError(message)
         eq_(str(err), "some message méil")
@@ -536,7 +535,7 @@ class ExecuteTest(fixtures.TablesTest):
         eq_(str(err), "('some message', 206)")
 
     def test_stmt_exception_str_multi_args_bytestring(self):
-        message = "some message méil".encode("utf-8")
+        message = "some message méil".encode()
 
         err = tsa.exc.SQLAlchemyError(message, 206)
         eq_(str(err), str((message, 206)))
@@ -1222,7 +1221,7 @@ class MockStrategyTest(fixtures.TestBase):
             Column(
                 "pk",
                 Integer,
-                Sequence("testtable_pk_seq"),
+                normalize_sequence(config, Sequence("testtable_pk_seq")),
                 primary_key=True,
             ),
         )
@@ -2408,7 +2407,7 @@ class EngineEventsTest(fixtures.TestBase):
             Column(
                 "x",
                 Integer,
-                Sequence("t_id_seq"),
+                normalize_sequence(config, Sequence("t_id_seq")),
                 primary_key=True,
             ),
             implicit_returning=False,
@@ -2499,60 +2498,52 @@ class EngineEventsTest(fixtures.TestBase):
         eq_(
             canary,
             [
-                ("begin", set(["conn"])),
+                ("begin", {"conn"}),
                 (
                     "execute",
-                    set(
-                        [
-                            "conn",
-                            "clauseelement",
-                            "multiparams",
-                            "params",
-                            "execution_options",
-                        ]
-                    ),
+                    {
+                        "conn",
+                        "clauseelement",
+                        "multiparams",
+                        "params",
+                        "execution_options",
+                    },
                 ),
                 (
                     "cursor_execute",
-                    set(
-                        [
-                            "conn",
-                            "cursor",
-                            "executemany",
-                            "statement",
-                            "parameters",
-                            "context",
-                        ]
-                    ),
+                    {
+                        "conn",
+                        "cursor",
+                        "executemany",
+                        "statement",
+                        "parameters",
+                        "context",
+                    },
                 ),
-                ("rollback", set(["conn"])),
-                ("begin", set(["conn"])),
+                ("rollback", {"conn"}),
+                ("begin", {"conn"}),
                 (
                     "execute",
-                    set(
-                        [
-                            "conn",
-                            "clauseelement",
-                            "multiparams",
-                            "params",
-                            "execution_options",
-                        ]
-                    ),
+                    {
+                        "conn",
+                        "clauseelement",
+                        "multiparams",
+                        "params",
+                        "execution_options",
+                    },
                 ),
                 (
                     "cursor_execute",
-                    set(
-                        [
-                            "conn",
-                            "cursor",
-                            "executemany",
-                            "statement",
-                            "parameters",
-                            "context",
-                        ]
-                    ),
+                    {
+                        "conn",
+                        "cursor",
+                        "executemany",
+                        "statement",
+                        "parameters",
+                        "context",
+                    },
                 ),
-                ("commit", set(["conn"])),
+                ("commit", {"conn"}),
             ],
         )
 
@@ -3382,11 +3373,11 @@ class OnConnectTest(fixtures.TestBase):
 
         class SomeDialect(cls_):
             def initialize(self, connection):
-                super(SomeDialect, self).initialize(connection)
+                super().initialize(connection)
                 m1.initialize(connection)
 
             def on_connect(self):
-                oc = super(SomeDialect, self).on_connect()
+                oc = super().on_connect()
 
                 def my_on_connect(conn):
                     if oc:
@@ -3455,11 +3446,11 @@ class OnConnectTest(fixtures.TestBase):
             supports_statement_cache = True
 
             def initialize(self, connection):
-                super(SomeDialect, self).initialize(connection)
+                super().initialize(connection)
                 m1.append("initialize")
 
             def on_connect(self):
-                oc = super(SomeDialect, self).on_connect()
+                oc = super().on_connect()
 
                 def my_on_connect(conn):
                     if oc:
@@ -3736,7 +3727,7 @@ class DialectEventTest(fixtures.TestBase):
 class SetInputSizesTest(fixtures.TablesTest):
     __backend__ = True
 
-    __requires__ = ("independent_connections",)
+    __requires__ = ("independent_connections", "insert_returning")
 
     @classmethod
     def define_tables(cls, metadata):
@@ -3752,15 +3743,6 @@ class SetInputSizesTest(fixtures.TablesTest):
         canary = mock.Mock()
 
         def do_set_input_sizes(cursor, list_of_tuples, context):
-            if not engine.dialect.positional:
-                # sort by "user_id", "user_name", or otherwise
-                # param name for a non-positional dialect, so that we can
-                # confirm the ordering.  mostly a py2 thing probably can't
-                # occur on py3.6+ since we are passing dictionaries with
-                # "user_id", "user_name"
-                list_of_tuples = sorted(
-                    list_of_tuples, key=lambda elem: elem[0]
-                )
             canary.do_set_input_sizes(cursor, list_of_tuples, context)
 
         def pre_exec(self):
@@ -3786,16 +3768,74 @@ class SetInputSizesTest(fixtures.TablesTest):
         ):
             yield engine, canary
 
+    @testing.requires.insertmanyvalues
+    def test_set_input_sizes_insertmanyvalues_no_event(
+        self, input_sizes_fixture
+    ):
+        engine, canary = input_sizes_fixture
+
+        with engine.begin() as conn:
+            conn.execute(
+                self.tables.users.insert().returning(
+                    self.tables.users.c.user_id
+                ),
+                [
+                    {"user_id": 1, "user_name": "n1"},
+                    {"user_id": 2, "user_name": "n2"},
+                    {"user_id": 3, "user_name": "n3"},
+                ],
+            )
+
+        eq_(
+            canary.mock_calls,
+            [
+                call.do_set_input_sizes(
+                    mock.ANY,
+                    [
+                        (
+                            "user_id_0",
+                            mock.ANY,
+                            testing.eq_type_affinity(Integer),
+                        ),
+                        (
+                            "user_name_0",
+                            mock.ANY,
+                            testing.eq_type_affinity(String),
+                        ),
+                        (
+                            "user_id_1",
+                            mock.ANY,
+                            testing.eq_type_affinity(Integer),
+                        ),
+                        (
+                            "user_name_1",
+                            mock.ANY,
+                            testing.eq_type_affinity(String),
+                        ),
+                        (
+                            "user_id_2",
+                            mock.ANY,
+                            testing.eq_type_affinity(Integer),
+                        ),
+                        (
+                            "user_name_2",
+                            mock.ANY,
+                            testing.eq_type_affinity(String),
+                        ),
+                    ],
+                    mock.ANY,
+                )
+            ],
+        )
+
     def test_set_input_sizes_no_event(self, input_sizes_fixture):
         engine, canary = input_sizes_fixture
 
         with engine.begin() as conn:
             conn.execute(
-                self.tables.users.insert(),
-                [
-                    {"user_id": 1, "user_name": "n1"},
-                    {"user_id": 2, "user_name": "n2"},
-                ],
+                self.tables.users.update()
+                .where(self.tables.users.c.user_id == 15)
+                .values(user_id=15, user_name="n1"),
             )
 
         eq_(
@@ -3813,6 +3853,11 @@ class SetInputSizesTest(fixtures.TablesTest):
                             "user_name",
                             mock.ANY,
                             testing.eq_type_affinity(String),
+                        ),
+                        (
+                            "user_id_1",
+                            mock.ANY,
+                            testing.eq_type_affinity(Integer),
                         ),
                     ],
                     mock.ANY,
@@ -3924,11 +3969,9 @@ class SetInputSizesTest(fixtures.TablesTest):
 
         with engine.begin() as conn:
             conn.execute(
-                self.tables.users.insert(),
-                [
-                    {"user_id": 1, "user_name": "n1"},
-                    {"user_id": 2, "user_name": "n2"},
-                ],
+                self.tables.users.update()
+                .where(self.tables.users.c.user_id == 15)
+                .values(user_id=15, user_name="n1"),
             )
 
         eq_(
@@ -3946,6 +3989,11 @@ class SetInputSizesTest(fixtures.TablesTest):
                             "user_name",
                             (SPECIAL_STRING, None, 0),
                             testing.eq_type_affinity(String),
+                        ),
+                        (
+                            "user_id_1",
+                            mock.ANY,
+                            testing.eq_type_affinity(Integer),
                         ),
                     ],
                     mock.ANY,

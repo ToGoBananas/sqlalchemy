@@ -46,6 +46,7 @@ from ._collections import UniqueAppender as UniqueAppender
 from ._collections import update_copy as update_copy
 from ._collections import WeakPopulateDict as WeakPopulateDict
 from ._collections import WeakSequence as WeakSequence
+from .compat import anext_ as anext_
 from .compat import arm as arm
 from .compat import b as b
 from .compat import b64decode as b64decode
@@ -57,10 +58,12 @@ from .compat import decode_backslashreplace as decode_backslashreplace
 from .compat import dottedgetter as dottedgetter
 from .compat import has_refcount_gc as has_refcount_gc
 from .compat import inspect_getfullargspec as inspect_getfullargspec
+from .compat import is64bit as is64bit
 from .compat import local_dataclass_fields as local_dataclass_fields
 from .compat import osx as osx
 from .compat import py310 as py310
 from .compat import py311 as py311
+from .compat import py312 as py312
 from .compat import py38 as py38
 from .compat import py39 as py39
 from .compat import pypy as pypy
@@ -138,6 +141,7 @@ from .langhelpers import portable_instancemethod as portable_instancemethod
 from .langhelpers import quoted_token_parser as quoted_token_parser
 from .langhelpers import ro_memoized_property as ro_memoized_property
 from .langhelpers import ro_non_memoized_property as ro_non_memoized_property
+from .langhelpers import rw_hybridproperty as rw_hybridproperty
 from .langhelpers import safe_reraise as safe_reraise
 from .langhelpers import set_creation_order as set_creation_order
 from .langhelpers import string_or_unprintable as string_or_unprintable

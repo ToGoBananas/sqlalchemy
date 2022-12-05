@@ -918,7 +918,6 @@ class OneToManyManyToOneTest(fixtures.MappedTest):
                 favorite=relationship(
                     Ball,
                     primaryjoin=person.c.favorite_ball_id == ball.c.id,
-                    remote_side=person.c.favorite_ball_id,
                     post_update=True,
                     _legacy_inactive_history_style=(
                         self._legacy_inactive_history_style
@@ -1036,7 +1035,6 @@ class OneToManyManyToOneTest(fixtures.MappedTest):
                 favorite=relationship(
                     Ball,
                     primaryjoin=person.c.favorite_ball_id == ball.c.id,
-                    remote_side=person.c.favorite_ball_id,
                     _legacy_inactive_history_style=(
                         self._legacy_inactive_history_style
                     ),
@@ -1096,7 +1094,6 @@ class OneToManyManyToOneTest(fixtures.MappedTest):
                 favorite=relationship(
                     Ball,
                     primaryjoin=person.c.favorite_ball_id == ball.c.id,
-                    remote_side=person.c.favorite_ball_id,
                     _legacy_inactive_history_style=(
                         self._legacy_inactive_history_style
                     ),
@@ -1125,7 +1122,7 @@ class OneToManyManyToOneTest(fixtures.MappedTest):
                 [
                     CompiledSQL(
                         "INSERT INTO ball (person_id, data) "
-                        "VALUES (:person_id, :data)",
+                        "VALUES (:person_id, :data) RETURNING ball.id",
                         [
                             {"person_id": None, "data": "some data"},
                             {"person_id": None, "data": "some data"},

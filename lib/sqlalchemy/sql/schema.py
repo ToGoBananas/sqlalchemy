@@ -58,6 +58,7 @@ from . import ddl
 from . import roles
 from . import type_api
 from . import visitors
+from .base import _NoneName
 from .base import DedupeColumnCollection
 from .base import DialectKWArgs
 from .base import Executable
@@ -97,7 +98,7 @@ if typing.TYPE_CHECKING:
     from ..engine import Connection
     from ..engine import Engine
     from ..engine.interfaces import _CoreMultiExecuteParams
-    from ..engine.interfaces import _ExecuteOptionsParameter
+    from ..engine.interfaces import CoreExecuteOptionsParameter
     from ..engine.interfaces import ExecutionContext
     from ..engine.mock import MockConnection
     from ..engine.reflection import _ReflectionInfo
@@ -105,11 +106,13 @@ if typing.TYPE_CHECKING:
 
 _T = TypeVar("_T", bound="Any")
 _SI = TypeVar("_SI", bound="SchemaItem")
-_ServerDefaultType = Union["FetchedValue", str, TextClause, ColumnElement]
+_ServerDefaultType = Union["FetchedValue", str, TextClause, ColumnElement[Any]]
 _TAB = TypeVar("_TAB", bound="Table")
 
 
 _CreateDropBind = Union["Engine", "Connection", "MockConnection"]
+
+_ConstraintNameArgument = Optional[Union[str, _NoneName]]
 
 
 class SchemaConst(Enum):
@@ -647,8 +650,9 @@ class Table(
             server side defaults, on those backends which support RETURNING.
 
             In modern SQLAlchemy there is generally no reason to alter this
-            setting, except in the case of some backends such as SQL Server
-            when INSERT triggers are used for that table.
+            setting, except for some backend specific cases
+            (see :ref:`mssql_triggers` in the SQL Server dialect documentation
+            for one such example).
 
         :param include_columns: A list of strings indicating a subset of
             columns to be loaded via the ``autoload`` operation; table columns who
@@ -868,6 +872,7 @@ class Table(
             allow_replacements=extend_existing
             or keep_existing
             or autoload_with,
+            all_names={},
         )
 
     def _autoload(
@@ -919,11 +924,11 @@ class Table(
             :attr:`_schema.Table.indexes`
 
         """
-        return set(
+        return {
             fkc.constraint
             for fkc in self.foreign_keys
             if fkc.constraint is not None
-        )
+        }
 
     def _init_existing(self, *args: Any, **kwargs: Any) -> None:
         autoload_with = kwargs.pop("autoload_with", None)
@@ -932,9 +937,13 @@ class Table(
         schema = kwargs.pop("schema", None)
         _extend_on = kwargs.pop("_extend_on", None)
         _reflect_info = kwargs.pop("_reflect_info", None)
+
         # these arguments are only used with _init()
-        kwargs.pop("extend_existing", False)
-        kwargs.pop("keep_existing", False)
+        extend_existing = kwargs.pop("extend_existing", False)
+        keep_existing = kwargs.pop("keep_existing", False)
+
+        assert extend_existing
+        assert not keep_existing
 
         if schema and schema != self.schema:
             raise exc.ArgumentError(
@@ -983,8 +992,9 @@ class Table(
                 _reflect_info=_reflect_info,
             )
 
+        all_names = {c.name: c for c in self.c}
         self._extra_kwargs(**kwargs)
-        self._init_items(*args)
+        self._init_items(*args, allow_replacements=True, all_names=all_names)
 
     def _extra_kwargs(self, **kwargs: Any) -> None:
         self._validate_dialect_kwargs(kwargs)
@@ -1066,9 +1076,18 @@ class Table(
             .. versionadded:: 1.4.0
         """
 
-        column._set_parent_with_dispatch(
-            self, allow_replacements=replace_existing
-        )
+        try:
+            column._set_parent_with_dispatch(
+                self,
+                allow_replacements=replace_existing,
+                all_names={c.name: c for c in self.c},
+            )
+        except exc.DuplicateColumnError as de:
+            raise exc.DuplicateColumnError(
+                f"{de.args[0]} Specify replace_existing=True to "
+                "Table.append_column() to replace an "
+                "existing column."
+            ) from de
 
     def append_constraint(self, constraint: Union[Index, Constraint]) -> None:
         """Append a :class:`_schema.Constraint` to this
@@ -1894,7 +1913,7 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
         # name = None is expected to be an interim state
         # note this use case is legacy now that ORM declarative has a
         # dedicated "column" construct local to the ORM
-        super(Column, self).__init__(name, type_)  # type: ignore
+        super().__init__(name, type_)  # type: ignore
 
         self.key = key if key is not None else name  # type: ignore
         self.primary_key = primary_key
@@ -1926,11 +1945,7 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
             self._proxies = _proxies
         else:
             # otherwise, add DDL-related events
-            if isinstance(self.type, SchemaEventTarget):
-                self.type._set_parent_with_dispatch(self)
-            for impl in self.type._variant_mapping.values():
-                if isinstance(impl, SchemaEventTarget):
-                    impl._set_parent_with_dispatch(self)
+            self._set_type(self.type)
 
         if default is not None:
             if not isinstance(default, (ColumnDefault, Sequence)):
@@ -2022,6 +2037,25 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
 
     identity: Optional[Identity]
 
+    def _set_type(self, type_: TypeEngine[Any]) -> None:
+        self.type = type_
+        if isinstance(self.type, SchemaEventTarget):
+            self.type._set_parent_with_dispatch(self)
+        for impl in self.type._variant_mapping.values():
+            if isinstance(impl, SchemaEventTarget):
+                impl._set_parent_with_dispatch(self)
+
+    @util.memoized_property
+    def _gen_static_annotations_cache_key(self) -> bool:  # type: ignore
+        """special attribute used by cache key gen, if true, we will
+        use a static cache key for the annotations dictionary, else we
+        will generate a new cache key for annotations each time.
+
+        Added for #8790
+
+        """
+        return self.table is not None and self.table._is_table
+
     def _extra_kwargs(self, **kwargs: Any) -> None:
         self._validate_dialect_kwargs(kwargs)
 
@@ -2080,10 +2114,12 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
             + ["%s=%s" % (k, repr(getattr(self, k))) for k in kwarg]
         )
 
-    def _set_parent(
+    def _set_parent(  # type: ignore[override]
         self,
         parent: SchemaEventTarget,
-        allow_replacements: bool = True,
+        *,
+        all_names: Dict[str, Column[Any]],
+        allow_replacements: bool,
         **kw: Any,
     ) -> None:
         table = parent
@@ -2106,19 +2142,32 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
                 % (self.key, existing.description)
             )
 
+        extra_remove = None
+        existing_col = None
+        conflicts_on = ""
+
         if self.key in table._columns:
-            col = table._columns[self.key]
-            if col is not self:
+            existing_col = table._columns[self.key]
+            if self.key == self.name:
+                conflicts_on = "name"
+            else:
+                conflicts_on = "key"
+        elif self.name in all_names:
+            existing_col = all_names[self.name]
+            extra_remove = {existing_col}
+            conflicts_on = "name"
+
+        if existing_col is not None:
+            if existing_col is not self:
                 if not allow_replacements:
-                    util.warn_deprecated(
-                        "A column with name '%s' is already present "
-                        "in table '%s'. Please use method "
-                        ":meth:`_schema.Table.append_column` with the "
-                        "parameter ``replace_existing=True`` to replace an "
-                        "existing column." % (self.key, table.name),
-                        "1.4",
+                    raise exc.DuplicateColumnError(
+                        f"A column with {conflicts_on} "
+                        f"""'{
+                            self.key if conflicts_on == 'key' else self.name
+                        }' """
+                        f"is already present in table '{table.name}'."
                     )
-                for fk in col.foreign_keys:
+                for fk in existing_col.foreign_keys:
                     table.foreign_keys.remove(fk)
                     if fk.constraint in table.constraints:
                         # this might have been removed
@@ -2126,8 +2175,17 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
                         # and more than one col being replaced
                         table.constraints.remove(fk.constraint)
 
-        table._columns.replace(self)
-
+        if extra_remove and existing_col is not None and self.key == self.name:
+            util.warn(
+                f'Column with user-specified key "{existing_col.key}" is '
+                "being replaced with "
+                f'plain named column "{self.name}", '
+                f'key "{existing_col.key}" is being removed.  If this is a '
+                "reflection operation, specify autoload_replace=False to "
+                "prevent this replacement."
+            )
+        table._columns.replace(self, extra_remove=extra_remove)
+        all_names[self.name] = self
         self.table = table
 
         if self.primary_key:
@@ -2326,6 +2384,12 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
             new_onupdate = self.onupdate._copy()
             new_onupdate._set_parent(other)
 
+        if self.index and not other.index:
+            other.index = True
+
+        if self.unique and not other.unique:
+            other.unique = True
+
         for const in self.constraints:
             if not const._type_bound:
                 new_const = const._copy()
@@ -2342,6 +2406,9 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
         name: Optional[str] = None,
         key: Optional[str] = None,
         name_is_truncatable: bool = False,
+        compound_select_cols: Optional[
+            _typing_Sequence[ColumnElement[Any]]
+        ] = None,
         **kw: Any,
     ) -> Tuple[str, ColumnClause[_T]]:
         """Create a *proxy* for this column.
@@ -2383,7 +2450,9 @@ class Column(DialectKWArgs, SchemaItem, ColumnClause[_T]):
                 key=key if key else name if name else self.key,
                 primary_key=self.primary_key,
                 nullable=self.nullable,
-                _proxies=[self],
+                _proxies=list(compound_select_cols)
+                if compound_select_cols
+                else [self],
                 *fk,
             )
         except TypeError as err:
@@ -2457,7 +2526,7 @@ class ForeignKey(DialectKWArgs, SchemaItem):
         column: _DDLColumnArgument,
         _constraint: Optional[ForeignKeyConstraint] = None,
         use_alter: bool = False,
-        name: Optional[str] = None,
+        name: _ConstraintNameArgument = None,
         onupdate: Optional[str] = None,
         ondelete: Optional[str] = None,
         deferrable: Optional[bool] = None,
@@ -3027,7 +3096,7 @@ class DefaultGenerator(Executable, SchemaItem):
         self,
         connection: Connection,
         distilled_params: _CoreMultiExecuteParams,
-        execution_options: _ExecuteOptionsParameter,
+        execution_options: CoreExecuteOptionsParameter,
     ) -> Any:
         util.warn_deprecated(
             "Using the .execute() method to invoke a "
@@ -3043,7 +3112,7 @@ class DefaultGenerator(Executable, SchemaItem):
         self,
         connection: Connection,
         distilled_params: _CoreMultiExecuteParams,
-        execution_options: _ExecuteOptionsParameter,
+        execution_options: CoreExecuteOptionsParameter,
     ) -> Any:
         return connection._execute_default(
             self, distilled_params, execution_options
@@ -3158,7 +3227,6 @@ class ScalarElementColumnDefault(ColumnDefault):
         )
 
 
-# _SQLExprDefault = Union["ColumnElement[Any]", "TextClause", "SelectBase"]
 _SQLExprDefault = Union["ColumnElement[Any]", "TextClause"]
 
 
@@ -3317,7 +3385,7 @@ class Sequence(HasSchemaAttr, IdentityOptions, DefaultGenerator):
 
         some_table = Table(
             'some_table', metadata,
-            Column('id', Integer, Sequence('some_table_seq'),
+            Column('id', Integer, Sequence('some_table_seq', start=1),
             primary_key=True)
         )
 
@@ -3369,9 +3437,16 @@ class Sequence(HasSchemaAttr, IdentityOptions, DefaultGenerator):
 
         :param start: the starting index of the sequence.  This value is
          used when the CREATE SEQUENCE command is emitted to the database
-         as the value of the "START WITH" clause.   If ``None``, the
+         as the value of the "START WITH" clause. If ``None``, the
          clause is omitted, which on most platforms indicates a starting
          value of 1.
+
+         .. versionchanged:: 2.0 The :paramref:`.Sequence.start` parameter
+            is required in order to have DDL emit "START WITH".  This is a
+            reversal of a change made in version 1.4 which would implicitly
+            render "START WITH 1" if the :paramref:`.Sequence.start` were
+            not included.  See :ref:`change_7211` for more detail.
+
         :param increment: the increment value of the sequence.  This
          value is used when the CREATE SEQUENCE command is emitted to
          the database as the value of the "INCREMENT BY" clause.  If ``None``,
@@ -3544,7 +3619,7 @@ class Sequence(HasSchemaAttr, IdentityOptions, DefaultGenerator):
     def _set_parent(self, parent: SchemaEventTarget, **kw: Any) -> None:
         column = parent
         assert isinstance(column, Column)
-        super(Sequence, self)._set_parent(column)
+        super()._set_parent(column)
         column._on_table_attach(self._set_table)
 
     def _copy(self) -> Sequence:
@@ -3683,7 +3758,7 @@ class DefaultClause(FetchedValue):
         _reflected: bool = False,
     ) -> None:
         util.assert_arg_type(arg, (str, ClauseElement, TextClause), "arg")
-        super(DefaultClause, self).__init__(for_update)
+        super().__init__(for_update)
         self.arg = arg
         self.reflected = _reflected
 
@@ -3715,7 +3790,7 @@ class Constraint(DialectKWArgs, HasConditionalDDL, SchemaItem):
 
     def __init__(
         self,
-        name: Optional[str] = None,
+        name: _ConstraintNameArgument = None,
         deferrable: Optional[bool] = None,
         initially: Optional[str] = None,
         info: Optional[_InfoType] = None,
@@ -3885,9 +3960,9 @@ class ColumnCollectionMixin:
 
             # issue #3411 - don't do the per-column auto-attach if some of the
             # columns are specified as strings.
-            has_string_cols = set(
+            has_string_cols = {
                 c for c in self._pending_colargs if c is not None
-            ).difference(col_objs)
+            }.difference(col_objs)
             if not has_string_cols:
 
                 def _col_attached(column: Column[Any], table: Table) -> None:
@@ -3958,7 +4033,7 @@ class ColumnCollectionConstraint(ColumnCollectionMixin, Constraint):
     def __init__(
         self,
         *columns: _DDLColumnArgument,
-        name: Optional[str] = None,
+        name: _ConstraintNameArgument = None,
         deferrable: Optional[bool] = None,
         initially: Optional[str] = None,
         info: Optional[_InfoType] = None,
@@ -4094,7 +4169,7 @@ class CheckConstraint(ColumnCollectionConstraint):
     def __init__(
         self,
         sqltext: _TextCoercedExpressionArgument[Any],
-        name: Optional[str] = None,
+        name: _ConstraintNameArgument = None,
         deferrable: Optional[bool] = None,
         initially: Optional[str] = None,
         table: Optional[Table] = None,
@@ -4209,7 +4284,7 @@ class ForeignKeyConstraint(ColumnCollectionConstraint):
         self,
         columns: _typing_Sequence[_DDLColumnArgument],
         refcolumns: _typing_Sequence[_DDLColumnArgument],
-        name: Optional[str] = None,
+        name: _ConstraintNameArgument = None,
         onupdate: Optional[str] = None,
         ondelete: Optional[str] = None,
         deferrable: Optional[bool] = None,
@@ -4405,7 +4480,7 @@ class ForeignKeyConstraint(ColumnCollectionConstraint):
         return self.elements[0].column.table
 
     def _validate_dest_table(self, table: Table) -> None:
-        table_keys = set([elem._table_key() for elem in self.elements])
+        table_keys = {elem._table_key() for elem in self.elements}
         if None not in table_keys and len(table_keys) > 1:
             elem0, elem1 = sorted(table_keys)[0:2]
             raise exc.ArgumentError(
@@ -4595,7 +4670,7 @@ class PrimaryKeyConstraint(ColumnCollectionConstraint):
         **dialect_kw: Any,
     ) -> None:
         self._implicit_generated = _implicit_generated
-        super(PrimaryKeyConstraint, self).__init__(
+        super().__init__(
             *columns,
             name=name,
             deferrable=deferrable,
@@ -4607,7 +4682,7 @@ class PrimaryKeyConstraint(ColumnCollectionConstraint):
     def _set_parent(self, parent: SchemaEventTarget, **kw: Any) -> None:
         table = parent
         assert isinstance(table, Table)
-        super(PrimaryKeyConstraint, self)._set_parent(table)
+        super()._set_parent(table)
 
         if table.primary_key is not self:
             table.constraints.discard(table.primary_key)
@@ -4968,7 +5043,7 @@ class Index(
         bind._run_ddl_visitor(ddl.SchemaDropper, self, checkfirst=checkfirst)
 
     def __repr__(self) -> str:
-        exprs: _typing_Sequence[Any]
+        exprs: _typing_Sequence[Any]  # noqa: F842
 
         return "Index(%s)" % (
             ", ".join(
@@ -5190,13 +5265,9 @@ class MetaData(HasSchemaAttr):
             for fk in removed.foreign_keys:
                 fk._remove_from_metadata(self)
         if self._schemas:
-            self._schemas = set(
-                [
-                    t.schema
-                    for t in self.tables.values()
-                    if t.schema is not None
-                ]
-            )
+            self._schemas = {
+                t.schema for t in self.tables.values() if t.schema is not None
+            }
 
     def __getstate__(self) -> Dict[str, Any]:
         return {

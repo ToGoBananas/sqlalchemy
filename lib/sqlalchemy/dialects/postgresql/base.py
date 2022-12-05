@@ -27,9 +27,13 @@ default corresponding to the column.
 To specify a specific named sequence to be used for primary key generation,
 use the :func:`~sqlalchemy.schema.Sequence` construct::
 
-    Table('sometable', metadata,
-            Column('id', Integer, Sequence('some_id_seq'), primary_key=True)
+    Table(
+        "sometable",
+        metadata,
+        Column(
+            "id", Integer, Sequence("some_id_seq", start=1), primary_key=True
         )
+    )
 
 When SQLAlchemy issues a single INSERT statement, to fulfill the contract of
 having the "last insert identifier" available, a RETURNING clause is added to
@@ -228,6 +232,70 @@ SERIALIZABLE isolation.
 
 .. versionadded:: 1.4 added support for the ``postgresql_readonly``
    and ``postgresql_deferrable`` execution options.
+
+.. _postgresql_reset_on_return:
+
+Temporary Table / Resource Reset for Connection Pooling
+-------------------------------------------------------
+
+The :class:`.QueuePool` connection pool implementation used
+by the SQLAlchemy :class:`.Engine` object includes
+:ref:`reset on return <pool_reset_on_return>` behavior that will invoke
+the DBAPI ``.rollback()`` method when connections are returned to the pool.
+While this rollback will clear out the immediate state used by the previous
+transaction, it does not cover a wider range of session-level state, including
+temporary tables as well as other server state such as prepared statement
+handles and statement caches.   The PostgreSQL database includes a variety
+of commands which may be used to reset this state, including
+``DISCARD``, ``RESET``, ``DEALLOCATE``, and ``UNLISTEN``.
+
+
+To install
+one or more of these commands as the means of performing reset-on-return,
+the :meth:`.PoolEvents.reset` event hook may be used, as demonstrated
+in the example below. The implementation
+will end transactions in progress as well as discard temporary tables
+using the ``CLOSE``, ``RESET`` and ``DISCARD`` commands; see the PostgreSQL
+documentation for background on what each of these statements do.
+
+The :paramref:`_sa.create_engine.pool_reset_on_return` parameter
+is set to ``None`` so that the custom scheme can replace the default behavior
+completely.   The custom hook implementation calls ``.rollback()`` in any case,
+as it's usually important that the DBAPI's own tracking of commit/rollback
+will remain consistent with the state of the transaction::
+
+
+    from sqlalchemy import create_engine
+    from sqlalchemy import event
+
+    postgresql_engine = create_engine(
+        "postgresql+pyscopg2://scott:tiger@hostname/dbname",
+
+        # disable default reset-on-return scheme
+        pool_reset_on_return=None,
+    )
+
+
+    @event.listens_for(postgresql_engine, "reset")
+    def _reset_postgresql(dbapi_connection, connection_record, reset_state):
+        if not reset_state.terminate_only:
+            dbapi_connection.execute("CLOSE ALL")
+            dbapi_connection.execute("RESET ALL")
+            dbapi_connection.execute("DISCARD TEMP")
+
+        # so that the DBAPI itself knows that the connection has been
+        # reset
+        dbapi_connection.rollback()
+
+.. versionchanged:: 2.0.0b3  Added additional state arguments to
+   the :meth:`.PoolEvents.reset` event and additionally ensured the event
+   is invoked for all "reset" occurrences, so that it's appropriate
+   as a place for custom "reset" handlers.   Previous schemes which
+   use the :meth:`.PoolEvents.checkin` handler remain usable as well.
+
+.. seealso::
+
+    :ref:`pool_reset_on_return` - in the :ref:`pooling_toplevel` documentation
 
 .. _postgresql_alternate_search_path:
 
@@ -1330,11 +1398,11 @@ from typing import List
 from typing import Optional
 
 from . import array as _array
-from . import dml
 from . import hstore as _hstore
 from . import json as _json
 from . import pg_catalog
 from . import ranges as _ranges
+from .ext import aggregate_order_by
 from .named_types import CreateDomainType as CreateDomainType  # noqa: F401
 from .named_types import CreateEnumType as CreateEnumType  # noqa: F401
 from .named_types import DOMAIN as DOMAIN  # noqa: F401
@@ -1401,112 +1469,110 @@ from ...util.typing import TypedDict
 
 IDX_USING = re.compile(r"^(?:btree|hash|gist|gin|[\w_]+)$", re.I)
 
-RESERVED_WORDS = set(
-    [
-        "all",
-        "analyse",
-        "analyze",
-        "and",
-        "any",
-        "array",
-        "as",
-        "asc",
-        "asymmetric",
-        "both",
-        "case",
-        "cast",
-        "check",
-        "collate",
-        "column",
-        "constraint",
-        "create",
-        "current_catalog",
-        "current_date",
-        "current_role",
-        "current_time",
-        "current_timestamp",
-        "current_user",
-        "default",
-        "deferrable",
-        "desc",
-        "distinct",
-        "do",
-        "else",
-        "end",
-        "except",
-        "false",
-        "fetch",
-        "for",
-        "foreign",
-        "from",
-        "grant",
-        "group",
-        "having",
-        "in",
-        "initially",
-        "intersect",
-        "into",
-        "leading",
-        "limit",
-        "localtime",
-        "localtimestamp",
-        "new",
-        "not",
-        "null",
-        "of",
-        "off",
-        "offset",
-        "old",
-        "on",
-        "only",
-        "or",
-        "order",
-        "placing",
-        "primary",
-        "references",
-        "returning",
-        "select",
-        "session_user",
-        "some",
-        "symmetric",
-        "table",
-        "then",
-        "to",
-        "trailing",
-        "true",
-        "union",
-        "unique",
-        "user",
-        "using",
-        "variadic",
-        "when",
-        "where",
-        "window",
-        "with",
-        "authorization",
-        "between",
-        "binary",
-        "cross",
-        "current_schema",
-        "freeze",
-        "full",
-        "ilike",
-        "inner",
-        "is",
-        "isnull",
-        "join",
-        "left",
-        "like",
-        "natural",
-        "notnull",
-        "outer",
-        "over",
-        "overlaps",
-        "right",
-        "similar",
-        "verbose",
-    ]
-)
+RESERVED_WORDS = {
+    "all",
+    "analyse",
+    "analyze",
+    "and",
+    "any",
+    "array",
+    "as",
+    "asc",
+    "asymmetric",
+    "both",
+    "case",
+    "cast",
+    "check",
+    "collate",
+    "column",
+    "constraint",
+    "create",
+    "current_catalog",
+    "current_date",
+    "current_role",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "default",
+    "deferrable",
+    "desc",
+    "distinct",
+    "do",
+    "else",
+    "end",
+    "except",
+    "false",
+    "fetch",
+    "for",
+    "foreign",
+    "from",
+    "grant",
+    "group",
+    "having",
+    "in",
+    "initially",
+    "intersect",
+    "into",
+    "leading",
+    "limit",
+    "localtime",
+    "localtimestamp",
+    "new",
+    "not",
+    "null",
+    "of",
+    "off",
+    "offset",
+    "old",
+    "on",
+    "only",
+    "or",
+    "order",
+    "placing",
+    "primary",
+    "references",
+    "returning",
+    "select",
+    "session_user",
+    "some",
+    "symmetric",
+    "table",
+    "then",
+    "to",
+    "trailing",
+    "true",
+    "union",
+    "unique",
+    "user",
+    "using",
+    "variadic",
+    "when",
+    "where",
+    "window",
+    "with",
+    "authorization",
+    "between",
+    "binary",
+    "cross",
+    "current_schema",
+    "freeze",
+    "full",
+    "ilike",
+    "inner",
+    "is",
+    "isnull",
+    "join",
+    "left",
+    "like",
+    "natural",
+    "notnull",
+    "outer",
+    "over",
+    "overlaps",
+    "right",
+    "similar",
+    "verbose",
+}
 
 colspecs = {
     sqltypes.ARRAY: _array.ARRAY,
@@ -1645,6 +1711,9 @@ class PGCompiler(compiler.SQLCompiler):
             self.process(binary.right, **kw),
         )
 
+    def visit_ilike_case_insensitive_operand(self, element, **kw):
+        return element.element._compiler_dispatch(self, **kw)
+
     def visit_ilike_op_binary(self, binary, operator, **kw):
         escape = binary.modifiers.get("escape", None)
 
@@ -1678,14 +1747,11 @@ class PGCompiler(compiler.SQLCompiler):
             return self._generate_generic_binary(
                 binary, " %s* " % base_op, **kw
             )
-        flags = self.process(flags, **kw)
-        string = self.process(binary.left, **kw)
-        pattern = self.process(binary.right, **kw)
         return "%s %s CONCAT('(?', %s, ')', %s)" % (
-            string,
+            self.process(binary.left, **kw),
             base_op,
-            flags,
-            pattern,
+            self.process(flags, **kw),
+            self.process(binary.right, **kw),
         )
 
     def visit_regexp_match_op_binary(self, binary, operator, **kw):
@@ -1698,8 +1764,6 @@ class PGCompiler(compiler.SQLCompiler):
         string = self.process(binary.left, **kw)
         pattern = self.process(binary.right, **kw)
         flags = binary.modifiers["flags"]
-        if flags is not None:
-            flags = self.process(flags, **kw)
         replacement = self.process(binary.modifiers["replacement"], **kw)
         if flags is None:
             return "REGEXP_REPLACE(%s, %s, %s)" % (
@@ -1712,7 +1776,7 @@ class PGCompiler(compiler.SQLCompiler):
                 string,
                 pattern,
                 replacement,
-                flags,
+                self.process(flags, **kw),
             )
 
     def visit_empty_set_expr(self, element_types):
@@ -1730,7 +1794,7 @@ class PGCompiler(compiler.SQLCompiler):
         )
 
     def render_literal_value(self, value, type_):
-        value = super(PGCompiler, self).render_literal_value(value, type_)
+        value = super().render_literal_value(value, type_)
 
         if self.dialect._backslash_escapes:
             value = value.replace("\\", "\\\\")
@@ -1846,24 +1910,6 @@ class PGCompiler(compiler.SQLCompiler):
             target_text = ""
 
         return target_text
-
-    @util.memoized_property
-    def _is_safe_for_fast_insert_values_helper(self):
-        # don't allow fast executemany if _post_values_clause is
-        # present and is not an OnConflictDoNothing. what this means
-        # concretely is that the
-        # "fast insert executemany helper" won't be used, in other
-        # words we won't convert "executemany()" of many parameter
-        # sets into a single INSERT with many elements in VALUES.
-        # We can't apply that optimization safely if for example the
-        # statement includes a clause like "ON CONFLICT DO UPDATE"
-
-        return self.insert_single_values_expr is not None and (
-            self.statement._post_values_clause is None
-            or isinstance(
-                self.statement._post_values_clause, dml.OnConflictDoNothing
-            )
-        )
 
     def visit_on_conflict_do_nothing(self, on_conflict, **kw):
 
@@ -2055,14 +2101,12 @@ class PGDDLCompiler(compiler.DDLCompiler):
                     "create_constraint=False on this Enum datatype."
                 )
 
-        text = super(PGDDLCompiler, self).visit_check_constraint(constraint)
+        text = super().visit_check_constraint(constraint)
         text += self._define_constraint_validity(constraint)
         return text
 
     def visit_foreign_key_constraint(self, constraint):
-        text = super(PGDDLCompiler, self).visit_foreign_key_constraint(
-            constraint
-        )
+        text = super().visit_foreign_key_constraint(constraint)
         text += self._define_constraint_validity(constraint)
         return text
 
@@ -2300,9 +2344,7 @@ class PGDDLCompiler(compiler.DDLCompiler):
                 create.element.data_type
             )
 
-        return super(PGDDLCompiler, self).visit_create_sequence(
-            create, prefix=prefix, **kw
-        )
+        return super().visit_create_sequence(create, prefix=prefix, **kw)
 
     def _can_comment_on_constraint(self, ddl_instance):
         constraint = ddl_instance.element
@@ -2425,7 +2467,7 @@ class PGTypeCompiler(compiler.GenericTypeCompiler):
 
     def visit_enum(self, type_, **kw):
         if not type_.native_enum or not self.dialect.supports_native_enum:
-            return super(PGTypeCompiler, self).visit_enum(type_, **kw)
+            return super().visit_enum(type_, **kw)
         else:
             return self.visit_ENUM(type_, **kw)
 
@@ -2750,7 +2792,7 @@ class PGExecutionContext(default.DefaultExecutionContext):
 
                 return self._execute_scalar(exc, column.type)
 
-        return super(PGExecutionContext, self).get_insert_default(column)
+        return super().get_insert_default(column)
 
 
 class PGReadOnlyConnectionCharacteristic(
@@ -2801,6 +2843,7 @@ class PGDialect(default.DefaultDialect):
     sequences_optional = True
     preexecute_autoincrement_sequences = True
     postfetch_lastrowid = False
+    use_insertmanyvalues = True
 
     supports_comments = True
     supports_constraint_comments = True
@@ -2810,6 +2853,7 @@ class PGDialect(default.DefaultDialect):
 
     supports_empty_insert = False
     supports_multivalues_insert = True
+
     supports_identity_columns = True
 
     default_paramstyle = "pyformat"
@@ -2890,7 +2934,7 @@ class PGDialect(default.DefaultDialect):
         self._json_serializer = json_serializer
 
     def initialize(self, connection):
-        super(PGDialect, self).initialize(connection)
+        super().initialize(connection)
 
         # https://www.postgresql.org/docs/9.3/static/release-9-2.html#AEN116689
         self.supports_smallserial = self.server_version_info >= (9, 2)
@@ -3434,12 +3478,19 @@ class PGDialect(default.DefaultDialect):
             generated = row_dict["generated"]
             identity = row_dict["identity_options"]
 
-            # strip (*) from character varying(5), timestamp(5)
-            # with time zone, geometry(POLYGON), etc.
-            attype = attype_pattern.sub("", format_type)
+            if format_type is None:
+                no_format_type = True
+                attype = format_type = "no format_type()"
+                is_array = False
+            else:
+                no_format_type = False
 
-            # strip '[]' from integer[], etc. and check if an array
-            attype, is_array = _handle_array_type(attype)
+                # strip (*) from character varying(5), timestamp(5)
+                # with time zone, geometry(POLYGON), etc.
+                attype = attype_pattern.sub("", format_type)
+
+                # strip '[]' from integer[], etc. and check if an array
+                attype, is_array = _handle_array_type(attype)
 
             # strip quotes from case sensitive enum or domain names
             enum_or_domain_key = tuple(util.quoted_token_parser(attype))
@@ -3534,6 +3585,12 @@ class PGDialect(default.DefaultDialect):
                 coltype = coltype(*args, **kwargs)
                 if is_array:
                     coltype = self.ischema_names["_array"](coltype)
+            elif no_format_type:
+                util.warn(
+                    "PostgreSQL format_type() returned NULL for column '%s'"
+                    % (name,)
+                )
+                coltype = sqltypes.NULLTYPE
             else:
                 util.warn(
                     "Did not recognize type '%s' of column '%s'"
@@ -3649,6 +3706,7 @@ class PGDialect(default.DefaultDialect):
                 con_sq.c.conrelid,
                 con_sq.c.conname,
                 con_sq.c.description,
+                con_sq.c.ord,
                 pg_catalog.pg_attribute.c.attname,
             )
             .select_from(pg_catalog.pg_attribute)
@@ -3659,14 +3717,15 @@ class PGDialect(default.DefaultDialect):
                     pg_catalog.pg_attribute.c.attrelid == con_sq.c.conrelid,
                 ),
             )
-            .order_by(con_sq.c.conname, con_sq.c.ord)
             .subquery("attr")
         )
 
         return (
             select(
                 attr_sq.c.conrelid,
-                sql.func.array_agg(attr_sq.c.attname).label("cols"),
+                sql.func.array_agg(
+                    aggregate_order_by(attr_sq.c.attname, attr_sq.c.ord)
+                ).label("cols"),
                 attr_sq.c.conname,
                 sql.func.min(attr_sq.c.description).label("description"),
             )
@@ -3964,6 +4023,7 @@ class PGDialect(default.DefaultDialect):
             select(
                 idx_sq.c.indexrelid,
                 idx_sq.c.indrelid,
+                idx_sq.c.ord,
                 # NOTE: always using pg_get_indexdef is too slow so just
                 # invoke when the element is an expression
                 sql.case(
@@ -3987,20 +4047,21 @@ class PGDialect(default.DefaultDialect):
                 ),
             )
             .where(idx_sq.c.indrelid.in_(bindparam("oids")))
-            .order_by(idx_sq.c.indexrelid, idx_sq.c.ord)
             .subquery("idx_attr")
         )
 
         cols_sq = (
             select(
                 attr_sq.c.indexrelid,
-                attr_sq.c.indrelid,
-                sql.func.array_agg(attr_sq.c.element).label("elements"),
-                sql.func.array_agg(attr_sq.c.is_expr).label(
-                    "elements_is_expr"
-                ),
+                sql.func.min(attr_sq.c.indrelid),
+                sql.func.array_agg(
+                    aggregate_order_by(attr_sq.c.element, attr_sq.c.ord)
+                ).label("elements"),
+                sql.func.array_agg(
+                    aggregate_order_by(attr_sq.c.is_expr, attr_sq.c.ord)
+                ).label("elements_is_expr"),
             )
-            .group_by(attr_sq.c.indexrelid, attr_sq.c.indrelid)
+            .group_by(attr_sq.c.indexrelid)
             .subquery("idx_cols")
         )
 
@@ -4009,7 +4070,7 @@ class PGDialect(default.DefaultDialect):
         else:
             indnkeyatts = sql.null().label("indnkeyatts")
 
-        query = (
+        return (
             select(
                 pg_catalog.pg_index.c.indrelid,
                 pg_class_index.c.relname.label("relname_index"),
@@ -4066,7 +4127,6 @@ class PGDialect(default.DefaultDialect):
             )
             .order_by(pg_catalog.pg_index.c.indrelid, pg_class_index.c.relname)
         )
-        return query
 
     def get_multi_indexes(
         self, connection, schema, filter_names, scope, kind, **kw
@@ -4403,23 +4463,17 @@ class PGDialect(default.DefaultDialect):
 
     @lru_cache()
     def _enum_query(self, schema):
-        lbl_sq = (
-            select(
-                pg_catalog.pg_enum.c.enumtypid, pg_catalog.pg_enum.c.enumlabel
-            )
-            .order_by(
-                pg_catalog.pg_enum.c.enumtypid,
-                pg_catalog.pg_enum.c.enumsortorder,
-            )
-            .subquery("lbl")
-        )
-
         lbl_agg_sq = (
             select(
-                lbl_sq.c.enumtypid,
-                sql.func.array_agg(lbl_sq.c.enumlabel).label("labels"),
+                pg_catalog.pg_enum.c.enumtypid,
+                sql.func.array_agg(
+                    aggregate_order_by(
+                        pg_catalog.pg_enum.c.enumlabel,
+                        pg_catalog.pg_enum.c.enumsortorder,
+                    )
+                ).label("labels"),
             )
-            .group_by(lbl_sq.c.enumtypid)
+            .group_by(pg_catalog.pg_enum.c.enumtypid)
             .subquery("lbl_agg")
         )
 

@@ -44,11 +44,13 @@ from sqlalchemy.sql import operators
 from sqlalchemy.sql import table
 from sqlalchemy.sql import util as sql_util
 from sqlalchemy.sql import visitors
+from sqlalchemy.sql.dml import Insert
 from sqlalchemy.sql.selectable import LABEL_STYLE_NONE
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import AssertsExecutionResults
+from sqlalchemy.testing import config
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import in_
@@ -56,6 +58,7 @@ from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_not
 from sqlalchemy.testing import ne_
 from sqlalchemy.testing.assertions import expect_raises_message
+from sqlalchemy.testing.provision import normalize_sequence
 
 
 metadata = MetaData()
@@ -266,15 +269,11 @@ class SelectableTest(
 
         eq_(
             s1.selected_columns.foo.proxy_set,
-            set(
-                [s1.selected_columns.foo, scalar_select, scalar_select.element]
-            ),
+            {s1.selected_columns.foo, scalar_select, scalar_select.element},
         )
         eq_(
             s2.selected_columns.foo.proxy_set,
-            set(
-                [s2.selected_columns.foo, scalar_select, scalar_select.element]
-            ),
+            {s2.selected_columns.foo, scalar_select, scalar_select.element},
         )
 
         assert (
@@ -292,11 +291,11 @@ class SelectableTest(
 
         eq_(
             s1.c.foo.proxy_set,
-            set([s1.c.foo, scalar_select, scalar_select.element]),
+            {s1.c.foo, scalar_select, scalar_select.element},
         )
         eq_(
             s2.c.foo.proxy_set,
-            set([s2.c.foo, scalar_select, scalar_select.element]),
+            {s2.c.foo, scalar_select, scalar_select.element},
         )
 
         assert s1.corresponding_column(scalar_select) is s1.c.foo
@@ -404,8 +403,10 @@ class SelectableTest(
 
     @testing.combinations((True,), (False,))
     def test_broken_select_same_named_explicit_cols(self, use_anon):
-        # this is issue #6090.  the query is "wrong" and we dont know how
+        """test for #6090. the query is "wrong" and we dont know how
         # to render this right now.
+
+        """
         stmt = select(
             table1.c.col1,
             table1.c.col2,
@@ -431,6 +432,24 @@ class SelectableTest(
                 "unique names for explicit labels.",
             ):
                 select(stmt.subquery()).compile()
+
+    def test_same_anon_named_explicit_cols(self):
+        """test for #8569.  This adjusts the change in #6090 to not apply
+        to anonymous labels.
+
+        """
+        lc = literal_column("col2").label(None)
+
+        subq1 = select(lc).subquery()
+
+        stmt2 = select(subq1, lc).subquery()
+
+        self.assert_compile(
+            select(stmt2),
+            "SELECT anon_1.col2_1, anon_1.col2_1_1 FROM "
+            "(SELECT anon_2.col2_1 AS col2_1, col2 AS col2_1 FROM "
+            "(SELECT col2 AS col2_1) AS anon_2) AS anon_1",
+        )
 
     def test_correlate_none_arg_error(self):
         stmt = select(table1)
@@ -593,7 +612,7 @@ class SelectableTest(
         s2c1 = s2._clone()
         s3c1 = s3._clone()
 
-        eq_(base._cloned_intersection([s1c1, s3c1], [s2c1, s1c2]), set([s1c1]))
+        eq_(base._cloned_intersection([s1c1, s3c1], [s2c1, s1c2]), {s1c1})
 
     def test_cloned_difference(self):
         t1 = table("t1", column("x"))
@@ -610,7 +629,7 @@ class SelectableTest(
 
         eq_(
             base._cloned_difference([s1c1, s2c1, s3c1], [s2c1, s1c2]),
-            set([s3c1]),
+            {s3c1},
         )
 
     def test_distance_on_aliases(self):
@@ -803,7 +822,7 @@ class SelectableTest(
 
         with testing.expect_raises_message(
             exc.ArgumentError,
-            r"The \"columns\" argument to "
+            r"The \"entities\" argument to "
             r"Select.with_only_columns\(\), when referring "
             "to a sequence of items, is now passed",
         ):
@@ -1917,13 +1936,13 @@ class RefreshForNewColTest(fixtures.TestBase):
         q = Column("q", Integer)
         a.append_column(q)
         a._refresh_for_new_column(q)
-        eq_(a.foreign_keys, set([fk]))
+        eq_(a.foreign_keys, {fk})
 
         fk2 = ForeignKey("g.id")
         p = Column("p", Integer, fk2)
         a.append_column(p)
         a._refresh_for_new_column(p)
-        eq_(a.foreign_keys, set([fk, fk2]))
+        eq_(a.foreign_keys, {fk, fk2})
 
     def test_fk_join(self):
         m = MetaData()
@@ -1937,13 +1956,13 @@ class RefreshForNewColTest(fixtures.TestBase):
         q = Column("q", Integer)
         b.append_column(q)
         j._refresh_for_new_column(q)
-        eq_(j.foreign_keys, set([fk]))
+        eq_(j.foreign_keys, {fk})
 
         fk2 = ForeignKey("g.id")
         p = Column("p", Integer, fk2)
         b.append_column(p)
         j._refresh_for_new_column(p)
-        eq_(j.foreign_keys, set([fk, fk2]))
+        eq_(j.foreign_keys, {fk, fk2})
 
 
 class AnonLabelTest(fixtures.TestBase):
@@ -2618,10 +2637,10 @@ class ReduceTest(fixtures.TestBase, AssertsExecutionResults):
         )
         s1 = select(t1, t2)
         s2 = s1.reduce_columns(only_synonyms=False)
-        eq_(set(s2.selected_columns), set([t1.c.x, t1.c.y, t2.c.q]))
+        eq_(set(s2.selected_columns), {t1.c.x, t1.c.y, t2.c.q})
 
         s2 = s1.reduce_columns()
-        eq_(set(s2.selected_columns), set([t1.c.x, t1.c.y, t2.c.z, t2.c.q]))
+        eq_(set(s2.selected_columns), {t1.c.x, t1.c.y, t2.c.z, t2.c.q})
 
     def test_reduce_only_synonym_fk(self):
         m = MetaData()
@@ -2641,13 +2660,11 @@ class ReduceTest(fixtures.TestBase, AssertsExecutionResults):
         s1 = s1.reduce_columns(only_synonyms=True)
         eq_(
             set(s1.selected_columns),
-            set(
-                [
-                    s1.selected_columns.x,
-                    s1.selected_columns.y,
-                    s1.selected_columns.q,
-                ]
-            ),
+            {
+                s1.selected_columns.x,
+                s1.selected_columns.y,
+                s1.selected_columns.q,
+            },
         )
 
     def test_reduce_only_synonym_lineage(self):
@@ -2665,7 +2682,7 @@ class ReduceTest(fixtures.TestBase, AssertsExecutionResults):
         s2 = select(t1, s1).where(t1.c.x == s1.c.x).where(s1.c.y == t1.c.z)
         eq_(
             set(s2.reduce_columns().selected_columns),
-            set([t1.c.x, t1.c.y, t1.c.z, s1.c.y, s1.c.z]),
+            {t1.c.x, t1.c.y, t1.c.z, s1.c.y, s1.c.z},
         )
 
         # reverse order, s1.c.x wins
@@ -2673,7 +2690,7 @@ class ReduceTest(fixtures.TestBase, AssertsExecutionResults):
         s2 = select(s1, t1).where(t1.c.x == s1.c.x).where(s1.c.y == t1.c.z)
         eq_(
             set(s2.reduce_columns().selected_columns),
-            set([s1.c.x, t1.c.y, t1.c.z, s1.c.y, s1.c.z]),
+            {s1.c.x, t1.c.y, t1.c.z, s1.c.y, s1.c.z},
         )
 
     def test_reduce_aliased_join(self):
@@ -2684,7 +2701,9 @@ class ReduceTest(fixtures.TestBase, AssertsExecutionResults):
             Column(
                 "person_id",
                 Integer,
-                Sequence("person_id_seq", optional=True),
+                normalize_sequence(
+                    config, Sequence("person_id_seq", optional=True)
+                ),
                 primary_key=True,
             ),
             Column("name", String(50)),
@@ -2969,7 +2988,7 @@ class AnnotationsTest(fixtures.TestBase):
 
         for obj in [t, t.c.x, a, t.c.x > 1, (t.c.x > 1).label(None)]:
             annot = obj._annotate({})
-            eq_(set([obj]), set([annot]))
+            eq_({obj}, {annot})
 
     def test_clone_annotations_dont_hash(self):
         t = table("t", column("x"))
@@ -2980,7 +2999,7 @@ class AnnotationsTest(fixtures.TestBase):
 
         for obj in [s, s2]:
             annot = obj._annotate({})
-            ne_(set([obj]), set([annot]))
+            ne_({obj}, {annot})
 
     def test_replacement_traverse_preserve(self):
         """test that replacement traverse that hits an unannotated column
@@ -3009,6 +3028,26 @@ class AnnotationsTest(fixtures.TestBase):
         eq_(whereclause.left._annotations, {"foo": "bar"})
         eq_(whereclause.right._annotations, {"foo": "bar"})
 
+    @testing.combinations(True, False, None)
+    def test_setup_inherit_cache(self, inherit_cache_value):
+        if inherit_cache_value is None:
+
+            class MyInsertThing(Insert):
+                pass
+
+        else:
+
+            class MyInsertThing(Insert):
+                inherit_cache = inherit_cache_value
+
+        t = table("t", column("x"))
+        anno = MyInsertThing(t)._annotate({"foo": "bar"})
+
+        if inherit_cache_value is not None:
+            is_(type(anno).__dict__["inherit_cache"], inherit_cache_value)
+        else:
+            assert "inherit_cache" not in type(anno).__dict__
+
     def test_proxy_set_iteration_includes_annotated(self):
         from sqlalchemy.schema import Column
 
@@ -3026,7 +3065,7 @@ class AnnotationsTest(fixtures.TestBase):
         # proxy_set, as corresponding_column iterates through proxy_set
         # in this way
         d = {}
-        for col in p2._uncached_proxy_set():
+        for col in p2._uncached_proxy_list():
             d.update(col._annotations)
         eq_(d, {"weight": 10})
 
@@ -3042,7 +3081,7 @@ class AnnotationsTest(fixtures.TestBase):
         proxy._proxies = [c1._annotate({"weight": 10})]
 
         d = {}
-        for col in proxy._uncached_proxy_set():
+        for col in proxy._uncached_proxy_list():
             d.update(col._annotations)
         eq_(d, {"weight": 10})
 
@@ -3122,32 +3161,74 @@ class AnnotationsTest(fixtures.TestBase):
         binary_2 = col_anno == 5
         eq_(binary_2.left._annotations, {"foo": "bar"})
 
-    def test_annotated_corresponding_column(self):
+    @testing.combinations(
+        ("plain",),
+        ("annotated",),
+        ("deep_annotated",),
+        ("deep_annotated_w_ind_col",),
+        argnames="testcase",
+    )
+    def test_annotated_corresponding_column(self, testcase):
+        """ensures the require_embedded case remains when an inner statement
+        was copied out for annotations.
+
+        First implemented in 2008 in d3621ae961a, the implementation is
+        updated for #8796 as a performance improvement as well as to
+        establish a discovered implicit behavior where clone() would break
+        the contract of corresponding_column() into an explicit option,
+        fixing the implicit behavior.
+
+        """
         table1 = table("table1", column("col1"))
 
         s1 = select(table1.c.col1).subquery()
-        t1 = s1._annotate({})
-        t2 = s1
+
+        expect_same = True
+
+        if testcase == "plain":
+            t1 = s1
+        elif testcase == "annotated":
+            t1 = s1._annotate({})
+        elif testcase == "deep_annotated":
+            # was failing prior to #8796
+            t1 = sql_util._deep_annotate(s1, {"foo": "bar"})
+        elif testcase == "deep_annotated_w_ind_col":
+            # was implicit behavior w/ annotate prior to #8796
+            t1 = sql_util._deep_annotate(
+                s1, {"foo": "bar"}, ind_cols_on_fromclause=True
+            )
+            expect_same = False
+        else:
+            assert False
 
         # t1 needs to share the same _make_proxy() columns as t2, even
         # though it's annotated.  otherwise paths will diverge once they
         # are corresponded against "inner" below.
 
-        assert t1.c is t2.c
-        assert t1.c.col1 is t2.c.col1
+        if expect_same:
+            assert t1.c is s1.c
+            assert t1.c.col1 is s1.c.col1
+        else:
+            assert t1.c is not s1.c
+            assert t1.c.col1 is not s1.c.col1
 
         inner = select(s1).subquery()
 
         assert (
-            inner.corresponding_column(t2.c.col1, require_embedded=False)
-            is inner.corresponding_column(t2.c.col1, require_embedded=True)
-            is inner.c.col1
-        )
-        assert (
             inner.corresponding_column(t1.c.col1, require_embedded=False)
-            is inner.corresponding_column(t1.c.col1, require_embedded=True)
             is inner.c.col1
         )
+
+        if expect_same:
+            assert (
+                inner.corresponding_column(t1.c.col1, require_embedded=True)
+                is inner.c.col1
+            )
+        else:
+            assert (
+                inner.corresponding_column(t1.c.col1, require_embedded=True)
+                is not inner.c.col1
+            )
 
     def test_annotated_visit(self):
         table1 = table("table1", column("col1"), column("col2"))
@@ -3715,11 +3796,11 @@ class ResultMapTest(fixtures.TestBase):
 
     def _mapping(self, stmt):
         compiled = stmt.compile()
-        return dict(
-            (elem, key)
+        return {
+            elem: key
             for key, elements in compiled._create_result_map().items()
             for elem in elements[1]
-        )
+        }
 
     def test_select_label_alt_name(self):
         t = self._fixture()

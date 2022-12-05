@@ -95,6 +95,7 @@ from .elements import quoted_name as quoted_name
 from .elements import ReleaseSavepointClause as ReleaseSavepointClause
 from .elements import RollbackToSavepointClause as RollbackToSavepointClause
 from .elements import SavepointClause as SavepointClause
+from .elements import SQLColumnExpression as SQLColumnExpression
 from .elements import TextClause as TextClause
 from .elements import True_ as True_
 from .elements import Tuple as Tuple
@@ -135,6 +136,7 @@ from .selectable import (
 from .selectable import Lateral as Lateral
 from .selectable import ReturnsRows as ReturnsRows
 from .selectable import ScalarSelect as ScalarSelect
+from .selectable import ScalarValues as ScalarValues
 from .selectable import Select as Select
 from .selectable import Selectable as Selectable
 from .selectable import SelectBase as SelectBase

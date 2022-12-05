@@ -1,5 +1,3 @@
-# coding: utf-8
-
 from sqlalchemy import BLOB
 from sqlalchemy import BOOLEAN
 from sqlalchemy import Boolean
@@ -558,6 +556,13 @@ class CompileTest(ReservedWordFixture, fixtures.TestBase, AssertsCompiledSQL):
             schema.CreateTable(t),
             "CREATE TABLE t (x INTEGER, y INTEGER GENERATED "
             "ALWAYS AS (x + 2)%s)" % text,
+        )
+
+    def test_groupby_rollup(self):
+        t = table("tt", column("foo"), column("bar"))
+        q = sql.select(t.c.foo).group_by(sql.func.rollup(t.c.foo, t.c.bar))
+        self.assert_compile(
+            q, "SELECT tt.foo FROM tt GROUP BY tt.foo, tt.bar WITH ROLLUP"
         )
 
 

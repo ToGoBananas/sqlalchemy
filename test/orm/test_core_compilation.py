@@ -2,14 +2,17 @@ from sqlalchemy import bindparam
 from sqlalchemy import Column
 from sqlalchemy import delete
 from sqlalchemy import exc
+from sqlalchemy import ForeignKey
 from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import inspect
 from sqlalchemy import Integer
+from sqlalchemy import literal
 from sqlalchemy import literal_column
 from sqlalchemy import null
 from sqlalchemy import or_
 from sqlalchemy import select
+from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import text
 from sqlalchemy import union
@@ -772,8 +775,8 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
         self.assert_compile(
             q,
             "SELECT anon_1.id "
-            "FROM (SELECT users.name AS name, "
-            "users.id AS id FROM users) AS anon_1",
+            "FROM (SELECT users.id AS id, users.name AS name "
+            "FROM users) AS anon_1",
         )
 
         # testing deferred opts separately for deterministic SQL generation
@@ -782,9 +785,9 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
 
         self.assert_compile(
             q,
-            "SELECT anon_1.name, anon_1.id "
-            "FROM (SELECT users.name AS name, "
-            "users.id AS id FROM users) AS anon_1",
+            "SELECT anon_1.id, anon_1.name "
+            "FROM (SELECT users.id AS id, users.name AS name "
+            "FROM users) AS anon_1",
         )
 
         q = select(u1).options(undefer(u1.name_upper))
@@ -792,8 +795,8 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
         self.assert_compile(
             q,
             "SELECT upper(anon_1.name) AS upper_1, anon_1.id "
-            "FROM (SELECT users.name AS name, "
-            "users.id AS id FROM users) AS anon_1",
+            "FROM (SELECT users.id AS id, users.name AS name "
+            "FROM users) AS anon_1",
         )
 
     def test_non_deferred_subq_one(self, non_deferred_fixture):
@@ -874,9 +877,9 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
 
         self.assert_compile(
             stmt,
-            "WITH RECURSIVE anon_1(name, id) AS "
-            "(SELECT users.name AS name, users.id AS id FROM users "
-            "UNION ALL SELECT users.name AS name, users.id AS id "
+            "WITH RECURSIVE anon_1(id, name) AS "
+            "(SELECT users.id AS id, users.name AS name FROM users "
+            "UNION ALL SELECT users.id AS id, users.name AS name "
             "FROM users JOIN anon_1 ON anon_1.id = users.id) "
             "SELECT users.id FROM users JOIN anon_1 ON users.id = anon_1.id",
         )
@@ -884,9 +887,9 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
         # testing deferred opts separately for deterministic SQL generation
         self.assert_compile(
             stmt.options(undefer(User.name_upper)),
-            "WITH RECURSIVE anon_1(name, id) AS "
-            "(SELECT users.name AS name, users.id AS id FROM users "
-            "UNION ALL SELECT users.name AS name, users.id AS id "
+            "WITH RECURSIVE anon_1(id, name) AS "
+            "(SELECT users.id AS id, users.name AS name FROM users "
+            "UNION ALL SELECT users.id AS id, users.name AS name "
             "FROM users JOIN anon_1 ON anon_1.id = users.id) "
             "SELECT upper(users.name) AS upper_1, users.id "
             "FROM users JOIN anon_1 ON users.id = anon_1.id",
@@ -894,11 +897,11 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
 
         self.assert_compile(
             stmt.options(undefer(User.name)),
-            "WITH RECURSIVE anon_1(name, id) AS "
-            "(SELECT users.name AS name, users.id AS id FROM users "
-            "UNION ALL SELECT users.name AS name, users.id AS id "
+            "WITH RECURSIVE anon_1(id, name) AS "
+            "(SELECT users.id AS id, users.name AS name FROM users "
+            "UNION ALL SELECT users.id AS id, users.name AS name "
             "FROM users JOIN anon_1 ON anon_1.id = users.id) "
-            "SELECT users.name, users.id "
+            "SELECT users.id, users.name "
             "FROM users JOIN anon_1 ON users.id = anon_1.id",
         )
 
@@ -917,12 +920,13 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
 
         self.assert_compile(
             select(u_alias),
-            "SELECT anon_1.id FROM ((SELECT users.name AS name, "
-            "users.id AS id FROM users "
-            "WHERE users.id = :id_1 UNION SELECT users.name AS name, "
-            "users.id AS id "
+            "SELECT anon_1.id FROM ((SELECT users.id AS id, "
+            "users.name AS name "
+            "FROM users "
+            "WHERE users.id = :id_1 UNION SELECT users.id AS id, "
+            "users.name AS name "
             "FROM users WHERE users.id = :id_2) "
-            "UNION SELECT users.name AS name, users.id AS id "
+            "UNION SELECT users.id AS id, users.name AS name "
             "FROM users WHERE users.id = :id_3) AS anon_1",
         )
 
@@ -947,12 +951,12 @@ class LoadersInSubqueriesTest(QueryTest, AssertsCompiledSQL):
 
         self.assert_compile(
             select(u_alias).options(undefer(u_alias.name)),
-            "SELECT anon_1.name, anon_1.id FROM "
-            "((SELECT users.name AS name, users.id AS id FROM users "
-            "WHERE users.id = :id_1 UNION SELECT users.name AS name, "
-            "users.id AS id "
+            "SELECT anon_1.id, anon_1.name FROM "
+            "((SELECT users.id AS id, users.name AS name FROM users "
+            "WHERE users.id = :id_1 UNION SELECT users.id AS id, "
+            "users.name AS name "
             "FROM users WHERE users.id = :id_2) "
-            "UNION SELECT users.name AS name, users.id AS id "
+            "UNION SELECT users.id AS id, users.name AS name "
             "FROM users WHERE users.id = :id_3) AS anon_1",
         )
 
@@ -976,10 +980,32 @@ class ExtraColsTest(QueryTest, AssertsCompiledSQL):
             properties=util.OrderedDict(
                 [
                     ("value", query_expression()),
+                    (
+                        "value_w_default",
+                        query_expression(default_expr=literal(15)),
+                    ),
                 ]
             ),
         )
         self.mapper_registry.map_imperatively(Address, addresses)
+
+        return User
+
+    @testing.fixture
+    def deferred_fixture(self):
+        User = self.classes.User
+        users = self.tables.users
+
+        self.mapper_registry.map_imperatively(
+            User,
+            users,
+            properties={
+                "name": deferred(users.c.name),
+                "name_upper": column_property(
+                    func.upper(users.c.name), deferred=True
+                ),
+            },
+        )
 
         return User
 
@@ -1028,7 +1054,7 @@ class ExtraColsTest(QueryTest, AssertsCompiledSQL):
             users,
             properties=util.OrderedDict(
                 [
-                    ("concat", column_property((users.c.id * 2))),
+                    ("concat", column_property(users.c.id * 2)),
                     (
                         "count",
                         column_property(
@@ -1068,19 +1094,34 @@ class ExtraColsTest(QueryTest, AssertsCompiledSQL):
         self.mapper_registry.map_imperatively(
             User,
             users,
+            properties={
+                "addresses": relationship(Address, back_populates="user")
+            },
         )
 
         self.mapper_registry.map_imperatively(
             Address,
             addresses,
             properties={
-                "user": relationship(
-                    User,
-                )
+                "user": relationship(User, back_populates="addresses")
             },
         )
 
         return User, Address
+
+    @testing.fixture
+    def hard_labeled_self_ref_fixture(self, decl_base):
+        class A(decl_base):
+            __tablename__ = "a"
+
+            id = Column(Integer, primary_key=True)
+            a_id = Column(ForeignKey("a.id"))
+            data = Column(String)
+            data_lower = column_property(func.lower(data).label("hardcoded"))
+
+            as_ = relationship("A")
+
+        return A
 
     def test_no_joinedload_embedded(self, plain_fixture):
         User, Address = plain_fixture
@@ -1108,8 +1149,69 @@ class ExtraColsTest(QueryTest, AssertsCompiledSQL):
 
         self.assert_compile(
             stmt,
-            "SELECT users.name || :name_1 AS anon_1, users.id, "
+            "SELECT users.name || :name_1 AS anon_1, :param_1 AS anon_2, "
+            "users.id, "
             "users.name FROM users",
+        )
+
+    def test_exported_columns_query_expression(self, query_expression_fixture):
+        """test behaviors related to #8881"""
+        User = query_expression_fixture
+
+        stmt = select(User)
+
+        eq_(
+            stmt.selected_columns.keys(),
+            ["value_w_default", "id", "name"],
+        )
+
+        stmt = select(User).options(
+            with_expression(User.value, User.name + "foo")
+        )
+
+        # bigger problem.  we still don't include 'value', because we dont
+        # run query options here.  not "correct", but is at least consistent
+        # with deferred
+        eq_(
+            stmt.selected_columns.keys(),
+            ["value_w_default", "id", "name"],
+        )
+
+    def test_exported_columns_colprop(self, column_property_fixture):
+        """test behaviors related to #8881"""
+        User, _ = column_property_fixture
+
+        stmt = select(User)
+
+        # we get all the cols because they are not deferred and have a value
+        eq_(
+            stmt.selected_columns.keys(),
+            ["concat", "count", "id", "name"],
+        )
+
+    def test_exported_columns_deferred(self, deferred_fixture):
+        """test behaviors related to #8881"""
+        User = deferred_fixture
+
+        stmt = select(User)
+
+        # don't include 'name_upper' as it's deferred and readonly.
+        # "name" however is a column on the table, so even though it is
+        # deferred, it gets special treatment (related to #6661)
+        eq_(
+            stmt.selected_columns.keys(),
+            ["id", "name"],
+        )
+
+        stmt = select(User).options(
+            undefer(User.name), undefer(User.name_upper)
+        )
+
+        # undefer doesn't affect the readonly col because we dont look
+        # at options when we do selected_columns
+        eq_(
+            stmt.selected_columns.keys(),
+            ["id", "name"],
         )
 
     def test_with_expr_two(self, query_expression_fixture):
@@ -1124,7 +1226,8 @@ class ExtraColsTest(QueryTest, AssertsCompiledSQL):
 
         self.assert_compile(
             stmt,
-            "SELECT anon_1.foo, anon_1.id, anon_1.name FROM "
+            "SELECT anon_1.foo, :param_1 AS anon_2, anon_1.id, "
+            "anon_1.name FROM "
             "(SELECT users.id AS id, users.name AS name, "
             "users.name || :name_1 AS foo FROM users) AS anon_1",
         )
@@ -1190,22 +1293,84 @@ class ExtraColsTest(QueryTest, AssertsCompiledSQL):
             "ON users_1.id = addresses.user_id",
         )
 
-    def test_contains_eager_outermost(self, plain_fixture):
+    def test_joinedload_outermost_w_wrapping_elements(self, plain_fixture):
         User, Address = plain_fixture
 
         stmt = (
-            select(Address)
-            .join(Address.user)
-            .options(contains_eager(Address.user))
+            select(User)
+            .options(joinedload(User.addresses))
+            .limit(10)
+            .distinct()
         )
 
-        # render joined eager loads with stringify
         self.assert_compile(
             stmt,
-            "SELECT users.id, users.name, addresses.id AS id_1, "
-            "addresses.user_id, "
-            "addresses.email_address "
-            "FROM addresses JOIN users ON users.id = addresses.user_id",
+            "SELECT anon_1.id, anon_1.name, addresses_1.id AS id_1, "
+            "addresses_1.user_id, addresses_1.email_address FROM "
+            "(SELECT DISTINCT users.id AS id, users.name AS name FROM users "
+            "LIMIT :param_1) "
+            "AS anon_1 LEFT OUTER JOIN addresses AS addresses_1 "
+            "ON anon_1.id = addresses_1.user_id",
+        )
+
+    def test_contains_eager_outermost_w_wrapping_elements(self, plain_fixture):
+        """test #8569"""
+
+        User, Address = plain_fixture
+
+        stmt = (
+            select(User)
+            .join(User.addresses)
+            .options(contains_eager(User.addresses))
+            .limit(10)
+            .distinct()
+        )
+
+        self.assert_compile(
+            stmt,
+            "SELECT DISTINCT addresses.id, addresses.user_id, "
+            "addresses.email_address, users.id AS id_1, users.name "
+            "FROM users JOIN addresses ON users.id = addresses.user_id "
+            "LIMIT :param_1",
+        )
+
+    def test_joinedload_hard_labeled_selfref(
+        self, hard_labeled_self_ref_fixture
+    ):
+        """test #8569"""
+
+        A = hard_labeled_self_ref_fixture
+
+        stmt = select(A).options(joinedload(A.as_)).distinct()
+        self.assert_compile(
+            stmt,
+            "SELECT anon_1.hardcoded, anon_1.id, anon_1.a_id, anon_1.data, "
+            "lower(a_1.data) AS lower_1, a_1.id AS id_1, a_1.a_id AS a_id_1, "
+            "a_1.data AS data_1 FROM (SELECT DISTINCT lower(a.data) AS "
+            "hardcoded, a.id AS id, a.a_id AS a_id, a.data AS data FROM a) "
+            "AS anon_1 LEFT OUTER JOIN a AS a_1 ON anon_1.id = a_1.a_id",
+        )
+
+    def test_contains_eager_hard_labeled_selfref(
+        self, hard_labeled_self_ref_fixture
+    ):
+        """test #8569"""
+
+        A = hard_labeled_self_ref_fixture
+
+        a1 = aliased(A)
+        stmt = (
+            select(A)
+            .join(A.as_.of_type(a1))
+            .options(contains_eager(A.as_.of_type(a1)))
+            .distinct()
+        )
+        self.assert_compile(
+            stmt,
+            "SELECT DISTINCT lower(a.data) AS hardcoded, "
+            "lower(a_1.data) AS hardcoded, a_1.id, a_1.a_id, a_1.data, "
+            "a.id AS id_1, a.a_id AS a_id_1, a.data AS data_1 "
+            "FROM a JOIN a AS a_1 ON a.id = a_1.a_id",
         )
 
     def test_column_properties(self, column_property_fixture):

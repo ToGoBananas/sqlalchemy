@@ -236,7 +236,7 @@ class DeclarativeMixinTest(DeclarativeTestBase):
             baz = _column(String(100), nullable=False, index=True)
 
         @mapper_registry.mapped
-        class MyModel(MyMixin, object):
+        class MyModel(MyMixin):
 
             __tablename__ = "test"
             name = Column(String(100), nullable=False, index=True)
@@ -732,7 +732,7 @@ class DeclarativeMixinTest(DeclarativeTestBase):
             __tablename__ = "test"
             id = _column(Integer, primary_key=True)
             type_ = _column(String(50))
-            __mapper__args = {"polymorphic_on": type_}
+            __mapper_args__ = {"polymorphic_on": type_}
 
         class Specific(General):
             __tablename__ = "sub"
@@ -2017,11 +2017,11 @@ class DeclaredAttrTest(DeclarativeTestBase, testing.AssertsCompiledSQL):
         s = fixture_session()
         self.assert_compile(
             s.query(A),
-            "SELECT a.x + :x_1 AS anon_1, a.x AS a_x, a.id AS a_id FROM a",
+            "SELECT a.x + :x_1 AS anon_1, a.id AS a_id, a.x AS a_x FROM a",
         )
         self.assert_compile(
             s.query(B),
-            "SELECT b.x + :x_1 AS anon_1, b.x AS b_x, b.id AS b_id FROM b",
+            "SELECT b.x + :x_1 AS anon_1, b.id AS b_id, b.x AS b_x FROM b",
         )
 
     @testing.requires.predictable_gc
@@ -2264,8 +2264,8 @@ class DeclaredAttrTest(DeclarativeTestBase, testing.AssertsCompiledSQL):
         eq_(
             asserted,
             {
-                "a": set([A.my_attr.property.columns[0]]),
-                "b": set([B.my_attr.property.columns[0]]),
+                "a": {A.my_attr.property.columns[0]},
+                "b": {B.my_attr.property.columns[0]},
             },
         )
 
@@ -2395,7 +2395,7 @@ class AbstractTest(DeclarativeTestBase):
             __tablename__ = "q"
             id = Column(Integer, primary_key=True)
 
-        eq_(set(Base.metadata.tables), set(["y", "z", "q"]))
+        eq_(set(Base.metadata.tables), {"y", "z", "q"})
 
     def test_middle_abstract_attributes(self):
         # test for [ticket:3219]

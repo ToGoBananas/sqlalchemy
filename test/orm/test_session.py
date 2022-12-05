@@ -42,6 +42,7 @@ from sqlalchemy.testing import is_true
 from sqlalchemy.testing import mock
 from sqlalchemy.testing import pickleable
 from sqlalchemy.testing.fixtures import fixture_session
+from sqlalchemy.testing.provision import normalize_sequence
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 from sqlalchemy.testing.util import gc_collect
@@ -61,7 +62,9 @@ class ExecutionTest(_fixtures.FixtureTest):
     def test_sequence_execute(
         self, connection, metadata, add_do_orm_execute_event, use_scalar
     ):
-        seq = Sequence("some_sequence", metadata=metadata)
+        seq = normalize_sequence(
+            config, Sequence("some_sequence", metadata=metadata)
+        )
         metadata.create_all(connection)
         sess = Session(connection)
 
@@ -219,6 +222,73 @@ class TransScopingTest(_fixtures.FixtureTest):
         s.rollback()
         assert not s.in_transaction()
         eq_(s.connection().scalar(select(User.name)), "u1")
+
+    @testing.combinations(
+        "select1", "lazyload", "unitofwork", argnames="trigger"
+    )
+    @testing.combinations("commit", "close", "rollback", None, argnames="op")
+    def test_no_autobegin(self, op, trigger):
+        User, users = self.classes.User, self.tables.users
+        Address, addresses = self.classes.Address, self.tables.addresses
+
+        self.mapper_registry.map_imperatively(
+            User, users, properties={"addresses": relationship(Address)}
+        )
+        self.mapper_registry.map_imperatively(Address, addresses)
+
+        with Session(testing.db) as sess:
+
+            sess.add(User(name="u1"))
+            sess.commit()
+
+        s = Session(testing.db, autobegin=False)
+
+        orm_trigger = trigger == "lazyload" or trigger == "unitofwork"
+        with expect_raises_message(
+            sa.exc.InvalidRequestError,
+            r"Autobegin is disabled on this Session; please call "
+            r"session.begin\(\) to start a new transaction",
+        ):
+            if op or orm_trigger:
+                s.begin()
+
+                is_true(s.in_transaction())
+
+                if orm_trigger:
+                    u1 = s.scalar(select(User).filter_by(name="u1"))
+                else:
+                    eq_(s.scalar(select(1)), 1)
+
+                if op:
+                    getattr(s, op)()
+                elif orm_trigger:
+                    s.rollback()
+
+                is_false(s.in_transaction())
+
+            if trigger == "select1":
+                s.execute(select(1))
+            elif trigger == "lazyload":
+                if op == "close":
+                    s.add(u1)
+                else:
+                    u1.addresses
+            elif trigger == "unitofwork":
+                s.add(u1)
+
+        s.begin()
+        if trigger == "select1":
+            s.execute(select(1))
+        elif trigger == "lazyload":
+            if op == "close":
+                s.add(u1)
+            u1.addresses
+
+        is_true(s.in_transaction())
+
+        if op:
+            getattr(s, op)()
+            is_false(s.in_transaction())
 
     def test_autobegin_begin_method(self):
         s = Session(testing.db)
@@ -783,7 +853,7 @@ class SessionStateTest(_fixtures.FixtureTest):
         assert not sess.in_transaction()
         sess.begin()
         assert sess.is_active
-        sess.begin(_subtrans=True)
+        sess._autobegin_t()._begin()
         sess.rollback()
         assert sess.is_active
 
@@ -1984,9 +2054,7 @@ class DisposedStates(fixtures.MappedTest):
 class SessionInterface(fixtures.MappedTest):
     """Bogus args to Session methods produce actionable exceptions."""
 
-    _class_methods = set(
-        ("connection", "execute", "get_bind", "scalar", "scalars")
-    )
+    _class_methods = {"connection", "execute", "get_bind", "scalar", "scalars"}
 
     def _public_session_methods(self):
         Session = sa.orm.session.Session
@@ -2070,13 +2138,11 @@ class SessionInterface(fixtures.MappedTest):
         instance_methods = (
             self._public_session_methods()
             - self._class_methods
-            - set(
-                [
-                    "bulk_update_mappings",
-                    "bulk_insert_mappings",
-                    "bulk_save_objects",
-                ]
-            )
+            - {
+                "bulk_update_mappings",
+                "bulk_insert_mappings",
+                "bulk_save_objects",
+            }
         )
 
         eq_(

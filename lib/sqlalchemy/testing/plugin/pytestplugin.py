@@ -49,7 +49,7 @@ def pytest_addoption(parser):
                     required=False,
                     help=None,  # noqa
                 ):
-                    super(CallableAction, self).__init__(
+                    super().__init__(
                         option_strings=option_strings,
                         dest=dest,
                         nargs=0,
@@ -69,10 +69,10 @@ def pytest_addoption(parser):
         group.addoption(name, **kw)
 
     plugin_base.setup_options(make_option)
-    plugin_base.read_config()
 
 
-def pytest_configure(config):
+def pytest_configure(config: pytest.Config):
+    plugin_base.read_config(config.rootpath)
     if plugin_base.exclude_tags or plugin_base.include_tags:
         new_expr = " and ".join(
             list(plugin_base.include_tags)
@@ -210,7 +210,7 @@ def pytest_collection_modifyitems(session, config, items):
         and not item.getparent(pytest.Class).name.startswith("_")
     ]
 
-    test_classes = set(item.getparent(pytest.Class) for item in items)
+    test_classes = {item.getparent(pytest.Class) for item in items}
 
     def collect(element):
         for inst_or_fn in element.collect():

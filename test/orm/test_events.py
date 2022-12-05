@@ -661,8 +661,17 @@ class ORMExecuteTest(_RemoveListeners, _fixtures.FixtureTest):
 
         canary = self._flag_fixture(sess)
 
-        sess.execute(delete(User).filter_by(id=18))
-        sess.execute(update(User).filter_by(id=18).values(name="eighteen"))
+        sess.execute(
+            delete(User)
+            .filter_by(id=18)
+            .execution_options(synchronize_session="evaluate")
+        )
+        sess.execute(
+            update(User)
+            .filter_by(id=18)
+            .values(name="eighteen")
+            .execution_options(synchronize_session="evaluate")
+        )
 
         eq_(
             canary.mock_calls,
@@ -748,7 +757,7 @@ class MapperEventsTest(_RemoveListeners, _fixtures.FixtureTest):
 
     @classmethod
     def define_tables(cls, metadata):
-        super(MapperEventsTest, cls).define_tables(metadata)
+        super().define_tables(metadata)
         metadata.tables["users"].append_column(
             Column("extra", Integer, default=5, onupdate=10)
         )
@@ -1326,6 +1335,7 @@ class MapperEventsTest(_RemoveListeners, _fixtures.FixtureTest):
         # not been loaded yet (Employer), and therefore cannot be configured:
         class Mammal(Animal):
             nonexistent = relationship("Nonexistent")
+            __mapper_args__ = {"polymorphic_identity": "mammal"}
 
         # These new classes should not be configured at this point:
         unconfigured = list(mapperlib._unconfigured_mappers())
@@ -2108,7 +2118,7 @@ class RefreshTest(_fixtures.FixtureTest):
         sess.commit()
 
         sess.query(User).union_all(sess.query(User)).all()
-        eq_(canary, [("refresh", set(["id", "name"]))])
+        eq_(canary, [("refresh", {"id", "name"})])
 
     def test_via_refresh_state(self):
         User = self.classes.User
@@ -2122,7 +2132,7 @@ class RefreshTest(_fixtures.FixtureTest):
         sess.commit()
 
         u1.name
-        eq_(canary, [("refresh", set(["id", "name"]))])
+        eq_(canary, [("refresh", {"id", "name"})])
 
     def test_was_expired(self):
         User = self.classes.User
@@ -2137,7 +2147,7 @@ class RefreshTest(_fixtures.FixtureTest):
         sess.expire(u1)
 
         sess.query(User).first()
-        eq_(canary, [("refresh", set(["id", "name"]))])
+        eq_(canary, [("refresh", {"id", "name"})])
 
     def test_was_expired_via_commit(self):
         User = self.classes.User
@@ -2151,7 +2161,7 @@ class RefreshTest(_fixtures.FixtureTest):
         sess.commit()
 
         sess.query(User).first()
-        eq_(canary, [("refresh", set(["id", "name"]))])
+        eq_(canary, [("refresh", {"id", "name"})])
 
     def test_was_expired_attrs(self):
         User = self.classes.User
@@ -2166,7 +2176,7 @@ class RefreshTest(_fixtures.FixtureTest):
         sess.expire(u1, ["name"])
 
         sess.query(User).first()
-        eq_(canary, [("refresh", set(["name"]))])
+        eq_(canary, [("refresh", {"name"})])
 
     def test_populate_existing(self):
         User = self.classes.User
@@ -2194,6 +2204,35 @@ class SessionEventsTest(_RemoveListeners, _fixtures.FixtureTest):
 
         s = fixture_session()
         assert my_listener in s.dispatch.before_flush
+
+    @testing.combinations(True, False, argnames="m1")
+    @testing.combinations(True, False, argnames="m2")
+    @testing.combinations(True, False, argnames="m3")
+    @testing.combinations(True, False, argnames="use_insert")
+    def test_sessionmaker_gen_after_session_listen(
+        self, m1, m2, m3, use_insert
+    ):
+        m1 = Mock() if m1 else None
+        m2 = Mock() if m2 else None
+        m3 = Mock() if m3 else None
+
+        if m1:
+            event.listen(Session, "before_flush", m1, insert=use_insert)
+
+        factory = sessionmaker()
+
+        if m2:
+            event.listen(factory, "before_flush", m2, insert=use_insert)
+
+        if m3:
+            event.listen(factory, "before_flush", m3, insert=use_insert)
+
+        st = factory()
+        st.dispatch.before_flush()
+
+        for m in m1, m2, m3:
+            if m:
+                eq_(m.mock_calls, [call()])
 
     def test_sessionmaker_listen(self):
         """test that listen can be applied to individual

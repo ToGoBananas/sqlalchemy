@@ -136,6 +136,13 @@ def setup_options(make_option):
         "mark expression",
     )
     make_option(
+        "--nomypy",
+        action="callback",
+        zeroarg_callback=_set_tag_exclude("mypy"),
+        help="Don't run mypy typing tests; "
+        "this is now equivalent to the pytest -m 'not mypy' mark expression",
+    )
+    make_option(
         "--profile-sort",
         type=str,
         default="cumulative",
@@ -260,10 +267,12 @@ def restore_important_follower_config(dict_):
     """
 
 
-def read_config():
+def read_config(root_path):
     global file_config
     file_config = configparser.ConfigParser()
-    file_config.read(["setup.cfg", "test.cfg"])
+    file_config.read(
+        [str(root_path / "setup.cfg"), str(root_path / "test.cfg")]
+    )
 
 
 def pre_begin(opt):
@@ -383,7 +392,7 @@ def _init_symbols(options, file_config):
     config._fixture_functions = _fixture_fn_class()
 
 
-@post
+@pre
 def _set_disable_asyncio(opt, file_config):
     if opt.disable_asyncio:
 
@@ -427,7 +436,10 @@ def _engine_uri(options, file_config):
 
         if options.write_idents and provision.FOLLOWER_IDENT:
             with open(options.write_idents, "a") as file_:
-                file_.write(provision.FOLLOWER_IDENT + " " + db_url + "\n")
+                file_.write(
+                    f"{provision.FOLLOWER_IDENT} "
+                    f"{db_url.render_as_string(hide_password=False)}\n"
+                )
 
         cfg = provision.setup_config(
             db_url, options, file_config, provision.FOLLOWER_IDENT

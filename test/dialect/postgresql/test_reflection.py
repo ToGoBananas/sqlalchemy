@@ -1,5 +1,3 @@
-# coding: utf-8
-
 import itertools
 from operator import itemgetter
 import re
@@ -43,9 +41,11 @@ from sqlalchemy.testing.assertions import AssertsExecutionResults
 from sqlalchemy.testing.assertions import ComparesIndexes
 from sqlalchemy.testing.assertions import eq_
 from sqlalchemy.testing.assertions import expect_raises
+from sqlalchemy.testing.assertions import expect_warnings
 from sqlalchemy.testing.assertions import is_
 from sqlalchemy.testing.assertions import is_false
 from sqlalchemy.testing.assertions import is_true
+from sqlalchemy.types import NullType
 
 
 class ReflectionFixtures:
@@ -120,7 +120,7 @@ class ForeignTableReflectionTest(
         table = Table("test_foreigntable", metadata, autoload_with=connection)
         eq_(
             set(table.columns.keys()),
-            set(["id", "data"]),
+            {"id", "data"},
             "Columns of reflected foreign table didn't equal expected columns",
         )
 
@@ -286,7 +286,7 @@ class MaterializedViewReflectionTest(
         table = Table("test_mview", metadata, autoload_with=connection)
         eq_(
             set(table.columns.keys()),
-            set(["id", "data"]),
+            {"id", "data"},
             "Columns of reflected mview didn't equal expected columns",
         )
 
@@ -297,24 +297,24 @@ class MaterializedViewReflectionTest(
 
     def test_get_view_names(self, inspect_fixture):
         insp, conn = inspect_fixture
-        eq_(set(insp.get_view_names()), set(["test_regview"]))
+        eq_(set(insp.get_view_names()), {"test_regview"})
 
     def test_get_materialized_view_names(self, inspect_fixture):
         insp, conn = inspect_fixture
-        eq_(set(insp.get_materialized_view_names()), set(["test_mview"]))
+        eq_(set(insp.get_materialized_view_names()), {"test_mview"})
 
     def test_get_view_names_reflection_cache_ok(self, connection):
         insp = inspect(connection)
-        eq_(set(insp.get_view_names()), set(["test_regview"]))
+        eq_(set(insp.get_view_names()), {"test_regview"})
         eq_(
             set(insp.get_materialized_view_names()),
-            set(["test_mview"]),
+            {"test_mview"},
         )
         eq_(
             set(insp.get_view_names()).union(
                 insp.get_materialized_view_names()
             ),
-            set(["test_regview", "test_mview"]),
+            {"test_regview", "test_mview"},
         )
 
     def test_get_view_definition(self, connection):
@@ -481,7 +481,7 @@ class DomainReflectionTest(fixtures.TestBase, AssertsExecutionResults):
         table = Table("testtable", metadata, autoload_with=connection)
         eq_(
             set(table.columns.keys()),
-            set(["question", "answer"]),
+            {"question", "answer"},
             "Columns of reflected table didn't equal expected columns",
         )
         assert isinstance(table.c.answer.type, Integer)
@@ -532,7 +532,7 @@ class DomainReflectionTest(fixtures.TestBase, AssertsExecutionResults):
         )
         eq_(
             set(table.columns.keys()),
-            set(["question", "answer", "anything"]),
+            {"question", "answer", "anything"},
             "Columns of reflected table didn't equal expected columns",
         )
         assert isinstance(table.c.anything.type, Integer)
@@ -1081,7 +1081,7 @@ class ReflectionTest(
 
         eq_(
             set(meta2.tables),
-            set(["test_schema_2.some_other_table", "some_table"]),
+            {"test_schema_2.some_other_table", "some_table"},
         )
 
         meta3 = MetaData()
@@ -1093,12 +1093,10 @@ class ReflectionTest(
 
         eq_(
             set(meta3.tables),
-            set(
-                [
-                    "test_schema_2.some_other_table",
-                    "test_schema.some_table",
-                ]
-            ),
+            {
+                "test_schema_2.some_other_table",
+                "test_schema.some_table",
+            },
         )
 
     def test_cross_schema_reflection_metadata_uses_schema(
@@ -1125,7 +1123,7 @@ class ReflectionTest(
 
         eq_(
             set(meta2.tables),
-            set(["some_other_table", "test_schema.some_table"]),
+            {"some_other_table", "test_schema.some_table"},
         )
 
     def test_uppercase_lowercase_table(self, metadata, connection):
@@ -1881,10 +1879,10 @@ class ReflectionTest(
 
         # PostgreSQL will create an implicit index for a unique
         # constraint.   Separately we get both
-        indexes = set(i["name"] for i in insp.get_indexes("pgsql_uc"))
-        constraints = set(
+        indexes = {i["name"] for i in insp.get_indexes("pgsql_uc")}
+        constraints = {
             i["name"] for i in insp.get_unique_constraints("pgsql_uc")
-        )
+        }
 
         self.assert_("uc_a" in indexes)
         self.assert_("uc_a" in constraints)
@@ -1892,8 +1890,8 @@ class ReflectionTest(
         # reflection corrects for the dupe
         reflected = Table("pgsql_uc", MetaData(), autoload_with=connection)
 
-        indexes = set(i.name for i in reflected.indexes)
-        constraints = set(uc.name for uc in reflected.constraints)
+        indexes = {i.name for i in reflected.indexes}
+        constraints = {uc.name for uc in reflected.constraints}
 
         self.assert_("uc_a" not in indexes)
         self.assert_("uc_a" in constraints)
@@ -1951,10 +1949,10 @@ class ReflectionTest(
 
         uc_table.create(connection)
 
-        indexes = dict((i["name"], i) for i in insp.get_indexes("pgsql_uc"))
-        constraints = set(
+        indexes = {i["name"]: i for i in insp.get_indexes("pgsql_uc")}
+        constraints = {
             i["name"] for i in insp.get_unique_constraints("pgsql_uc")
-        )
+        }
 
         self.assert_("ix_a" in indexes)
         assert indexes["ix_a"]["unique"]
@@ -1962,8 +1960,8 @@ class ReflectionTest(
 
         reflected = Table("pgsql_uc", MetaData(), autoload_with=connection)
 
-        indexes = dict((i.name, i) for i in reflected.indexes)
-        constraints = set(uc.name for uc in reflected.constraints)
+        indexes = {i.name: i for i in reflected.indexes}
+        constraints = {uc.name for uc in reflected.constraints}
 
         self.assert_("ix_a" in indexes)
         assert indexes["ix_a"].unique
@@ -2005,11 +2003,11 @@ class ReflectionTest(
 
         reflected = Table("pgsql_cc", MetaData(), autoload_with=connection)
 
-        check_constraints = dict(
-            (uc.name, uc.sqltext.text)
+        check_constraints = {
+            uc.name: uc.sqltext.text
             for uc in reflected.constraints
             if isinstance(uc, CheckConstraint)
-        )
+        }
 
         eq_(
             check_constraints,
@@ -2304,6 +2302,35 @@ class CustomTypeReflectionTest(fixtures.TestBase):
         dialect.ischema_names = dialect.ischema_names.copy()
         dialect.ischema_names["my_custom_type"] = self.CustomType
         self._assert_reflected(dialect)
+
+    def test_no_format_type(self):
+        """test #8748"""
+
+        dialect = postgresql.PGDialect()
+        dialect.ischema_names = dialect.ischema_names.copy()
+        dialect.ischema_names["my_custom_type"] = self.CustomType
+
+        with expect_warnings(
+            r"PostgreSQL format_type\(\) returned NULL for column 'colname'"
+        ):
+            row_dict = {
+                "name": "colname",
+                "table_name": "tblname",
+                "format_type": None,
+                "default": None,
+                "not_null": False,
+                "comment": None,
+                "generated": "",
+                "identity_options": None,
+            }
+            column_info = dialect._get_columns_info(
+                [row_dict], {}, {}, "public"
+            )
+            assert ("public", "tblname") in column_info
+            column_info = column_info[("public", "tblname")]
+            assert len(column_info) == 1
+            column_info = column_info[0]
+            assert isinstance(column_info["type"], NullType)
 
 
 class IntervalReflectionTest(fixtures.TestBase):

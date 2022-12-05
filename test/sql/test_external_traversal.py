@@ -194,7 +194,8 @@ class TraversalTest(
         ("name with~~tildes~~",),
         argnames="name",
     )
-    def test_bindparam_key_proc_for_copies(self, meth, name):
+    @testing.combinations(True, False, argnames="positional")
+    def test_bindparam_key_proc_for_copies(self, meth, name, positional):
         r"""test :ticket:`6249`.
 
         Revised for :ticket:`8056`.
@@ -226,13 +227,25 @@ class TraversalTest(
 
         token = re.sub(r"[%\(\) \$\[\]]", "_", name)
 
-        self.assert_compile(
-            expr,
-            '"%(name)s" IN (:%(token)s_1_1, '
-            ":%(token)s_1_2, :%(token)s_1_3)" % {"name": name, "token": token},
-            render_postcompile=True,
-            dialect="default",
-        )
+        if positional:
+            self.assert_compile(
+                expr,
+                '"%(name)s" IN (?, ?, ?)' % {"name": name},
+                checkpositional=(1, 2, 3),
+                render_postcompile=True,
+                dialect="default_qmark",
+            )
+        else:
+            tokens = ["%s_1_%s" % (token, i) for i in range(1, 4)]
+            self.assert_compile(
+                expr,
+                '"%(name)s" IN (:%(token)s_1_1, '
+                ":%(token)s_1_2, :%(token)s_1_3)"
+                % {"name": name, "token": token},
+                checkparams=dict(zip(tokens, [1, 2, 3])),
+                render_postcompile=True,
+                dialect="default",
+            )
 
     def test_expanding_in_bindparam_safe_to_clone(self):
         expr = column("x").in_([1, 2, 3])
@@ -344,7 +357,7 @@ class TraversalTest(
         foo, bar = CustomObj("foo", String), CustomObj("bar", String)
         bin_ = foo == bar
         set(ClauseVisitor().iterate(bin_))
-        assert set(ClauseVisitor().iterate(bin_)) == set([foo, bar, bin_])
+        assert set(ClauseVisitor().iterate(bin_)) == {foo, bar, bin_}
 
 
 class BinaryEndpointTraversalTest(fixtures.TestBase):
@@ -726,7 +739,7 @@ class ClauseTest(fixtures.TestBase, AssertsCompiledSQL):
         assert c1 == str(clause)
         assert str(clause2) == c1 + " SOME MODIFIER=:lala"
         assert list(clause._bindparams.keys()) == ["bar"]
-        assert set(clause2._bindparams.keys()) == set(["bar", "lala"])
+        assert set(clause2._bindparams.keys()) == {"bar", "lala"}
 
     def test_select(self):
         s2 = select(t1)
@@ -2209,8 +2222,8 @@ class ClauseAdapterTest(fixtures.TestBase, AssertsCompiledSQL):
 
         e = sql_util.ClauseAdapter(
             b,
-            include_fn=lambda x: x in set([a.c.id]),
-            equivalents={a.c.id: set([a.c.id])},
+            include_fn=lambda x: x in {a.c.id},
+            equivalents={a.c.id: {a.c.id}},
         ).traverse(e)
 
         assert str(e) == "a_1.id = a.xxx_id"
@@ -2225,7 +2238,7 @@ class ClauseAdapterTest(fixtures.TestBase, AssertsCompiledSQL):
         # asking for a nonexistent col.  corresponding_column should prevent
         # endless depth.
         adapt = sql_util.ClauseAdapter(
-            b, equivalents={a.c.x: set([c.c.x]), c.c.x: set([a.c.x])}
+            b, equivalents={a.c.x: {c.c.x}, c.c.x: {a.c.x}}
         )
         assert adapt._corresponding_column(a.c.x, False) is None
 
@@ -2240,7 +2253,7 @@ class ClauseAdapterTest(fixtures.TestBase, AssertsCompiledSQL):
         # two levels of indirection from c.x->b.x->a.x, requires recursive
         # corresponding_column call
         adapt = sql_util.ClauseAdapter(
-            alias, equivalents={b.c.x: set([a.c.x]), c.c.x: set([b.c.x])}
+            alias, equivalents={b.c.x: {a.c.x}, c.c.x: {b.c.x}}
         )
         assert adapt._corresponding_column(a.c.x, False) is alias.c.x
         assert adapt._corresponding_column(c.c.x, False) is alias.c.x
@@ -2535,9 +2548,9 @@ class SpliceJoinsTest(fixtures.TestBase, AssertsCompiledSQL):
         def _table(name):
             return table(name, column("col1"), column("col2"), column("col3"))
 
-        table1, table2, table3, table4 = [
+        table1, table2, table3, table4 = (
             _table(name) for name in ("table1", "table2", "table3", "table4")
-        ]
+        )
 
     def test_splice(self):
         t1, t2, t3, t4 = table1, table2, table1.alias(), table2.alias()

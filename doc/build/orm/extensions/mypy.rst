@@ -66,7 +66,9 @@ like sqlalchemy-stubs_ and sqlalchemy2-stubs_ should be fully uninstalled.
 
 The Mypy_ package itself is a dependency.
 
-Mypy may be installed using the "mypy" extras hook using pip::
+Mypy may be installed using the "mypy" extras hook using pip:
+
+.. sourcecode:: text
 
     pip install sqlalchemy[mypy]
 
@@ -124,9 +126,7 @@ mapping, using the typical example of the ``User`` class::
 
     # a select() construct makes use of SQL expressions derived from the
     # User class itself
-    select_stmt = (
-        select(User).where(User.id.in_([3, 4, 5])).where(User.name.contains("s"))
-    )
+    select_stmt = select(User).where(User.id.in_([3, 4, 5])).where(User.name.contains("s"))
 
 Above, the steps that the Mypy extension can take include:
 
@@ -169,9 +169,7 @@ following::
         )
         name: Mapped[Optional[str]] = Mapped._special_method(Column(String))
 
-        def __init__(
-            self, id: Optional[int] = ..., name: Optional[str] = ...
-        ) -> None:
+        def __init__(self, id: Optional[int] = ..., name: Optional[str] = ...) -> None:
             ...
 
 
@@ -179,10 +177,7 @@ following::
 
     print(f"Username: {some_user.name}")
 
-    select_stmt = (
-        select(User).where(User.id.in_([3, 4, 5])).where(User.name.contains("s"))
-    )
-
+    select_stmt = select(User).where(User.id.in_([3, 4, 5])).where(User.name.contains("s"))
 
 The key steps which have been taken above include:
 
@@ -321,7 +316,9 @@ needs an explicit type to be sent::
         id = Column(Integer, primary_key=True)
         user_id = Column(ForeignKey("user.id"))
 
-The plugin will deliver the message as follows::
+The plugin will deliver the message as follows:
+
+.. sourcecode:: text
 
     $ mypy test3.py --strict
     test3.py:20: error: [SQLAlchemy Mypy plugin] Can't infer type from
@@ -395,7 +392,9 @@ is a string or callable, and not a class::
 
         user = relationship(User)
 
-The above mapping will produce the following error::
+The above mapping will produce the following error:
+
+.. sourcecode:: text
 
     test3.py:22: error: [SQLAlchemy Mypy plugin] Can't infer scalar or
     collection for ORM mapped expression assigned to attribute 'user'
@@ -448,9 +447,7 @@ applied explicitly::
         id = Column(Integer, primary_key=True)
         name = Column(String)
 
-        addresses: Mapped[List["Address"]] = relationship(
-            "Address", back_populates="user"
-        )
+        addresses: Mapped[List["Address"]] = relationship("Address", back_populates="user")
 
 
     class Address(Base):

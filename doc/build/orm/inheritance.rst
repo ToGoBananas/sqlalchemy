@@ -19,6 +19,8 @@ return objects of multiple types.
 
 .. seealso::
 
+    :ref:`loading_joined_inheritance` - in the :ref:`queryguide_toplevel`
+
     :ref:`examples_inheritance` - complete examples of joined, single and
     concrete inheritance
 
@@ -30,27 +32,28 @@ Joined Table Inheritance
 In joined table inheritance, each class along a hierarchy of classes
 is represented by a distinct table.  Querying for a particular subclass
 in the hierarchy will render as a SQL JOIN along all tables in its
-inheritance path. If the queried class is the base class, the **default behavior
-is to include only the base table** in a SELECT statement.   In all cases, the
-ultimate class to instantiate for a given row is determined by a discriminator
-column or an expression that works against the base table.    When a subclass
-is loaded **only** against a base table, resulting objects will have base attributes
-populated at first; attributes that are local to the subclass will :term:`lazy load`
-when they are accessed.    Alternatively, there are options which can change
-the default behavior, allowing the query to include columns corresponding to
-multiple tables/subclasses up front.
+inheritance path. If the queried class is the base class, the base table
+is queried instead, with options to include other tables at the same time
+or to allow attributes specific to sub-tables to load later.
+
+In all cases, the ultimate class to instantiate for a given row is determined
+by a :term:`discriminator` column or SQL expression, defined on the base class,
+which will yield a scalar value that is associated with a particular subclass.
+
 
 The base class in a joined inheritance hierarchy is configured with
-additional arguments that will refer to the polymorphic discriminator
-column as well as the identifier for the base class::
+additional arguments that will indicate to the polymorphic discriminator
+column, and optionally a polymorphic identifier for the base class itself::
 
     from sqlalchemy import ForeignKey
     from sqlalchemy.orm import DeclarativeBase
     from sqlalchemy.orm import Mapped
     from sqlalchemy.orm import mapped_column
 
+
     class Base(DeclarativeBase):
         pass
+
 
     class Employee(Base):
         __tablename__ = "employee"
@@ -63,24 +66,26 @@ column as well as the identifier for the base class::
             "polymorphic_on": "type",
         }
 
-Above, an additional column ``type`` is established to act as the
-**discriminator**, configured as such using the
-:paramref:`_orm.Mapper.polymorphic_on` parameter, which accepts a column-oriented
-expression specified either as a string name of the mapped attribute to use, or
-as a column expression object such as :class:`_schema.Column` or
-:func:`_orm.mapped_column` construct.
+        def __repr__(self):
+            return f"{self.__class__.__name__}({self.name!r})"
 
-This column will store a value which indicates the type of object
+In the above example, the discriminator is the ``type`` column, whichever is
+configured using the :paramref:`_orm.Mapper.polymorphic_on` parameter. This
+parameter accepts a column-oriented expression, specified either as a string
+name of the mapped attribute to use or as a column expression object such as
+:class:`_schema.Column` or :func:`_orm.mapped_column` construct.
+
+The discriminator column will store a value which indicates the type of object
 represented within the row. The column may be of any datatype, though string
 and integer are the most common.  The actual data value to be applied to this
 column for a particular row in the database is specified using the
 :paramref:`_orm.Mapper.polymorphic_identity` parameter, described below.
 
 While a polymorphic discriminator expression is not strictly necessary, it is
-required if polymorphic loading is desired.   Establishing a simple column on
+required if polymorphic loading is desired.   Establishing a column on
 the base table is the easiest way to achieve this, however very sophisticated
-inheritance mappings may even configure a SQL expression such as a CASE
-statement as the polymorphic discriminator.
+inheritance mappings may make use of SQL expressions, such as a CASE
+expression, as the polymorphic discriminator.
 
 .. note::
 
@@ -176,6 +181,7 @@ and ``Employee``::
 
     from sqlalchemy.orm import relationship
 
+
     class Company(Base):
         __tablename__ = "company"
         id: Mapped[int] = mapped_column(primary_key=True)
@@ -225,7 +231,7 @@ established between the ``Manager`` and ``Company`` classes::
 
         __mapper_args__ = {
             "polymorphic_identity": "employee",
-            "polymorphic_on": type,
+            "polymorphic_on": "type",
         }
 
 
@@ -319,8 +325,8 @@ their own.
 
 .. _orm_inheritance_column_conflicts:
 
-Resolving Column Conflicts
-+++++++++++++++++++++++++++
+Resolving Column Conflicts with ``use_existing_column``
++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 Note in the previous section that the ``manager_name`` and ``engineer_info`` columns
 are "moved up" to be applied to ``Employee.__table__``, as a result of their
@@ -328,6 +334,7 @@ declaration on a subclass that has no table of its own.   A tricky case
 comes up when two subclasses want to specify *the same* column, as below::
 
     from datetime import datetime
+
 
     class Employee(Base):
         __tablename__ = "employee"
@@ -355,20 +362,24 @@ comes up when two subclasses want to specify *the same* column, as below::
         start_date: Mapped[datetime]
 
 Above, the ``start_date`` column declared on both ``Engineer`` and ``Manager``
-will result in an error::
+will result in an error:
 
-    sqlalchemy.exc.ArgumentError: Column 'start_date' on class
-    <class '__main__.Manager'> conflicts with existing
-    column 'employee.start_date'
+.. sourcecode:: text
+
+
+    sqlalchemy.exc.ArgumentError: Column 'start_date' on class Manager conflicts
+    with existing column 'employee.start_date'.  If using Declarative,
+    consider using the use_existing_column parameter of mapped_column() to
+    resolve conflicts.
 
 The above scenario presents an ambiguity to the Declarative mapping system that
-may be resolved by using
-:class:`.declared_attr` to define the :class:`_schema.Column` conditionally,
-taking care to return the **existing column** via the parent ``__table__``
-if it already exists::
+may be resolved by using the :paramref:`_orm.mapped_column.use_existing_column`
+parameter on :func:`_orm.mapped_column`, which instructs :func:`_orm.mapped_column`
+to look on the inheriting superclass present and use the column that's already
+mapped, if already present, else to map a new column::
+
 
     from sqlalchemy import DateTime
-    from sqlalchemy.orm import declared_attr
 
 
     class Employee(Base):
@@ -388,15 +399,7 @@ if it already exists::
             "polymorphic_identity": "engineer",
         }
 
-        @declared_attr
-        def start_date(cls) -> Mapped[datetime]:
-            "Start date column, if not present already."
-
-            # the DateTime type is required in the mapped_column
-            # at the moment when used inside of a @declared_attr
-            return Employee.__table__.c.get(
-                "start_date", mapped_column(DateTime)  # type: ignore
-            )
+        start_date: Mapped[datetime] = mapped_column(use_existing_column=True)
 
 
     class Manager(Employee):
@@ -404,20 +407,25 @@ if it already exists::
             "polymorphic_identity": "manager",
         }
 
-        @declared_attr
-        def start_date(cls) -> Mapped[datetime]:
-            "Start date column, if not present already."
-
-            # the DateTime type is required in the mapped_column
-            # at the moment when used inside of a @declared_attr
-            return Employee.__table__.c.get(
-                "start_date", mapped_column(DateTime)  # type: ignore
-            )
+        start_date: Mapped[datetime] = mapped_column(use_existing_column=True)
 
 Above, when ``Manager`` is mapped, the ``start_date`` column is
-already present on the ``Employee`` class; by returning the existing
-:class:`_schema.Column` object, the declarative system recognizes that this
-is the same column to be mapped to the two different subclasses separately.
+already present on the ``Employee`` class, having been provided by the
+``Engineer`` mapping already.   The :paramref:`_orm.mapped_column.use_existing_column`
+parameter indicates to :func:`_orm.mapped_column` that it should look for the
+requested :class:`_schema.Column` on the mapped :class:`.Table` for
+``Employee`` first, and if present, maintain that existing mapping.  If not
+present, :func:`_orm.mapped_column` will map the column normally, adding it
+as one of the columns in the :class:`.Table` referred towards by the
+``Employee`` superclass.
+
+
+.. versionadded:: 2.0.0b4 - Added :paramref:`_orm.mapped_column.use_existing_column`,
+   which provides a 2.0-compatible means of mapping a column on an inheriting
+   subclass conditionally.  The previous approach which combines
+   :class:`.declared_attr` with a lookup on the parent ``.__table__``
+   continues to function as well, but lacks :pep:`484` typing support.
+
 
 A similar concept can be used with mixin classes (see :ref:`orm_mixins_toplevel`)
 to define a particular series of columns and/or other mapped attributes
@@ -436,11 +444,7 @@ from a reusable mixin class::
 
 
     class HasStartDate:
-        @declared_attr
-        def start_date(cls) -> Mapped[datetime]:
-            return cls.__table__.c.get(
-                "start_date", mapped_column(DateTime)  # type: ignore
-            )
+        start_date: Mapped[datetime] = mapped_column(use_existing_column=True)
 
 
     class Engineer(HasStartDate, Employee):
@@ -671,8 +675,10 @@ almost the same way as we do other forms of inheritance mappings::
     from sqlalchemy.ext.declarative import ConcreteBase
     from sqlalchemy.orm import DeclarativeBase
 
+
     class Base(DeclarativeBase):
         pass
+
 
     class Employee(ConcreteBase, Base):
         __tablename__ = "employee"
@@ -780,8 +786,10 @@ base class with the ``__abstract__`` indicator::
 
     from sqlalchemy.orm import DeclarativeBase
 
+
     class Base(DeclarativeBase):
         pass
+
 
     class Employee(Base):
         __abstract__ = True
@@ -821,6 +829,7 @@ class called :class:`.AbstractConcreteBase` which achieves this automatically::
     from sqlalchemy.ext.declarative import AbstractConcreteBase
     from sqlalchemy.orm import DeclarativeBase
 
+
     class Base(DeclarativeBase):
         pass
 
@@ -854,6 +863,7 @@ class called :class:`.AbstractConcreteBase` which achieves this automatically::
             "concrete": True,
         }
 
+
     Base.registry.configure()
 
 Above, the :meth:`_orm.registry.configure` method is invoked, which will
@@ -870,7 +880,7 @@ Using the above mapping, queries can be produced in terms of the ``Employee``
 class and any attributes that are locally declared upon it, such as the
 ``Employee.name``::
 
-    >>> stmt = select(Employee).where(Employee.name == 'n1')
+    >>> stmt = select(Employee).where(Employee.name == "n1")
     >>> print(stmt)
     SELECT pjoin.id, pjoin.name, pjoin.type, pjoin.manager_data, pjoin.engineer_info
     FROM (
@@ -1073,7 +1083,6 @@ mapping is illustrated below::
             "polymorphic_identity": "manager",
             "concrete": True,
         }
-
 
 Above, we use :func:`.polymorphic_union` in the same manner as before, except
 that we omit the ``employee`` table.

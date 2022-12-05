@@ -1,5 +1,0 @@
-.. change::
-    :tags: oracle, feature
-    :tickets: 8054
-
-    Add support for the new oracle driver ``oracledb``.

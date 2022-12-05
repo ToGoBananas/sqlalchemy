@@ -893,6 +893,7 @@ from .json import JSONPathType
 from ... import exc
 from ... import schema as sa_schema
 from ... import sql
+from ... import text
 from ... import types as sqltypes
 from ... import util
 from ...engine import default
@@ -921,9 +922,7 @@ from ...types import VARCHAR  # noqa
 
 class _SQliteJson(JSON):
     def result_processor(self, dialect, coltype):
-        default_processor = super(_SQliteJson, self).result_processor(
-            dialect, coltype
-        )
+        default_processor = super().result_processor(dialect, coltype)
 
         def process(value):
             try:
@@ -942,7 +941,7 @@ class _DateTimeMixin:
     _storage_format = None
 
     def __init__(self, storage_format=None, regexp=None, **kw):
-        super(_DateTimeMixin, self).__init__(**kw)
+        super().__init__(**kw)
         if regexp is not None:
             self._reg = re.compile(regexp)
         if storage_format is not None:
@@ -978,7 +977,7 @@ class _DateTimeMixin:
                 kw["storage_format"] = self._storage_format
             if self._reg:
                 kw["regexp"] = self._reg
-        return super(_DateTimeMixin, self).adapt(cls, **kw)
+        return super().adapt(cls, **kw)
 
     def literal_processor(self, dialect):
         bp = self.bind_processor(dialect)
@@ -1037,7 +1036,7 @@ class DATETIME(_DateTimeMixin, sqltypes.DateTime):
 
     def __init__(self, *args, **kwargs):
         truncate_microseconds = kwargs.pop("truncate_microseconds", False)
-        super(DATETIME, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         if truncate_microseconds:
             assert "storage_format" not in kwargs, (
                 "You can specify only "
@@ -1215,7 +1214,7 @@ class TIME(_DateTimeMixin, sqltypes.Time):
 
     def __init__(self, *args, **kwargs):
         truncate_microseconds = kwargs.pop("truncate_microseconds", False)
-        super(TIME, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         if truncate_microseconds:
             assert "storage_format" not in kwargs, (
                 "You can specify only "
@@ -1337,7 +1336,7 @@ class SQLiteCompiler(compiler.SQLCompiler):
 
     def visit_cast(self, cast, **kwargs):
         if self.dialect.supports_cast:
-            return super(SQLiteCompiler, self).visit_cast(cast, **kwargs)
+            return super().visit_cast(cast, **kwargs)
         else:
             return self.process(cast.clause, **kwargs)
 
@@ -1380,6 +1379,15 @@ class SQLiteCompiler(compiler.SQLCompiler):
     def for_update_clause(self, select, **kw):
         # sqlite has no "FOR UPDATE" AFAICT
         return ""
+
+    def update_from_clause(
+        self, update_stmt, from_table, extra_froms, from_hints, **kw
+    ):
+        kw["asfrom"] = True
+        return "FROM " + ", ".join(
+            t._compiler_dispatch(self, fromhints=from_hints, **kw)
+            for t in extra_froms
+        )
 
     def visit_is_distinct_from_binary(self, binary, operator, **kw):
         return "%s IS NOT %s" % (
@@ -1456,11 +1464,6 @@ class SQLiteCompiler(compiler.SQLCompiler):
             target_text = ""
 
         return target_text
-
-    def visit_insert(self, insert_stmt, **kw):
-        if insert_stmt._post_values_clause is not None:
-            kw["disable_implicit_returning"] = True
-        return super().visit_insert(insert_stmt, **kw)
 
     def visit_on_conflict_do_nothing(self, on_conflict, **kw):
 
@@ -1606,9 +1609,7 @@ class SQLiteDDLCompiler(compiler.DDLCompiler):
             ):
                 return None
 
-        text = super(SQLiteDDLCompiler, self).visit_primary_key_constraint(
-            constraint
-        )
+        text = super().visit_primary_key_constraint(constraint)
 
         on_conflict_clause = constraint.dialect_options["sqlite"][
             "on_conflict"
@@ -1624,9 +1625,7 @@ class SQLiteDDLCompiler(compiler.DDLCompiler):
         return text
 
     def visit_unique_constraint(self, constraint):
-        text = super(SQLiteDDLCompiler, self).visit_unique_constraint(
-            constraint
-        )
+        text = super().visit_unique_constraint(constraint)
 
         on_conflict_clause = constraint.dialect_options["sqlite"][
             "on_conflict"
@@ -1644,9 +1643,7 @@ class SQLiteDDLCompiler(compiler.DDLCompiler):
         return text
 
     def visit_check_constraint(self, constraint):
-        text = super(SQLiteDDLCompiler, self).visit_check_constraint(
-            constraint
-        )
+        text = super().visit_check_constraint(constraint)
 
         on_conflict_clause = constraint.dialect_options["sqlite"][
             "on_conflict"
@@ -1658,9 +1655,7 @@ class SQLiteDDLCompiler(compiler.DDLCompiler):
         return text
 
     def visit_column_check_constraint(self, constraint):
-        text = super(SQLiteDDLCompiler, self).visit_column_check_constraint(
-            constraint
-        )
+        text = super().visit_column_check_constraint(constraint)
 
         if constraint.dialect_options["sqlite"]["on_conflict"] is not None:
             raise exc.CompileError(
@@ -1678,9 +1673,7 @@ class SQLiteDDLCompiler(compiler.DDLCompiler):
         if local_table.schema != remote_table.schema:
             return None
         else:
-            return super(SQLiteDDLCompiler, self).visit_foreign_key_constraint(
-                constraint
-            )
+            return super().visit_foreign_key_constraint(constraint)
 
     def define_constraint_remote_table(self, constraint, table, preparer):
         """Format the remote table clause of a CREATE CONSTRAINT clause."""
@@ -1737,7 +1730,7 @@ class SQLiteTypeCompiler(compiler.GenericTypeCompiler):
             not isinstance(type_, _DateTimeMixin)
             or type_.format_is_text_affinity
         ):
-            return super(SQLiteTypeCompiler, self).visit_DATETIME(type_)
+            return super().visit_DATETIME(type_)
         else:
             return "DATETIME_CHAR"
 
@@ -1746,7 +1739,7 @@ class SQLiteTypeCompiler(compiler.GenericTypeCompiler):
             not isinstance(type_, _DateTimeMixin)
             or type_.format_is_text_affinity
         ):
-            return super(SQLiteTypeCompiler, self).visit_DATE(type_)
+            return super().visit_DATE(type_)
         else:
             return "DATE_CHAR"
 
@@ -1755,7 +1748,7 @@ class SQLiteTypeCompiler(compiler.GenericTypeCompiler):
             not isinstance(type_, _DateTimeMixin)
             or type_.format_is_text_affinity
         ):
-            return super(SQLiteTypeCompiler, self).visit_TIME(type_)
+            return super().visit_TIME(type_)
         else:
             return "TIME_CHAR"
 
@@ -1767,127 +1760,125 @@ class SQLiteTypeCompiler(compiler.GenericTypeCompiler):
 
 
 class SQLiteIdentifierPreparer(compiler.IdentifierPreparer):
-    reserved_words = set(
-        [
-            "add",
-            "after",
-            "all",
-            "alter",
-            "analyze",
-            "and",
-            "as",
-            "asc",
-            "attach",
-            "autoincrement",
-            "before",
-            "begin",
-            "between",
-            "by",
-            "cascade",
-            "case",
-            "cast",
-            "check",
-            "collate",
-            "column",
-            "commit",
-            "conflict",
-            "constraint",
-            "create",
-            "cross",
-            "current_date",
-            "current_time",
-            "current_timestamp",
-            "database",
-            "default",
-            "deferrable",
-            "deferred",
-            "delete",
-            "desc",
-            "detach",
-            "distinct",
-            "drop",
-            "each",
-            "else",
-            "end",
-            "escape",
-            "except",
-            "exclusive",
-            "exists",
-            "explain",
-            "false",
-            "fail",
-            "for",
-            "foreign",
-            "from",
-            "full",
-            "glob",
-            "group",
-            "having",
-            "if",
-            "ignore",
-            "immediate",
-            "in",
-            "index",
-            "indexed",
-            "initially",
-            "inner",
-            "insert",
-            "instead",
-            "intersect",
-            "into",
-            "is",
-            "isnull",
-            "join",
-            "key",
-            "left",
-            "like",
-            "limit",
-            "match",
-            "natural",
-            "not",
-            "notnull",
-            "null",
-            "of",
-            "offset",
-            "on",
-            "or",
-            "order",
-            "outer",
-            "plan",
-            "pragma",
-            "primary",
-            "query",
-            "raise",
-            "references",
-            "reindex",
-            "rename",
-            "replace",
-            "restrict",
-            "right",
-            "rollback",
-            "row",
-            "select",
-            "set",
-            "table",
-            "temp",
-            "temporary",
-            "then",
-            "to",
-            "transaction",
-            "trigger",
-            "true",
-            "union",
-            "unique",
-            "update",
-            "using",
-            "vacuum",
-            "values",
-            "view",
-            "virtual",
-            "when",
-            "where",
-        ]
-    )
+    reserved_words = {
+        "add",
+        "after",
+        "all",
+        "alter",
+        "analyze",
+        "and",
+        "as",
+        "asc",
+        "attach",
+        "autoincrement",
+        "before",
+        "begin",
+        "between",
+        "by",
+        "cascade",
+        "case",
+        "cast",
+        "check",
+        "collate",
+        "column",
+        "commit",
+        "conflict",
+        "constraint",
+        "create",
+        "cross",
+        "current_date",
+        "current_time",
+        "current_timestamp",
+        "database",
+        "default",
+        "deferrable",
+        "deferred",
+        "delete",
+        "desc",
+        "detach",
+        "distinct",
+        "drop",
+        "each",
+        "else",
+        "end",
+        "escape",
+        "except",
+        "exclusive",
+        "exists",
+        "explain",
+        "false",
+        "fail",
+        "for",
+        "foreign",
+        "from",
+        "full",
+        "glob",
+        "group",
+        "having",
+        "if",
+        "ignore",
+        "immediate",
+        "in",
+        "index",
+        "indexed",
+        "initially",
+        "inner",
+        "insert",
+        "instead",
+        "intersect",
+        "into",
+        "is",
+        "isnull",
+        "join",
+        "key",
+        "left",
+        "like",
+        "limit",
+        "match",
+        "natural",
+        "not",
+        "notnull",
+        "null",
+        "of",
+        "offset",
+        "on",
+        "or",
+        "order",
+        "outer",
+        "plan",
+        "pragma",
+        "primary",
+        "query",
+        "raise",
+        "references",
+        "reindex",
+        "rename",
+        "replace",
+        "restrict",
+        "right",
+        "rollback",
+        "row",
+        "select",
+        "set",
+        "table",
+        "temp",
+        "temporary",
+        "then",
+        "to",
+        "transaction",
+        "trigger",
+        "true",
+        "union",
+        "unique",
+        "update",
+        "using",
+        "vacuum",
+        "values",
+        "view",
+        "virtual",
+        "when",
+        "where",
+    }
 
 
 class SQLiteExecutionContext(default.DefaultExecutionContext):
@@ -1927,12 +1918,22 @@ class SQLiteDialect(default.DefaultDialect):
     supports_empty_insert = False
     supports_cast = True
     supports_multivalues_insert = True
+    use_insertmanyvalues = True
     tuple_in_values = True
     supports_statement_cache = True
     insert_null_pk_still_autoincrements = True
     insert_returning = True
     update_returning = True
+    update_returning_multifrom = True
     delete_returning = True
+    update_returning_multifrom = True
+
+    supports_default_metavalue = True
+    """dialect supports INSERT... VALUES (DEFAULT) syntax"""
+
+    default_metavalue_token = "NULL"
+    """for INSERT... VALUES (DEFAULT) syntax, the token to put in the
+    parenthesis."""
 
     default_paramstyle = "qmark"
     execution_ctx_cls = SQLiteExecutionContext
@@ -2040,10 +2041,14 @@ class SQLiteDialect(default.DefaultDialect):
                 14,
             )
 
-            if self.dbapi.sqlite_version_info < (3, 35):
+            if self.dbapi.sqlite_version_info < (3, 35) or util.pypy:
                 self.update_returning = (
                     self.delete_returning
                 ) = self.insert_returning = False
+
+            if self.dbapi.sqlite_version_info < (3, 32, 0):
+                # https://www.sqlite.org/limits.html
+                self.insertmanyvalues_max_parameters = 999
 
     _isolation_lookup = util.immutabledict(
         {"READ UNCOMMITTED": 1, "SERIALIZABLE": 0}
@@ -2436,17 +2441,14 @@ class SQLiteDialect(default.DefaultDialect):
         # the names as well.   SQLite saves the DDL in whatever format
         # it was typed in as, so need to be liberal here.
 
-        keys_by_signature = dict(
-            (
-                fk_sig(
-                    fk["constrained_columns"],
-                    fk["referred_table"],
-                    fk["referred_columns"],
-                ),
-                fk,
-            )
+        keys_by_signature = {
+            fk_sig(
+                fk["constrained_columns"],
+                fk["referred_table"],
+                fk["referred_columns"],
+            ): fk
             for fk in fks.values()
-        )
+        }
 
         table_data = self._get_table_sql(connection, table_name, schema=schema)
 
@@ -2460,6 +2462,8 @@ class SQLiteDialect(default.DefaultDialect):
                 r'REFERENCES +(?:(?:"(.+?)")|([a-z0-9_]+)) *\((.+?)\) *'
                 r"((?:ON (?:DELETE|UPDATE) "
                 r"(?:SET NULL|SET DEFAULT|CASCADE|RESTRICT|NO ACTION) *)*)"
+                r"((?:NOT +)?DEFERRABLE)?"
+                r"(?: +INITIALLY +(DEFERRED|IMMEDIATE))?"
             )
             for match in re.finditer(FK_PATTERN, table_data, re.I):
                 (
@@ -2469,7 +2473,9 @@ class SQLiteDialect(default.DefaultDialect):
                     referred_name,
                     referred_columns,
                     onupdatedelete,
-                ) = match.group(1, 2, 3, 4, 5, 6)
+                    deferrable,
+                    initially,
+                ) = match.group(1, 2, 3, 4, 5, 6, 7, 8)
                 constrained_columns = list(
                     self._find_cols_in_sig(constrained_columns)
                 )
@@ -2491,6 +2497,12 @@ class SQLiteDialect(default.DefaultDialect):
                         onupdate = token[6:].strip()
                         if onupdate and onupdate != "NO ACTION":
                             options["onupdate"] = onupdate
+
+                if deferrable:
+                    options["deferrable"] = "NOT" not in deferrable.upper()
+                if initially:
+                    options["initially"] = initially.upper()
+
                 yield (
                     constraint_name,
                     constrained_columns,
@@ -2625,6 +2637,21 @@ class SQLiteDialect(default.DefaultDialect):
         )
         indexes = []
 
+        # regular expression to extract the filter predicate of a partial
+        # index. this could fail to extract the predicate correctly on
+        # indexes created like
+        #   CREATE INDEX i ON t (col || ') where') WHERE col <> ''
+        # but as this function does not support expression-based indexes
+        # this case does not occur.
+        partial_pred_re = re.compile(r"\)\s+where\s+(.+)", re.IGNORECASE)
+
+        if schema:
+            schema_expr = "%s." % self.identifier_preparer.quote_identifier(
+                schema
+            )
+        else:
+            schema_expr = ""
+
         include_auto_indexes = kw.pop("include_auto_indexes", False)
         for row in pragma_indexes:
             # ignore implicit primary key index.
@@ -2633,7 +2660,38 @@ class SQLiteDialect(default.DefaultDialect):
                 "sqlite_autoindex"
             ):
                 continue
-            indexes.append(dict(name=row[1], column_names=[], unique=row[2]))
+            indexes.append(
+                dict(
+                    name=row[1],
+                    column_names=[],
+                    unique=row[2],
+                    dialect_options={},
+                )
+            )
+
+            # check partial indexes
+            if row[4]:
+                s = (
+                    "SELECT sql FROM %(schema)ssqlite_master "
+                    "WHERE name = ? "
+                    "AND type = 'index'" % {"schema": schema_expr}
+                )
+                rs = connection.exec_driver_sql(s, (row[1],))
+                index_sql = rs.scalar()
+                predicate_match = partial_pred_re.search(index_sql)
+                if predicate_match is None:
+                    # unless the regex is broken this case shouldn't happen
+                    # because we know this is a partial index, so the
+                    # definition sql should match the regex
+                    util.warn(
+                        "Failed to look up filter predicate of "
+                        "partial index %s" % row[1]
+                    )
+                else:
+                    predicate = predicate_match.group(1)
+                    indexes[-1]["dialect_options"]["sqlite_where"] = text(
+                        predicate
+                    )
 
         # loop thru unique indexes to get the column names.
         for idx in list(indexes):
@@ -2651,6 +2709,7 @@ class SQLiteDialect(default.DefaultDialect):
                     break
                 else:
                     idx["column_names"].append(row[2])
+
         indexes.sort(key=lambda d: d["name"] or "~")  # sort None as last
         if indexes:
             return indexes

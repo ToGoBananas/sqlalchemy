@@ -51,18 +51,18 @@ name must be URL encoded which means using plus signs for spaces::
 
     engine = create_engine("mssql+pyodbc://scott:tiger@myhost:port/databasename?driver=ODBC+Driver+17+for+SQL+Server")
 
-Other keywords interpreted by the Pyodbc dialect to be passed to
-``pyodbc.connect()`` in both the DSN and hostname cases include:
-``odbc_autotranslate``, ``ansi``, ``unicode_results``, ``autocommit``,
-``authentication``.
-Note that in order for the dialect to recognize these keywords
-(including the ``driver`` keyword above) they must be all lowercase.
-Multiple additional keyword arguments must be separated by an
-ampersand (``&``), not a semicolon::
+The ``driver`` keyword is significant to the pyodbc dialect and must be
+specified in lowercase.
 
-    engine = create_engine(
-        "mssql+pyodbc://scott:tiger@myhost:49242/databasename"
-        "?driver=ODBC+Driver+17+for+SQL+Server"
+Any other names passed in the query string are passed through in the pyodbc
+connect string, such as ``authentication``, ``TrustServerCertificate``, etc.
+Multiple keyword arguments must be separated by an ampersand (``&``); these
+will be translated to semicolons when the pyodbc connect string is generated
+internally::
+
+    e = create_engine(
+        "mssql+pyodbc://scott:tiger@mssql2017:1433/test?"
+        "driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
         "&authentication=ActiveDirectoryIntegrated"
     )
 
@@ -73,11 +73,12 @@ The equivalent URL can be constructed using :class:`_sa.engine.URL`::
         "mssql+pyodbc",
         username="scott",
         password="tiger",
-        host="myhost",
-        port=49242,
-        database="databasename",
+        host="mssql2017",
+        port=1433,
+        database="test",
         query={
-            "driver": "ODBC Driver 17 for SQL Server",
+            "driver": "ODBC Driver 18 for SQL Server",
+            "TrustServerCertificate": "yes",
             "authentication": "ActiveDirectoryIntegrated",
         },
     )
@@ -289,23 +290,34 @@ versioning.
 Fast Executemany Mode
 ---------------------
 
-The Pyodbc driver has added support for a "fast executemany" mode of execution
+.. note:: SQLAlchemy 2.0 now includes an equivalent "fast executemany"
+   handler for INSERT statements that is more robust than the PyODBC feature;
+   the feature is called :ref:`insertmanyvalues <engine_insertmanyvalues>`
+   and is enabled by default for all INSERT statements used by SQL Server.
+   SQLAlchemy's feature integrates with the PyODBC ``setinputsizes()`` method
+   which allows for more accurate specification of datatypes, and additionally
+   uses a dynamically sized, batched approach that scales to any number of
+   columns and/or rows.
+
+   The SQL Server ``fast_executemany`` parameter may be used at the same time
+   as ``insertmanyvalues`` is enabled; however, the parameter will not be used
+   in as many cases as INSERT statements that are invoked using Core
+   :class:`_dml.Insert` constructs as well as all ORM use no longer use the
+   ``.executemany()`` DBAPI cursor method.
+
+The PyODBC driver includes support for a "fast executemany" mode of execution
 which greatly reduces round trips for a DBAPI ``executemany()`` call when using
 Microsoft ODBC drivers, for **limited size batches that fit in memory**.  The
-feature is enabled by setting the flag ``.fast_executemany`` on the DBAPI
-cursor when an executemany call is to be used.   The SQLAlchemy pyodbc SQL
-Server dialect supports setting this flag automatically when the
-``.fast_executemany`` flag is passed to
-:func:`_sa.create_engine` ; note that the ODBC driver must be the Microsoft
-driver in order to use this flag::
+feature is enabled by setting the attribute ``.fast_executemany`` on the DBAPI
+cursor when an executemany call is to be used.   The SQLAlchemy PyODBC SQL
+Server dialect supports this parameter by passing the
+``fast_executemany`` parameter to
+:func:`_sa.create_engine` , when using the **Microsoft ODBC driver only**::
 
     engine = create_engine(
-        "mssql+pyodbc://scott:tiger@mssql2017:1433/test?driver=ODBC+Driver+13+for+SQL+Server",
+        "mssql+pyodbc://scott:tiger@mssql2017:1433/test?driver=ODBC+Driver+17+for+SQL+Server",
         fast_executemany=True)
 
-.. warning:: The pyodbc fast_executemany mode **buffers all rows in memory** and is
-   not compatible with very large batches of data.    A future version of SQLAlchemy
-   may support this flag as a per-execution option instead.
 
 .. versionadded:: 1.3
 
@@ -319,11 +331,13 @@ driver in order to use this flag::
 Setinputsizes Support
 -----------------------
 
-As of version 2.0, the pyodbc ``cursor.setinputsizes()`` method is used by
-default except for .executemany() calls when fast_executemany=True.
+As of version 2.0, the pyodbc ``cursor.setinputsizes()`` method is used for
+all statement executions, except for ``cursor.executemany()`` calls when
+fast_executemany=True where it is not supported (assuming
+:ref:`insertmanyvalues <engine_insertmanyvalues>` is kept enabled,
+"fastexecutemany" will not take place for INSERT statements in any case).
 
-The behavior of setinputsizes can be customized, as may be necessary
-particularly if fast_executemany is in use, via the
+The behavior of setinputsizes can be customized via the
 :meth:`.DialectEvents.do_setinputsizes` hook. See that method for usage
 examples.
 
@@ -331,7 +345,8 @@ examples.
    unless ``use_setinputsizes=True`` is passed.
 
 .. versionchanged:: 2.0  The mssql+pyodbc dialect now defaults to using
-   setinputsizes except for .executemany() calls when fast_executemany=True.
+   setinputsizes for all statement executions with the exception of
+   cursor.executemany() calls when fast_executemany=True.
 
 """  # noqa
 
@@ -369,7 +384,7 @@ class _ms_numeric_pyodbc:
 
     def bind_processor(self, dialect):
 
-        super_process = super(_ms_numeric_pyodbc, self).bind_processor(dialect)
+        super_process = super().bind_processor(dialect)
 
         if not dialect._need_decimal_fix:
             return super_process
@@ -502,22 +517,31 @@ class _BINARY_pyodbc(_ms_binary_pyodbc, BINARY):
 
 class _String_pyodbc(sqltypes.String):
     def get_dbapi_type(self, dbapi):
-        return dbapi.SQL_VARCHAR
+        if self.length in (None, "max") or self.length >= 2000:
+            return (dbapi.SQL_VARCHAR, 0, 0)
+        else:
+            return dbapi.SQL_VARCHAR
 
 
 class _Unicode_pyodbc(_MSUnicode):
     def get_dbapi_type(self, dbapi):
-        return dbapi.SQL_WVARCHAR
+        if self.length in (None, "max") or self.length >= 2000:
+            return (dbapi.SQL_WVARCHAR, 0, 0)
+        else:
+            return dbapi.SQL_WVARCHAR
 
 
 class _UnicodeText_pyodbc(_MSUnicodeText):
     def get_dbapi_type(self, dbapi):
-        return dbapi.SQL_WVARCHAR
+        if self.length in (None, "max") or self.length >= 2000:
+            return (dbapi.SQL_WVARCHAR, 0, 0)
+        else:
+            return dbapi.SQL_WVARCHAR
 
 
 class _JSON_pyodbc(_MSJson):
     def get_dbapi_type(self, dbapi):
-        return dbapi.SQL_WVARCHAR
+        return (dbapi.SQL_WVARCHAR, 0, 0)
 
 
 class _JSONIndexType_pyodbc(_MSJsonIndexType):
@@ -546,7 +570,7 @@ class MSExecutionContext_pyodbc(MSExecutionContext):
 
         """
 
-        super(MSExecutionContext_pyodbc, self).pre_exec()
+        super().pre_exec()
 
         # don't embed the scope_identity select into an
         # "INSERT .. DEFAULT VALUES"
@@ -577,7 +601,7 @@ class MSExecutionContext_pyodbc(MSExecutionContext):
 
             self._lastrowid = int(row[0])
         else:
-            super(MSExecutionContext_pyodbc, self).post_exec()
+            super().post_exec()
 
 
 class MSDialect_pyodbc(PyODBCConnector, MSDialect):
@@ -624,9 +648,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
         use_setinputsizes=True,
         **params,
     ):
-        super(MSDialect_pyodbc, self).__init__(
-            use_setinputsizes=use_setinputsizes, **params
-        )
+        super().__init__(use_setinputsizes=use_setinputsizes, **params)
         self.use_scope_identity = (
             self.use_scope_identity
             and self.dbapi
@@ -650,9 +672,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
             # SQL Server docs indicate this function isn't present prior to
             # 2008.  Before we had the VARCHAR cast above, pyodbc would also
             # fail on this query.
-            return super(MSDialect_pyodbc, self)._get_server_version_info(
-                connection
-            )
+            return super()._get_server_version_info(connection)
         else:
             version = []
             r = re.compile(r"[.\-]")
@@ -664,7 +684,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
             return tuple(version)
 
     def on_connect(self):
-        super_ = super(MSDialect_pyodbc, self).on_connect()
+        super_ = super().on_connect()
 
         def on_connect(conn):
             if super_ is not None:
@@ -699,9 +719,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
     def do_executemany(self, cursor, statement, parameters, context=None):
         if self.fast_executemany:
             cursor.fast_executemany = True
-        super(MSDialect_pyodbc, self).do_executemany(
-            cursor, statement, parameters, context=context
-        )
+        super().do_executemany(cursor, statement, parameters, context=context)
 
     def is_disconnect(self, e, connection, cursor):
         if isinstance(e, self.dbapi.Error):
@@ -719,9 +737,7 @@ class MSDialect_pyodbc(PyODBCConnector, MSDialect):
                 "10054",
             }:
                 return True
-        return super(MSDialect_pyodbc, self).is_disconnect(
-            e, connection, cursor
-        )
+        return super().is_disconnect(e, connection, cursor)
 
 
 dialect = MSDialect_pyodbc

@@ -12,10 +12,15 @@ from __future__ import annotations
 import collections
 import typing
 from typing import Any
+from typing import Callable
 from typing import Iterable
+from typing import NoReturn
+from typing import Optional
 from typing import Tuple
+from typing import TypeVar
 from typing import Union
 
+from .util import fail
 from .. import util
 
 requirements = None
@@ -37,7 +42,15 @@ else:
     _fixture_functions = None  # installed by plugin_base
 
 
-def combinations(*comb: Union[Any, Tuple[Any, ...]], **kw: str):
+_FN = TypeVar("_FN", bound=Callable[..., Any])
+
+
+def combinations(
+    *comb: Union[Any, Tuple[Any, ...]],
+    argnames: Optional[str] = None,
+    id_: Optional[str] = None,
+    **kw: str,
+) -> Callable[[_FN], _FN]:
     r"""Deliver multiple versions of a test based on positional combinations.
 
     This is a facade over pytest.mark.parametrize.
@@ -100,7 +113,9 @@ def combinations(*comb: Union[Any, Tuple[Any, ...]], **kw: str):
 
 
     """
-    return _fixture_functions.combinations(*comb, **kw)
+    return _fixture_functions.combinations(
+        *comb, id_=id_, argnames=argnames, **kw
+    )
 
 
 def combinations_list(
@@ -113,6 +128,106 @@ def combinations_list(
 ):
     "As combination, but takes a single iterable"
     return combinations(*arg_iterable, **kw)
+
+
+class Variation:
+    __slots__ = ("_name", "_argname")
+
+    def __init__(self, case, argname, case_names):
+        self._name = case
+        self._argname = argname
+        for casename in case_names:
+            setattr(self, casename, casename == case)
+
+    if typing.TYPE_CHECKING:
+
+        def __getattr__(self, key: str) -> bool:
+            ...
+
+    @property
+    def name(self):
+        return self._name
+
+    def __bool__(self):
+        return self._name == self._argname
+
+    def __nonzero__(self):
+        return not self.__bool__()
+
+    def __str__(self):
+        return f"{self._argname}={self._name!r}"
+
+    def fail(self) -> NoReturn:
+        fail(f"Unknown {self}")
+
+
+def variation(argname, cases):
+    """a helper around testing.combinations that provides a single namespace
+    that can be used as a switch.
+
+    e.g.::
+
+        @testing.variation("querytyp", ["select", "subquery", "legacy_query"])
+        @testing.variation("lazy", ["select", "raise", "raise_on_sql"])
+        def test_thing(
+            self,
+            querytyp,
+            lazy,
+            decl_base
+        ):
+            class Thing(decl_base):
+                __tablename__ = 'thing'
+
+                # use name directly
+                rel = relationship("Rel", lazy=lazy.name)
+
+            # use as a switch
+            if querytyp.select:
+                stmt = select(Thing)
+            elif querytyp.subquery:
+                stmt = select(Thing).subquery()
+            elif querytyp.legacy_query:
+                stmt = Session.query(Thing)
+            else:
+                assert False
+
+
+    The variable provided is a slots object of boolean variables, as well
+    as the name of the case itself under the attribute ".name"
+
+    """
+
+    cases_plus_limitations = [
+        entry
+        if (isinstance(entry, tuple) and len(entry) == 2)
+        else (entry, None)
+        for entry in cases
+    ]
+    case_names = [
+        argname if c is True else "not_" + argname if c is False else c
+        for c, l in cases_plus_limitations
+    ]
+
+    typ = type(
+        argname,
+        (Variation,),
+        {
+            "__slots__": tuple(case_names),
+        },
+    )
+
+    return combinations(
+        *[
+            (casename, typ(casename, argname, case_names), limitation)
+            if limitation is not None
+            else (casename, typ(casename, argname, case_names))
+            for casename, (case, limitation) in zip(
+                case_names, cases_plus_limitations
+            )
+        ],
+        id_="ia",
+        argnames=argname,
+    )
 
 
 def fixture(*arg: Any, **kw: Any) -> Any:

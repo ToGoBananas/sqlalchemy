@@ -1,5 +1,3 @@
-#! coding:utf-8
-
 """
 compiler tests.
 
@@ -98,6 +96,7 @@ from sqlalchemy.testing import is_true
 from sqlalchemy.testing import mock
 from sqlalchemy.testing import ne_
 from sqlalchemy.testing.schema import pep435_enum
+from sqlalchemy.types import UserDefinedType
 
 table1 = table(
     "mytable",
@@ -2098,10 +2097,7 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
     def test_custom_order_by_clause(self):
         class CustomCompiler(PGCompiler):
             def order_by_clause(self, select, **kw):
-                return (
-                    super(CustomCompiler, self).order_by_clause(select, **kw)
-                    + " CUSTOMIZED"
-                )
+                return super().order_by_clause(select, **kw) + " CUSTOMIZED"
 
         class CustomDialect(PGDialect):
             name = "custom"
@@ -2118,10 +2114,7 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
     def test_custom_group_by_clause(self):
         class CustomCompiler(PGCompiler):
             def group_by_clause(self, select, **kw):
-                return (
-                    super(CustomCompiler, self).group_by_clause(select, **kw)
-                    + " CUSTOMIZED"
-                )
+                return super().group_by_clause(select, **kw) + " CUSTOMIZED"
 
         class CustomDialect(PGDialect):
             name = "custom"
@@ -3776,9 +3769,7 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
         class MyCompiler(compiler.SQLCompiler):
             def bindparam_string(self, name, **kw):
                 kw["escaped_from"] = name
-                return super(MyCompiler, self).bindparam_string(
-                    '"%s"' % name, **kw
-                )
+                return super().bindparam_string('"%s"' % name, **kw)
 
         dialect = default.DefaultDialect()
         dialect.statement_compiler = MyCompiler
@@ -3862,7 +3853,7 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
         total_params = 100000
 
         in_clause = [":in%d" % i for i in range(total_params)]
-        params = dict(("in%d" % i, i) for i in range(total_params))
+        params = {"in%d" % i: i for i in range(total_params)}
         t = text("text clause %s" % ", ".join(in_clause))
         eq_(len(t.bindparams), total_params)
         c = t.compile()
@@ -4535,10 +4526,16 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
             "((myothertable.otherid, myothertable.othername))",
         )
 
+    @testing.variation("scalar_subquery", [True, False])
+    def test_select_in(self, scalar_subquery):
+
+        stmt = select(table2.c.otherid, table2.c.othername)
+
+        if scalar_subquery:
+            stmt = stmt.scalar_subquery()
+
         self.assert_compile(
-            tuple_(table1.c.myid, table1.c.name).in_(
-                select(table2.c.otherid, table2.c.othername)
-            ),
+            tuple_(table1.c.myid, table1.c.name).in_(stmt),
             "(mytable.myid, mytable.name) IN (SELECT "
             "myothertable.otherid, myothertable.othername FROM myothertable)",
         )
@@ -4608,6 +4605,51 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
             "SELECT * FROM mytable WHERE mytable.myid = :myid_1 "
             "OR mytable.myid = :myid_2 OR mytable.myid = :myid_3",
         )
+
+    @testing.combinations("plain", "expanding", argnames="exprtype")
+    def test_literal_bind_typeerror(self, exprtype):
+        """test #8800"""
+
+        if exprtype == "expanding":
+            stmt = select(table1).where(
+                table1.c.myid.in_([("tuple",), ("tuple",)])
+            )
+        elif exprtype == "plain":
+            stmt = select(table1).where(table1.c.myid == ("tuple",))
+        else:
+            assert False
+
+        with expect_raises_message(
+            exc.CompileError,
+            r"Could not render literal value \"\(\'tuple\',\)\" "
+            r"with datatype INTEGER; see parent "
+            r"stack trace for more detail.",
+        ):
+            stmt.compile(compile_kwargs={"literal_binds": True})
+
+    @testing.combinations("plain", "expanding", argnames="exprtype")
+    def test_literal_bind_dont_know_how_to_quote(self, exprtype):
+        """test #8800"""
+
+        class MyType(UserDefinedType):
+            def get_col_spec(self, **kw):
+                return "MYTYPE"
+
+        col = column("x", MyType())
+
+        if exprtype == "expanding":
+            stmt = select(table1).where(col.in_([("tuple",), ("tuple",)]))
+        elif exprtype == "plain":
+            stmt = select(table1).where(col == ("tuple",))
+        else:
+            assert False
+
+        with expect_raises_message(
+            exc.CompileError,
+            r"No literal value renderer is available for literal "
+            r"value \"\('tuple',\)\" with datatype MYTYPE",
+        ):
+            stmt.compile(compile_kwargs={"literal_binds": True})
 
     @testing.fixture
     def ansi_compiler_fixture(self):
@@ -4837,6 +4879,124 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
             self.assert_compile(
                 stmt, expected, literal_binds=True, params=params
             )
+
+    standalone_escape = testing.combinations(
+        ("normalname", "normalname"),
+        ("_name", "_name"),
+        ("[BracketsAndCase]", "_BracketsAndCase_"),
+        ("has spaces", "has_spaces"),
+        argnames="paramname, expected",
+    )
+
+    @standalone_escape
+    @testing.variation("use_positional", [True, False])
+    def test_standalone_bindparam_escape(
+        self, paramname, expected, use_positional
+    ):
+        stmt = select(table1.c.myid).where(
+            table1.c.name == bindparam(paramname, value="x")
+        )
+
+        if use_positional:
+            self.assert_compile(
+                stmt,
+                "SELECT mytable.myid FROM mytable WHERE mytable.name = ?",
+                params={paramname: "y"},
+                checkpositional=("y",),
+                dialect="sqlite",
+            )
+        else:
+            self.assert_compile(
+                stmt,
+                "SELECT mytable.myid FROM mytable WHERE mytable.name = :%s"
+                % (expected,),
+                params={paramname: "y"},
+                checkparams={expected: "y"},
+                dialect="default",
+            )
+
+    @standalone_escape
+    @testing.variation("use_assert_compile", [True, False])
+    @testing.variation("use_positional", [True, False])
+    def test_standalone_bindparam_escape_expanding(
+        self, paramname, expected, use_assert_compile, use_positional
+    ):
+        stmt = select(table1.c.myid).where(
+            table1.c.name.in_(bindparam(paramname, value=["a", "b"]))
+        )
+
+        if use_assert_compile:
+            if use_positional:
+                self.assert_compile(
+                    stmt,
+                    "SELECT mytable.myid FROM mytable "
+                    "WHERE mytable.name IN (?, ?)",
+                    params={paramname: ["y", "z"]},
+                    # NOTE: this is what render_postcompile will do right now
+                    # if you run construct_params().  render_postcompile mode
+                    # is not actually used by the execution internals, it's for
+                    # user-facing compilation code.  So this is likely a
+                    # current limitation of construct_params() which is not
+                    # doing the full blown postcompile; just assert that's
+                    # what it does for now.  it likely should be corrected
+                    # to make more sense.
+                    checkpositional=(["y", "z"], ["y", "z"]),
+                    dialect="sqlite",
+                    render_postcompile=True,
+                )
+            else:
+                self.assert_compile(
+                    stmt,
+                    "SELECT mytable.myid FROM mytable WHERE mytable.name IN "
+                    "(:%s_1, :%s_2)" % (expected, expected),
+                    params={paramname: ["y", "z"]},
+                    # NOTE: this is what render_postcompile will do right now
+                    # if you run construct_params().  render_postcompile mode
+                    # is not actually used by the execution internals, it's for
+                    # user-facing compilation code.  So this is likely a
+                    # current limitation of construct_params() which is not
+                    # doing the full blown postcompile; just assert that's
+                    # what it does for now.  it likely should be corrected
+                    # to make more sense.
+                    checkparams={
+                        "%s_1" % expected: ["y", "z"],
+                        "%s_2" % expected: ["y", "z"],
+                    },
+                    dialect="default",
+                    render_postcompile=True,
+                )
+        else:
+            # this is what DefaultDialect actually does.
+            # this should be matched to DefaultDialect._init_compiled()
+            if use_positional:
+                compiled = stmt.compile(
+                    dialect=default.DefaultDialect(paramstyle="qmark")
+                )
+            else:
+                compiled = stmt.compile(dialect=default.DefaultDialect())
+
+            checkparams = compiled.construct_params(
+                {paramname: ["y", "z"]}, escape_names=False
+            )
+
+            # nothing actually happened.  if the compiler had
+            # render_postcompile set, the
+            # above weird param thing happens
+            eq_(checkparams, {paramname: ["y", "z"]})
+
+            expanded_state = compiled._process_parameters_for_postcompile(
+                checkparams
+            )
+            eq_(
+                expanded_state.additional_parameters,
+                {f"{expected}_1": "y", f"{expected}_2": "z"},
+            )
+
+            if use_positional:
+                eq_(
+                    expanded_state.positiontup,
+                    [f"{expected}_1", f"{expected}_2"],
+                )
 
 
 class UnsupportedTest(fixtures.TestBase):
@@ -5452,7 +5612,7 @@ class DDLTest(fixtures.TestBase, AssertsCompiledSQL):
 
         self.assert_compile(
             schema.CreateSequence(s1),
-            "CREATE SEQUENCE __[SCHEMA__none].s1 START WITH 1",
+            "CREATE SEQUENCE __[SCHEMA__none].s1",
             schema_translate_map=schema_translate_map,
         )
 
@@ -5465,7 +5625,7 @@ class DDLTest(fixtures.TestBase, AssertsCompiledSQL):
 
         self.assert_compile(
             schema.CreateSequence(s2),
-            "CREATE SEQUENCE __[SCHEMA_foo].s2 START WITH 1",
+            "CREATE SEQUENCE __[SCHEMA_foo].s2",
             schema_translate_map=schema_translate_map,
         )
 
@@ -5478,7 +5638,7 @@ class DDLTest(fixtures.TestBase, AssertsCompiledSQL):
 
         self.assert_compile(
             schema.CreateSequence(s3),
-            "CREATE SEQUENCE __[SCHEMA_bar].s3 START WITH 1",
+            "CREATE SEQUENCE __[SCHEMA_bar].s3",
             schema_translate_map=schema_translate_map,
         )
 
@@ -6544,7 +6704,7 @@ class ResultMapTest(fixtures.TestBase):
         comp = stmt.compile()
         eq_(
             set(comp._create_result_map()),
-            set(["t1_1_b", "t1_1_a", "t1_a", "t1_b"]),
+            {"t1_1_b", "t1_1_a", "t1_a", "t1_b"},
         )
         is_(comp._create_result_map()["t1_a"][1][2], t1.c.a)
 
@@ -6597,14 +6757,12 @@ class ResultMapTest(fixtures.TestBase):
                 if stmt is stmt2.element:
                     with self._nested_result() as nested:
                         contexts[stmt2.element] = nested
-                        text = super(MyCompiler, self).visit_select(
+                        text = super().visit_select(
                             stmt2.element,
                         )
                         self._add_to_result_map("k1", "k1", (1, 2, 3), int_)
                 else:
-                    text = super(MyCompiler, self).visit_select(
-                        stmt, *arg, **kw
-                    )
+                    text = super().visit_select(stmt, *arg, **kw)
                     self._add_to_result_map("k2", "k2", (3, 4, 5), int_)
                 return text
 

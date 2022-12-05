@@ -58,7 +58,7 @@ from ..sql.selectable import LABEL_STYLE_TABLENAME_PLUS_COL
 from ..sql.selectable import Select
 
 if TYPE_CHECKING:
-    from .relationships import Relationship
+    from .relationships import RelationshipProperty
     from ..sql.elements import ColumnElement
 
 
@@ -157,7 +157,7 @@ class UninstrumentedColumnLoader(LoaderStrategy):
     __slots__ = ("columns",)
 
     def __init__(self, parent, strategy_key):
-        super(UninstrumentedColumnLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         self.columns = self.parent_property.columns
 
     def setup_query(
@@ -197,7 +197,7 @@ class ColumnLoader(LoaderStrategy):
     __slots__ = "columns", "is_composite"
 
     def __init__(self, parent, strategy_key):
-        super(ColumnLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         self.columns = self.parent_property.columns
         self.is_composite = hasattr(self.parent_property, "composite_class")
 
@@ -227,6 +227,11 @@ class ColumnLoader(LoaderStrategy):
         fetch = self.columns[0]
         if adapter:
             fetch = adapter.columns[fetch]
+            if fetch is None:
+                # None happens here only for dml bulk_persistence cases
+                # when context.DMLReturningColFilter is used
+                return
+
         memoized_populators[self.parent_property] = fetch
 
     def init_class_attribute(self, mapper):
@@ -264,6 +269,7 @@ class ColumnLoader(LoaderStrategy):
     ):
         # look through list of columns represented here
         # to see which, if any, is present in the row.
+
         for col in self.columns:
             if adapter:
                 col = adapter.columns[col]
@@ -279,7 +285,7 @@ class ColumnLoader(LoaderStrategy):
 @properties.ColumnProperty.strategy_for(query_expression=True)
 class ExpressionColumnLoader(ColumnLoader):
     def __init__(self, parent, strategy_key):
-        super(ExpressionColumnLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
 
         # compare to the "default" expression that is mapped in
         # the column.   If it's sql.null, we don't need to render
@@ -317,6 +323,12 @@ class ExpressionColumnLoader(ColumnLoader):
         fetch = columns[0]
         if adapter:
             fetch = adapter.columns[fetch]
+            if fetch is None:
+                # None is not expected to be the result of any
+                # adapter implementation here, however there may be theoretical
+                # usages of returning() with context.DMLReturningColFilter
+                return
+
         memoized_populators[self.parent_property] = fetch
 
     def create_row_processor(
@@ -369,7 +381,7 @@ class DeferredColumnLoader(LoaderStrategy):
     __slots__ = "columns", "group", "raiseload"
 
     def __init__(self, parent, strategy_key):
-        super(DeferredColumnLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         if hasattr(self.parent_property, "composite_class"):
             raise NotImplementedError(
                 "Deferred loading for composite " "types not implemented yet"
@@ -570,7 +582,7 @@ class AbstractRelationshipLoader(LoaderStrategy):
     __slots__ = "mapper", "target", "uselist", "entity"
 
     def __init__(self, parent, strategy_key):
-        super(AbstractRelationshipLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         self.mapper = self.parent_property.mapper
         self.entity = self.parent_property.entity
         self.target = self.parent_property.target
@@ -578,7 +590,7 @@ class AbstractRelationshipLoader(LoaderStrategy):
 
 
 @log.class_logger
-@relationships.Relationship.strategy_for(do_nothing=True)
+@relationships.RelationshipProperty.strategy_for(do_nothing=True)
 class DoNothingLoader(LoaderStrategy):
     """Relationship loader that makes no change to the object's state.
 
@@ -590,8 +602,8 @@ class DoNothingLoader(LoaderStrategy):
 
 
 @log.class_logger
-@relationships.Relationship.strategy_for(lazy="noload")
-@relationships.Relationship.strategy_for(lazy=None)
+@relationships.RelationshipProperty.strategy_for(lazy="noload")
+@relationships.RelationshipProperty.strategy_for(lazy=None)
 class NoLoader(AbstractRelationshipLoader):
     """Provide loading behavior for a :class:`.Relationship`
     with "lazy=None".
@@ -631,11 +643,11 @@ class NoLoader(AbstractRelationshipLoader):
 
 
 @log.class_logger
-@relationships.Relationship.strategy_for(lazy=True)
-@relationships.Relationship.strategy_for(lazy="select")
-@relationships.Relationship.strategy_for(lazy="raise")
-@relationships.Relationship.strategy_for(lazy="raise_on_sql")
-@relationships.Relationship.strategy_for(lazy="baked_select")
+@relationships.RelationshipProperty.strategy_for(lazy=True)
+@relationships.RelationshipProperty.strategy_for(lazy="select")
+@relationships.RelationshipProperty.strategy_for(lazy="raise")
+@relationships.RelationshipProperty.strategy_for(lazy="raise_on_sql")
+@relationships.RelationshipProperty.strategy_for(lazy="baked_select")
 class LazyLoader(
     AbstractRelationshipLoader, util.MemoizedSlots, log.Identified
 ):
@@ -665,12 +677,12 @@ class LazyLoader(
     _rev_lazywhere: ColumnElement[bool]
     _rev_bind_to_col: Dict[str, ColumnElement[Any]]
 
-    parent_property: Relationship[Any]
+    parent_property: RelationshipProperty[Any]
 
     def __init__(
-        self, parent: Relationship[Any], strategy_key: Tuple[Any, ...]
+        self, parent: RelationshipProperty[Any], strategy_key: Tuple[Any, ...]
     ):
-        super(LazyLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         self._raise_always = self.strategy_opts["lazy"] == "raise"
         self._raise_on_sql = self.strategy_opts["lazy"] == "raise_on_sql"
 
@@ -1324,7 +1336,7 @@ class PostLoader(AbstractRelationshipLoader):
         )
 
 
-@relationships.Relationship.strategy_for(lazy="immediate")
+@relationships.RelationshipProperty.strategy_for(lazy="immediate")
 class ImmediateLoader(PostLoader):
     __slots__ = ()
 
@@ -1414,12 +1426,12 @@ class ImmediateLoader(PostLoader):
 
 
 @log.class_logger
-@relationships.Relationship.strategy_for(lazy="subquery")
+@relationships.RelationshipProperty.strategy_for(lazy="subquery")
 class SubqueryLoader(PostLoader):
     __slots__ = ("join_depth",)
 
     def __init__(self, parent, strategy_key):
-        super(SubqueryLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         self.join_depth = self.parent_property.join_depth
 
     def init_class_attribute(self, mapper):
@@ -1548,7 +1560,7 @@ class SubqueryLoader(PostLoader):
         elif distinct_target_key is None:
             # if target_cols refer to a non-primary key or only
             # part of a composite primary key, set the q as distinct
-            for t in set(c.table for c in target_cols):
+            for t in {c.table for c in target_cols}:
                 if not set(target_cols).issuperset(t.primary_key):
                     q._distinct = True
                     break
@@ -2055,8 +2067,8 @@ class SubqueryLoader(PostLoader):
 
 
 @log.class_logger
-@relationships.Relationship.strategy_for(lazy="joined")
-@relationships.Relationship.strategy_for(lazy=False)
+@relationships.RelationshipProperty.strategy_for(lazy="joined")
+@relationships.RelationshipProperty.strategy_for(lazy=False)
 class JoinedLoader(AbstractRelationshipLoader):
     """Provide loading behavior for a :class:`.Relationship`
     using joined eager loading.
@@ -2066,7 +2078,7 @@ class JoinedLoader(AbstractRelationshipLoader):
     __slots__ = "join_depth", "_aliased_class_pool"
 
     def __init__(self, parent, strategy_key):
-        super(JoinedLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         self.join_depth = self.parent_property.join_depth
         self._aliased_class_pool = []
 
@@ -2107,6 +2119,9 @@ class JoinedLoader(AbstractRelationshipLoader):
         )
 
         if user_defined_adapter is not False:
+
+            # setup an adapter but dont create any JOIN, assume it's already
+            # in the query
             (
                 clauses,
                 adapter,
@@ -2118,6 +2133,11 @@ class JoinedLoader(AbstractRelationshipLoader):
                 adapter,
                 user_defined_adapter,
             )
+
+            # don't do "wrap" for multi-row, we want to wrap
+            # limited/distinct SELECT,
+            # because we want to put the JOIN on the outside.
+
         else:
             # if not via query option, check for
             # a cycle
@@ -2128,6 +2148,7 @@ class JoinedLoader(AbstractRelationshipLoader):
                 elif path.contains_mapper(self.mapper):
                     return
 
+            # add the JOIN and create an adapter
             (
                 clauses,
                 adapter,
@@ -2143,6 +2164,10 @@ class JoinedLoader(AbstractRelationshipLoader):
                 parentmapper,
                 chained_from_outerjoin,
             )
+
+            # for multi-row, we want to wrap limited/distinct SELECT,
+            # because we want to put the JOIN on the outside.
+            compile_state.eager_adding_joins = True
 
         with_poly_entity = path.get(
             compile_state.attributes, "path_with_polymorphic", None
@@ -2516,6 +2541,11 @@ class JoinedLoader(AbstractRelationshipLoader):
         self, path, join_obj, clauses, onclause, extra_criteria, splicing=False
     ):
 
+        # recursive fn to splice a nested join into an existing one.
+        # splicing=False means this is the outermost call, and it
+        # should return a value.  splicing=<from object> is the recursive
+        # form, where it can return None to indicate the end of the recursion
+
         if splicing is False:
             # first call is always handed a join object
             # from the outside
@@ -2530,7 +2560,7 @@ class JoinedLoader(AbstractRelationshipLoader):
                 splicing,
             )
         elif not isinstance(join_obj, orm_util._ORMJoin):
-            if path[-2] is splicing:
+            if path[-2].isa(splicing):
                 return orm_util._ORMJoin(
                     join_obj,
                     clauses.aliased_insp,
@@ -2541,7 +2571,6 @@ class JoinedLoader(AbstractRelationshipLoader):
                     _extra_criteria=extra_criteria,
                 )
             else:
-                # only here if splicing == True
                 return None
 
         target_join = self._splice_nested_inner_join(
@@ -2564,7 +2593,7 @@ class JoinedLoader(AbstractRelationshipLoader):
             )
             if target_join is None:
                 # should only return None when recursively called,
-                # e.g. splicing==True
+                # e.g. splicing refers to a from obj
                 assert (
                     splicing is not False
                 ), "assertion failed attempting to produce joined eager loads"
@@ -2778,7 +2807,7 @@ class JoinedLoader(AbstractRelationshipLoader):
 
 
 @log.class_logger
-@relationships.Relationship.strategy_for(lazy="selectin")
+@relationships.RelationshipProperty.strategy_for(lazy="selectin")
 class SelectInLoader(PostLoader, util.MemoizedSlots):
     __slots__ = (
         "join_depth",
@@ -2803,7 +2832,7 @@ class SelectInLoader(PostLoader, util.MemoizedSlots):
     _chunksize = 500
 
     def __init__(self, parent, strategy_key):
-        super(SelectInLoader, self).__init__(parent, strategy_key)
+        super().__init__(parent, strategy_key)
         self.join_depth = self.parent_property.join_depth
         is_m2o = self.parent_property.direction is interfaces.MANYTOONE
 

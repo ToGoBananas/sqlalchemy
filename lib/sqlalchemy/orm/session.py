@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import contextlib
+from enum import Enum
 import itertools
 import sys
 import typing
@@ -92,6 +93,7 @@ if typing.TYPE_CHECKING:
     from ._typing import _EntityType
     from ._typing import _IdentityKeyType
     from ._typing import _InstanceDict
+    from ._typing import OrmExecuteOptionsParameter
     from .interfaces import ORMOption
     from .interfaces import UserDefinedOption
     from .mapper import Mapper
@@ -105,7 +107,6 @@ if typing.TYPE_CHECKING:
     from ..engine.interfaces import _CoreAnyExecuteParams
     from ..engine.interfaces import _CoreSingleExecuteParams
     from ..engine.interfaces import _ExecuteOptions
-    from ..engine.interfaces import _ExecuteOptionsParameter
     from ..engine.result import ScalarResult
     from ..event import _InstanceLevelDispatch
     from ..sql._typing import _ColumnsClauseArgument
@@ -280,7 +281,7 @@ class ORMExecuteState(util.MemoizedSlots):
 
     For an ORM selection as would
     be retrieved from :class:`_orm.Query`, this is an instance of
-    :class:`_future.select` that was generated from the ORM query.
+    :class:`_sql.select` that was generated from the ORM query.
     """
 
     parameters: Optional[_CoreAnyExecuteParams]
@@ -364,7 +365,7 @@ class ORMExecuteState(util.MemoizedSlots):
         self,
         statement: Optional[Executable] = None,
         params: Optional[_CoreAnyExecuteParams] = None,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[OrmExecuteOptionsParameter] = None,
         bind_arguments: Optional[_BindArguments] = None,
     ) -> Result[Any]:
         """Execute the statement represented by this
@@ -734,6 +735,30 @@ class ORMExecuteState(util.MemoizedSlots):
         ]
 
 
+class SessionTransactionOrigin(Enum):
+    """indicates the origin of a :class:`.SessionTransaction`.
+
+    This enumeration is present on the
+    :attr:`.SessionTransaction.origin` attribute of any
+    :class:`.SessionTransaction` object.
+
+    .. versionadded:: 2.0
+
+    """
+
+    AUTOBEGIN = 0
+    """transaction were started by autobegin"""
+
+    BEGIN = 1
+    """transaction were started by calling :meth:`_orm.Session.begin`"""
+
+    BEGIN_NESTED = 2
+    """tranaction were started by :meth:`_orm.Session.begin_nested`"""
+
+    SUBTRANSACTION = 3
+    """transaction is an internal "subtransaction" """
+
+
 class SessionTransaction(_StateChange, TransactionalContext):
     """A :class:`.Session`-level transaction.
 
@@ -790,29 +815,60 @@ class SessionTransaction(_StateChange, TransactionalContext):
         InstanceState[Any], Tuple[Any, Any]
     ]
 
+    origin: SessionTransactionOrigin
+    """Origin of this :class:`_orm.SessionTransaction`.
+
+    Refers to a :class:`.SessionTransactionOrigin` instance which is an
+    enumeration indicating the source event that led to constructing
+    this :class:`_orm.SessionTransaction`.
+
+    .. versionadded:: 2.0
+
+    """
+
+    nested: bool = False
+    """Indicates if this is a nested, or SAVEPOINT, transaction.
+
+    When :attr:`.SessionTransaction.nested` is True, it is expected
+    that :attr:`.SessionTransaction.parent` will be present as well,
+    linking to the enclosing :class:`.SessionTransaction`.
+
+    .. seealso::
+
+        :attr:`.SessionTransaction.origin`
+
+    """
+
     def __init__(
         self,
         session: Session,
+        origin: SessionTransactionOrigin,
         parent: Optional[SessionTransaction] = None,
-        nested: bool = False,
-        autobegin: bool = False,
     ):
         TransactionalContext._trans_ctx_check(session)
 
         self.session = session
         self._connections = {}
         self._parent = parent
-        self.nested = nested
-        if nested:
-            self._previous_nested_transaction = session._nested_transaction
-        self._state = SessionTransactionState.ACTIVE
-        if not parent and nested:
-            raise sa_exc.InvalidRequestError(
-                "Can't start a SAVEPOINT transaction when no existing "
-                "transaction is in progress"
-            )
+        self.nested = nested = origin is SessionTransactionOrigin.BEGIN_NESTED
+        self.origin = origin
 
-        self._take_snapshot(autobegin=autobegin)
+        if nested:
+            if not parent:
+                raise sa_exc.InvalidRequestError(
+                    "Can't start a SAVEPOINT transaction when no existing "
+                    "transaction is in progress"
+                )
+
+            self._previous_nested_transaction = session._nested_transaction
+        elif origin is SessionTransactionOrigin.SUBTRANSACTION:
+            assert parent is not None
+        else:
+            assert parent is None
+
+        self._state = SessionTransactionState.ACTIVE
+
+        self._take_snapshot()
 
         # make sure transaction is assigned before we call the
         # dispatch
@@ -866,14 +922,6 @@ class SessionTransaction(_StateChange, TransactionalContext):
         """
         return self._parent
 
-    nested: bool = False
-    """Indicates if this is a nested, or SAVEPOINT, transaction.
-
-    When :attr:`.SessionTransaction.nested` is True, it is expected
-    that :attr:`.SessionTransaction.parent` will be True as well.
-
-    """
-
     @property
     def is_active(self) -> bool:
         return (
@@ -901,7 +949,13 @@ class SessionTransaction(_StateChange, TransactionalContext):
         (SessionTransactionState.ACTIVE,), _StateChangeStates.NO_CHANGE
     )
     def _begin(self, nested: bool = False) -> SessionTransaction:
-        return SessionTransaction(self.session, self, nested=nested)
+        return SessionTransaction(
+            self.session,
+            SessionTransactionOrigin.BEGIN_NESTED
+            if nested
+            else SessionTransactionOrigin.SUBTRANSACTION,
+            self,
+        )
 
     def _iterate_self_and_parents(
         self, upto: Optional[SessionTransaction] = None
@@ -923,7 +977,7 @@ class SessionTransaction(_StateChange, TransactionalContext):
 
         return result
 
-    def _take_snapshot(self, autobegin: bool = False) -> None:
+    def _take_snapshot(self) -> None:
         if not self._is_transaction_boundary:
             parent = self._parent
             assert parent is not None
@@ -933,7 +987,11 @@ class SessionTransaction(_StateChange, TransactionalContext):
             self._key_switches = parent._key_switches
             return
 
-        if not autobegin and not self.session._flushing:
+        is_begin = self.origin in (
+            SessionTransactionOrigin.BEGIN,
+            SessionTransactionOrigin.AUTOBEGIN,
+        )
+        if not is_begin and not self.session._flushing:
             self.session.flush()
 
         self._new = weakref.WeakKeyDictionary()
@@ -1304,9 +1362,11 @@ class Session(_SessionClassMethods, EventTarget):
     def __init__(
         self,
         bind: Optional[_SessionBind] = None,
+        *,
         autoflush: bool = True,
         future: Literal[True] = True,
         expire_on_commit: bool = True,
+        autobegin: bool = True,
         twophase: bool = False,
         binds: Optional[Dict[_SessionBindKey, _SessionBind]] = None,
         enable_baked_queries: bool = True,
@@ -1329,6 +1389,20 @@ class Session(_SessionClassMethods, EventTarget):
            .. seealso::
 
                :ref:`session_flushing` - additional background on autoflush
+
+        :param autobegin: Automatically start transactions (i.e. equivalent to
+           invoking :meth:`_orm.Session.begin`) when database access is
+           requested by an operation.   Defaults to ``True``.    Set to
+           ``False`` to prevent a :class:`_orm.Session` from implicitly
+           beginning transactions after construction, as well as after any of
+           the :meth:`_orm.Session.rollback`, :meth:`_orm.Session.commit`,
+           or :meth:`_orm.Session.close` methods are called.
+
+           .. versionadded:: 2.0
+
+           .. seealso::
+
+                :ref:`session_autobegin_disable`
 
         :param bind: An optional :class:`_engine.Engine` or
            :class:`_engine.Connection` to
@@ -1455,6 +1529,7 @@ class Session(_SessionClassMethods, EventTarget):
         self._transaction = None
         self._nested_transaction = None
         self.hash_key = _new_sessionid()
+        self.autobegin = autobegin
         self.autoflush = autoflush
         self.expire_on_commit = expire_on_commit
         self.enable_baked_queries = enable_baked_queries
@@ -1542,18 +1617,26 @@ class Session(_SessionClassMethods, EventTarget):
         """
         return {}
 
-    def _autobegin_t(self) -> SessionTransaction:
+    def _autobegin_t(self, begin: bool = False) -> SessionTransaction:
         if self._transaction is None:
 
-            trans = SessionTransaction(self, autobegin=True)
+            if not begin and not self.autobegin:
+                raise sa_exc.InvalidRequestError(
+                    "Autobegin is disabled on this Session; please call "
+                    "session.begin() to start a new transaction"
+                )
+            trans = SessionTransaction(
+                self,
+                SessionTransactionOrigin.BEGIN
+                if begin
+                else SessionTransactionOrigin.AUTOBEGIN,
+            )
             assert self._transaction is trans
             return trans
 
         return self._transaction
 
-    def begin(
-        self, nested: bool = False, _subtrans: bool = False
-    ) -> SessionTransaction:
+    def begin(self, nested: bool = False) -> SessionTransaction:
         """Begin a transaction, or nested transaction,
         on this :class:`.Session`, if one is not already begun.
 
@@ -1590,31 +1673,21 @@ class Session(_SessionClassMethods, EventTarget):
 
         trans = self._transaction
         if trans is None:
-            trans = self._autobegin_t()
+            trans = self._autobegin_t(begin=True)
 
-            if not nested and not _subtrans:
+            if not nested:
                 return trans
 
-        if trans is not None:
-            if _subtrans or nested:
-                trans = trans._begin(nested=nested)
-                assert self._transaction is trans
-                if nested:
-                    self._nested_transaction = trans
-            else:
-                raise sa_exc.InvalidRequestError(
-                    "A transaction is already begun on this Session."
-                )
-        else:
-            # outermost transaction.  must be a not nested and not
-            # a subtransaction
+        assert trans is not None
 
-            assert not nested and not _subtrans
-            trans = SessionTransaction(self)
+        if nested:
+            trans = trans._begin(nested=nested)
             assert self._transaction is trans
-
-            if TYPE_CHECKING:
-                assert self._transaction is not None
+            self._nested_transaction = trans
+        else:
+            raise sa_exc.InvalidRequestError(
+                "A transaction is already begun on this Session."
+            )
 
         return trans  # needed for __enter__/__exit__ hook
 
@@ -1786,7 +1859,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -1800,7 +1873,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -1813,7 +1886,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -1823,17 +1896,20 @@ class Session(_SessionClassMethods, EventTarget):
 
         if not bind_arguments:
             bind_arguments = {}
+        else:
+            bind_arguments = dict(bind_arguments)
 
         if (
             statement._propagate_attrs.get("compile_state_plugin", None)
             == "orm"
         ):
-            # note that even without "future" mode, we need
             compile_state_cls = CompileState._get_plugin_class_for_plugin(
                 statement, "orm"
             )
             if TYPE_CHECKING:
-                assert isinstance(compile_state_cls, ORMCompileState)
+                assert isinstance(
+                    compile_state_cls, context.AbstractORMCompileState
+                )
         else:
             compile_state_cls = None
 
@@ -1897,18 +1973,18 @@ class Session(_SessionClassMethods, EventTarget):
                 statement, params or {}, execution_options=execution_options
             )
 
-        result: Result[Any] = conn.execute(
-            statement, params or {}, execution_options=execution_options
-        )
-
         if compile_state_cls:
-            result = compile_state_cls.orm_setup_cursor_result(
+            result: Result[Any] = compile_state_cls.orm_execute_statement(
                 self,
                 statement,
-                params,
+                params or {},
                 execution_options,
                 bind_arguments,
-                result,
+                conn,
+            )
+        else:
+            result = conn.execute(
+                statement, params or {}, execution_options=execution_options
             )
 
         if _scalar_result:
@@ -1922,7 +1998,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: TypedReturnsRows[_T],
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -1935,7 +2011,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -1947,7 +2023,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -2018,7 +2094,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: TypedReturnsRows[Tuple[_T]],
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> Optional[_T]:
@@ -2030,7 +2106,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> Any:
@@ -2041,7 +2117,7 @@ class Session(_SessionClassMethods, EventTarget):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> Any:
@@ -2066,9 +2142,9 @@ class Session(_SessionClassMethods, EventTarget):
     def scalars(
         self,
         statement: TypedReturnsRows[Tuple[_T]],
-        params: Optional[_CoreSingleExecuteParams] = None,
+        params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> ScalarResult[_T]:
@@ -2078,9 +2154,9 @@ class Session(_SessionClassMethods, EventTarget):
     def scalars(
         self,
         statement: Executable,
-        params: Optional[_CoreSingleExecuteParams] = None,
+        params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> ScalarResult[Any]:
@@ -2089,9 +2165,9 @@ class Session(_SessionClassMethods, EventTarget):
     def scalars(
         self,
         statement: Executable,
-        params: Optional[_CoreSingleExecuteParams] = None,
+        params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> ScalarResult[Any]:
@@ -2105,6 +2181,11 @@ class Session(_SessionClassMethods, EventTarget):
         :return:  a :class:`_result.ScalarResult` object
 
         .. versionadded:: 1.4.24
+
+        .. seealso::
+
+            :ref:`orm_queryguide_select_orm_entities` - contrasts the behavior
+            of :meth:`_orm.Session.execute` to :meth:`_orm.Session.scalars`
 
         """
 
@@ -3022,13 +3103,28 @@ class Session(_SessionClassMethods, EventTarget):
                 persistent_to_deleted(self, state)
 
     def add(self, instance: object, _warn: bool = True) -> None:
-        """Place an object in the ``Session``.
+        """Place an object into this :class:`_orm.Session`.
 
-        Its state will be persisted to the database on the next flush
-        operation.
+        Objects that are in the :term:`transient` state when passed to the
+        :meth:`_orm.Session.add` method will move to the
+        :term:`pending` state, until the next flush, at which point they
+        will move to the :term:`persistent` state.
 
-        Repeated calls to ``add()`` will be ignored. The opposite of ``add()``
-        is ``expunge()``.
+        Objects that are in the :term:`detached` state when passed to the
+        :meth:`_orm.Session.add` method will move to the :term:`persistent`
+        state directly.
+
+        If the transaction used by the :class:`_orm.Session` is rolled back,
+        objects which were transient when they were passed to
+        :meth:`_orm.Session.add` will be moved back to the
+        :term:`transient` state, and will no longer be present within this
+        :class:`_orm.Session`.
+
+        .. seealso::
+
+            :meth:`_orm.Session.add_all`
+
+            :ref:`session_adding` - at :ref:`session_basics`
 
         """
         if _warn and self._warn_on_events:
@@ -3042,7 +3138,18 @@ class Session(_SessionClassMethods, EventTarget):
         self._save_or_update_state(state)
 
     def add_all(self, instances: Iterable[object]) -> None:
-        """Add the given collection of instances to this ``Session``."""
+        """Add the given collection of instances to this :class:`_orm.Session`.
+
+        See the documentation for :meth:`_orm.Session.add` for a general
+        behavioral description.
+
+        .. seealso::
+
+            :meth:`_orm.Session.add`
+
+            :ref:`session_adding` - at :ref:`session_basics`
+
+        """
 
         if self._warn_on_events:
             self._flush_warning("Session.add_all()")
@@ -3063,7 +3170,22 @@ class Session(_SessionClassMethods, EventTarget):
     def delete(self, instance: object) -> None:
         """Mark an instance as deleted.
 
-        The database delete operation occurs upon ``flush()``.
+        The object is assumed to be either :term:`persistent` or
+        :term:`detached` when passed; after the method is called, the
+        object will remain in the :term:`persistent` state until the next
+        flush proceeds.  During this time, the object will also be a member
+        of the :attr:`_orm.Session.deleted` collection.
+
+        When the next flush proceeds, the object will move to the
+        :term:`deleted` state, indicating a ``DELETE`` statement was emitted
+        for its row within the current transaction.   When the transaction
+        is successfully committed,
+        the deleted object is moved to the :term:`detached` state and is
+        no longer present within this :class:`_orm.Session`.
+
+        .. seealso::
+
+            :ref:`session_deleting` - at :ref:`session_basics`
 
         """
         if self._warn_on_events:
@@ -3125,7 +3247,7 @@ class Session(_SessionClassMethods, EventTarget):
         populate_existing: bool = False,
         with_for_update: Optional[ForUpdateArg] = None,
         identity_token: Optional[Any] = None,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
     ) -> Optional[_O]:
         """Return an instance based on the given primary key identifier,
         or ``None`` if not found.
@@ -3243,7 +3365,7 @@ class Session(_SessionClassMethods, EventTarget):
         populate_existing: bool = False,
         with_for_update: Optional[ForUpdateArg] = None,
         identity_token: Optional[Any] = None,
-        execution_options: Optional[_ExecuteOptionsParameter] = None,
+        execution_options: Optional[OrmExecuteOptionsParameter] = None,
     ) -> Optional[_O]:
 
         # convert composite types to individual args
@@ -3278,6 +3400,21 @@ class Session(_SessionClassMethods, EventTarget):
             )
 
         if is_dict:
+
+            pk_synonyms = mapper._pk_synonyms
+
+            if pk_synonyms:
+                correct_keys = set(pk_synonyms).intersection(
+                    primary_key_identity
+                )
+
+                if correct_keys:
+                    primary_key_identity = dict(primary_key_identity)
+                    for k in correct_keys:
+                        primary_key_identity[
+                            pk_synonyms[k]
+                        ] = primary_key_identity[k]
+
             try:
                 primary_key_identity = list(
                     primary_key_identity[prop.key]
@@ -3288,7 +3425,7 @@ class Session(_SessionClassMethods, EventTarget):
                 raise sa_exc.InvalidRequestError(
                     "Incorrect names of values in identifier to formulate "
                     "primary key for session.get(); primary key attribute "
-                    "names are %s"
+                    "names are %s (synonym names are also accepted)"
                     % ",".join(
                         "'%s'" % prop.key
                         for prop in mapper._identity_key_props
@@ -3590,6 +3727,9 @@ class Session(_SessionClassMethods, EventTarget):
         if not load:
             # remove any history
             merged_state._commit_all(merged_dict, self.identity_map)
+            merged_state.manager.dispatch._sa_event_merge_wo_load(
+                merged_state, None
+            )
 
         if new_instance:
             merged_state.manager.dispatch.load(merged_state, None)
@@ -3905,7 +4045,7 @@ class Session(_SessionClassMethods, EventTarget):
         if not flush_context.has_work:
             return
 
-        flush_context.transaction = transaction = self.begin(_subtrans=True)
+        flush_context.transaction = transaction = self._autobegin_t()._begin()
         try:
             self._warn_on_events = True
             try:
@@ -3960,44 +4100,19 @@ class Session(_SessionClassMethods, EventTarget):
     ) -> None:
         """Perform a bulk save of the given list of objects.
 
-        The bulk save feature allows mapped objects to be used as the
-        source of simple INSERT and UPDATE operations which can be more easily
-        grouped together into higher performing "executemany"
-        operations; the extraction of data from the objects is also performed
-        using a lower-latency process that ignores whether or not attributes
-        have actually been modified in the case of UPDATEs, and also ignores
-        SQL expressions.
+        .. legacy::
 
-        The objects as given are not added to the session and no additional
-        state is established on them. If the
-        :paramref:`_orm.Session.bulk_save_objects.return_defaults` flag is set,
-        then server-generated primary key values will be assigned to the
-        returned objects, but **not server side defaults**; this is a
-        limitation in the implementation. If stateful objects are desired,
-        please use the standard :meth:`_orm.Session.add_all` approach or
-        as an alternative newer mass-insert features such as
-        :ref:`orm_dml_returning_objects`.
+            This method is a legacy feature as of the 2.0 series of
+            SQLAlchemy.   For modern bulk INSERT and UPDATE, see
+            the sections :ref:`orm_queryguide_bulk_insert` and
+            :ref:`orm_queryguide_bulk_update`.
 
-        .. warning::
-
-            The bulk save feature allows for a lower-latency INSERT/UPDATE
-            of rows at the expense of most other unit-of-work features.
-            Features such as object management, relationship handling,
-            and SQL clause support are **silently omitted** in favor of raw
-            INSERT/UPDATES of records.
-
-            Please note that newer versions of SQLAlchemy are **greatly
-            improving the efficiency** of the standard flush process. It is
-            **strongly recommended** to not use the bulk methods as they
-            represent a forking of SQLAlchemy's functionality and are slowly
-            being moved into legacy status.  New features such as
-            :ref:`orm_dml_returning_objects` are both more efficient than
-            the "bulk" methods and provide more predictable functionality.
-
-            **Please read the list of caveats at**
-            :ref:`bulk_operations_caveats` **before using this method, and
-            fully test and confirm the functionality of all code developed
-            using these systems.**
+            For general INSERT and UPDATE of existing ORM mapped objects,
+            prefer standard :term:`unit of work` data management patterns,
+            introduced in the :ref:`unified_tutorial` at
+            :ref:`tutorial_orm_data_manipulation`.  SQLAlchemy 2.0
+            now uses :ref:`engine_insertmanyvalues` with modern dialects
+            which solves previous issues of bulk INSERT slowness.
 
         :param objects: a sequence of mapped object instances.  The mapped
          objects are persisted as is, and are **not** associated with the
@@ -4039,11 +4154,9 @@ class Session(_SessionClassMethods, EventTarget):
          False, common types of objects are grouped into inserts
          and updates, to allow for more batching opportunities.
 
-         .. versionadded:: 1.3
-
         .. seealso::
 
-            :ref:`bulk_operations`
+            :doc:`queryguide/dml`
 
             :meth:`.Session.bulk_insert_mappings`
 
@@ -4092,41 +4205,14 @@ class Session(_SessionClassMethods, EventTarget):
     ) -> None:
         """Perform a bulk insert of the given list of mapping dictionaries.
 
-        The bulk insert feature allows plain Python dictionaries to be used as
-        the source of simple INSERT operations which can be more easily
-        grouped together into higher performing "executemany"
-        operations.  Using dictionaries, there is no "history" or session
-        state management features in use, reducing latency when inserting
-        large numbers of simple rows.
+        .. legacy::
 
-        The values within the dictionaries as given are typically passed
-        without modification into Core :meth:`_expression.Insert` constructs,
-        after
-        organizing the values within them across the tables to which
-        the given mapper is mapped.
-
-        .. versionadded:: 1.0.0
-
-        .. warning::
-
-            The bulk insert feature allows for a lower-latency INSERT
-            of rows at the expense of most other unit-of-work features.
-            Features such as object management, relationship handling,
-            and SQL clause support are **silently omitted** in favor of raw
-            INSERT of records.
-
-            Please note that newer versions of SQLAlchemy are **greatly
-            improving the efficiency** of the standard flush process. It is
-            **strongly recommended** to not use the bulk methods as they
-            represent a forking of SQLAlchemy's functionality and are slowly
-            being moved into legacy status.  New features such as
-            :ref:`orm_dml_returning_objects` are both more efficient than
-            the "bulk" methods and provide more predictable functionality.
-
-            **Please read the list of caveats at**
-            :ref:`bulk_operations_caveats` **before using this method, and
-            fully test and confirm the functionality of all code developed
-            using these systems.**
+            This method is a legacy feature as of the 2.0 series of
+            SQLAlchemy.   For modern bulk INSERT and UPDATE, see
+            the sections :ref:`orm_queryguide_bulk_insert` and
+            :ref:`orm_queryguide_bulk_update`.  The 2.0 API shares
+            implementation details with this method and adds new features
+            as well.
 
         :param mapper: a mapped class, or the actual :class:`_orm.Mapper`
          object,
@@ -4139,19 +4225,18 @@ class Session(_SessionClassMethods, EventTarget):
          such as a joined-inheritance mapping, each dictionary must contain all
          keys to be populated into all tables.
 
-        :param return_defaults: when True, rows that are missing values which
-         generate defaults, namely integer primary key defaults and sequences,
-         will be inserted **one at a time**, so that the primary key value
-         is available.  In particular this will allow joined-inheritance
-         and other multi-table mappings to insert correctly without the need
-         to provide primary
-         key values ahead of time; however,
-         :paramref:`.Session.bulk_insert_mappings.return_defaults`
-         **greatly reduces the performance gains** of the method overall.
-         If the rows
-         to be inserted only refer to a single table, then there is no
-         reason this flag should be set as the returned default information
-         is not used.
+        :param return_defaults: when True, the INSERT process will be altered
+         to ensure that newly generated primary key values will be fetched.
+         The rationale for this parameter is typically to enable
+         :ref:`Joined Table Inheritance <joined_inheritance>` mappings to
+         be bulk inserted.
+
+         .. note:: for backends that don't support RETURNING, the
+            :paramref:`_orm.Session.bulk_insert_mappings.return_defaults`
+            parameter can significantly decrease performance as INSERT
+            statements can no longer be batched.   See
+            :ref:`engine_insertmanyvalues`
+            for background on which backends are affected.
 
         :param render_nulls: When True, a value of ``None`` will result
          in a NULL value being included in the INSERT statement, rather
@@ -4175,11 +4260,9 @@ class Session(_SessionClassMethods, EventTarget):
             to ensure that no server-side default functions need to be
             invoked for the operation as a whole.
 
-         .. versionadded:: 1.1
-
         .. seealso::
 
-            :ref:`bulk_operations`
+            :doc:`queryguide/dml`
 
             :meth:`.Session.bulk_save_objects`
 
@@ -4201,35 +4284,14 @@ class Session(_SessionClassMethods, EventTarget):
     ) -> None:
         """Perform a bulk update of the given list of mapping dictionaries.
 
-        The bulk update feature allows plain Python dictionaries to be used as
-        the source of simple UPDATE operations which can be more easily
-        grouped together into higher performing "executemany"
-        operations.  Using dictionaries, there is no "history" or session
-        state management features in use, reducing latency when updating
-        large numbers of simple rows.
+        .. legacy::
 
-        .. versionadded:: 1.0.0
-
-        .. warning::
-
-            The bulk update feature allows for a lower-latency UPDATE
-            of rows at the expense of most other unit-of-work features.
-            Features such as object management, relationship handling,
-            and SQL clause support are **silently omitted** in favor of raw
-            UPDATES of records.
-
-            Please note that newer versions of SQLAlchemy are **greatly
-            improving the efficiency** of the standard flush process. It is
-            **strongly recommended** to not use the bulk methods as they
-            represent a forking of SQLAlchemy's functionality and are slowly
-            being moved into legacy status.  New features such as
-            :ref:`orm_dml_returning_objects` are both more efficient than
-            the "bulk" methods and provide more predictable functionality.
-
-            **Please read the list of caveats at**
-            :ref:`bulk_operations_caveats` **before using this method, and
-            fully test and confirm the functionality of all code developed
-            using these systems.**
+            This method is a legacy feature as of the 2.0 series of
+            SQLAlchemy.   For modern bulk INSERT and UPDATE, see
+            the sections :ref:`orm_queryguide_bulk_insert` and
+            :ref:`orm_queryguide_bulk_update`.  The 2.0 API shares
+            implementation details with this method and adds new features
+            as well.
 
         :param mapper: a mapped class, or the actual :class:`_orm.Mapper`
          object,
@@ -4248,7 +4310,7 @@ class Session(_SessionClassMethods, EventTarget):
 
         .. seealso::
 
-            :ref:`bulk_operations`
+            :doc:`queryguide/dml`
 
             :meth:`.Session.bulk_insert_mappings`
 
@@ -4272,7 +4334,7 @@ class Session(_SessionClassMethods, EventTarget):
         mapper = _class_to_mapper(mapper)
         self._flushing = True
 
-        transaction = self.begin(_subtrans=True)
+        transaction = self._autobegin_t()._begin()
         try:
             if isupdate:
                 bulk_persistence._bulk_update(
@@ -4560,9 +4622,35 @@ class sessionmaker(_SessionClassMethods, Generic[_S]):
 
     class_: Type[_S]
 
+    @overload
+    def __init__(
+        self,
+        bind: Optional[_SessionBind] = ...,
+        *,
+        class_: Type[_S],
+        autoflush: bool = ...,
+        expire_on_commit: bool = ...,
+        info: Optional[_InfoType] = ...,
+        **kw: Any,
+    ):
+        ...
+
+    @overload
+    def __init__(
+        self: "sessionmaker[Session]",
+        bind: Optional[_SessionBind] = ...,
+        *,
+        autoflush: bool = ...,
+        expire_on_commit: bool = ...,
+        info: Optional[_InfoType] = ...,
+        **kw: Any,
+    ):
+        ...
+
     def __init__(
         self,
         bind: Optional[_SessionBind] = None,
+        *,
         class_: Type[_S] = Session,  # type: ignore
         autoflush: bool = True,
         expire_on_commit: bool = True,
@@ -4719,7 +4807,8 @@ def make_transient(instance: object) -> None:
 
         * are normally :term:`lazy loaded` but are not currently loaded
 
-        * are "deferred" via :ref:`deferred` and are not yet loaded
+        * are "deferred" (see :ref:`orm_queryguide_column_deferral`) and are
+          not yet loaded
 
         * were not present in the query which loaded this object, such as that
           which is common in joined table inheritance and other scenarios.

@@ -52,6 +52,7 @@ from ._typing import is_tuple_type
 from .annotation import Annotated
 from .annotation import SupportsWrappingAnnotations
 from .base import _clone
+from .base import _expand_cloned
 from .base import _generative
 from .base import _NoArg
 from .base import Executable
@@ -79,6 +80,7 @@ from ..util.typing import Literal
 
 if typing.TYPE_CHECKING:
     from ._typing import _ColumnExpressionArgument
+    from ._typing import _ColumnExpressionOrStrLabelArgument
     from ._typing import _InfoType
     from ._typing import _PropagateAttrsType
     from ._typing import _TypeEngineArgument
@@ -96,7 +98,6 @@ if typing.TYPE_CHECKING:
     from .selectable import _SelectIterable
     from .selectable import FromClause
     from .selectable import NamedFromClause
-    from .selectable import Select
     from .sqltypes import TupleType
     from .type_api import TypeEngine
     from .visitors import _CloneCallableType
@@ -104,11 +105,11 @@ if typing.TYPE_CHECKING:
     from ..engine import Connection
     from ..engine import Dialect
     from ..engine import Engine
-    from ..engine.base import _CompiledCacheType
     from ..engine.interfaces import _CoreMultiExecuteParams
     from ..engine.interfaces import _ExecuteOptions
-    from ..engine.interfaces import _SchemaTranslateMapType
     from ..engine.interfaces import CacheStats
+    from ..engine.interfaces import CompiledCacheType
+    from ..engine.interfaces import SchemaTranslateMapType
     from ..engine.result import Result
 
 _NUMERIC = Union[float, Decimal]
@@ -334,6 +335,7 @@ class ClauseElement(
     _is_column_element = False
     _is_keyed_column_element = False
     _is_table = False
+    _gen_static_annotations_cache_key = False
     _is_textual = False
     _is_from_clause = False
     _is_returns_rows = False
@@ -618,10 +620,10 @@ class ClauseElement(
         self,
         dialect: Dialect,
         *,
-        compiled_cache: Optional[_CompiledCacheType],
+        compiled_cache: Optional[CompiledCacheType],
         column_keys: List[str],
         for_executemany: bool = False,
-        schema_translate_map: Optional[_SchemaTranslateMapType] = None,
+        schema_translate_map: Optional[SchemaTranslateMapType] = None,
         **kw: Any,
     ) -> typing_Tuple[
         Compiled, Optional[Sequence[BindParameter[Any]]], CacheStats
@@ -747,6 +749,8 @@ class CompilerColumnElement(
 
     __slots__ = ()
 
+    _propagate_attrs = util.EMPTY_DICT
+
 
 # SQLCoreOperations should be suiting the ExpressionElementRole
 # and ColumnsClauseRole.   however the MRO issues become too elaborate
@@ -856,13 +860,17 @@ class SQLCoreOperations(Generic[_T], ColumnOperators, TypingOnly):
 
         def in_(
             self,
-            other: Union[Sequence[Any], BindParameter[Any], Select[Any]],
+            other: Union[
+                Sequence[Any], BindParameter[Any], roles.InElementRole
+            ],
         ) -> BinaryExpression[bool]:
             ...
 
         def not_in(
             self,
-            other: Union[Sequence[Any], BindParameter[Any], Select[Any]],
+            other: Union[
+                Sequence[Any], BindParameter[Any], roles.InElementRole
+            ],
         ) -> BinaryExpression[bool]:
             ...
 
@@ -1111,6 +1119,26 @@ class SQLCoreOperations(Generic[_T], ColumnOperators, TypingOnly):
             ...
 
 
+class SQLColumnExpression(
+    SQLCoreOperations[_T], roles.ExpressionElementRole[_T], TypingOnly
+):
+    """A type that may be used to indicate any SQL column element or object
+    that acts in place of one.
+
+    :class:`.SQLColumnExpression` is a base of
+    :class:`.ColumnElement`, as well as within the bases of ORM elements
+    such as :class:`.InstrumentedAttribute`, and may be used in :pep:`484`
+    typing to indicate arguments or return values that should behave
+    as column expressions.
+
+    .. versionadded:: 2.0.0b4
+
+
+    """
+
+    __slots__ = ()
+
+
 _SQO = SQLCoreOperations
 
 SelfColumnElement = TypeVar("SelfColumnElement", bound="ColumnElement[Any]")
@@ -1127,7 +1155,7 @@ class ColumnElement(
     roles.DMLColumnRole,
     roles.DDLConstraintColumnRole,
     roles.DDLExpressionRole,
-    SQLCoreOperations[_T],
+    SQLColumnExpression[_T],
     DQLDMLClauseElement,
 ):
     """Represent a column-oriented SQL expression suitable for usage in the
@@ -1461,21 +1489,32 @@ class ColumnElement(
 
     @util.memoized_property
     def proxy_set(self) -> FrozenSet[ColumnElement[Any]]:
-        return frozenset([self]).union(
-            itertools.chain.from_iterable(c.proxy_set for c in self._proxies)
-        )
+        """set of all columns we are proxying
 
-    def _uncached_proxy_set(self) -> FrozenSet[ColumnElement[Any]]:
-        """An 'uncached' version of proxy set.
-
-        This is so that we can read annotations from the list of columns
-        without breaking the caching of the above proxy_set.
+        as of 2.0 this is explicitly deannotated columns.  previously it was
+        effectively deannotated columns but wasn't enforced.  annotated
+        columns should basically not go into sets if at all possible because
+        their hashing behavior is very non-performant.
 
         """
-        return frozenset([self]).union(
-            itertools.chain.from_iterable(
-                c._uncached_proxy_set() for c in self._proxies
-            )
+        return frozenset([self._deannotate()]).union(
+            itertools.chain(*[c.proxy_set for c in self._proxies])
+        )
+
+    @util.memoized_property
+    def _expanded_proxy_set(self) -> FrozenSet[ColumnElement[Any]]:
+        return frozenset(_expand_cloned(self.proxy_set))
+
+    def _uncached_proxy_list(self) -> List[ColumnElement[Any]]:
+        """An 'uncached' version of proxy set.
+
+        This list includes annotated columns which perform very poorly in
+        set operations.
+
+        """
+
+        return [self] + list(
+            itertools.chain(*[c._uncached_proxy_list() for c in self._proxies])
         )
 
     def shares_lineage(self, othercolumn: ColumnElement[Any]) -> bool:
@@ -1537,6 +1576,7 @@ class ColumnElement(
         name: Optional[str] = None,
         key: Optional[str] = None,
         name_is_truncatable: bool = False,
+        compound_select_cols: Optional[Sequence[ColumnElement[Any]]] = None,
         **kw: Any,
     ) -> typing_Tuple[str, ColumnClause[_T]]:
         """Create a new :class:`_expression.ColumnElement` representing this
@@ -1562,7 +1602,10 @@ class ColumnElement(
         )
 
         co._propagate_attrs = selectable._propagate_attrs
-        co._proxies = [self]
+        if compound_select_cols:
+            co._proxies = list(compound_select_cols)
+        else:
+            co._proxies = [self]
         if selectable._is_clone_of is not None:
             co._is_clone_of = selectable._is_clone_of.columns.get(key)
         return key, co
@@ -3016,7 +3059,7 @@ class BooleanClauseList(ExpressionClauseList[bool]):
         if not self.clauses:
             return self
         else:
-            return super(BooleanClauseList, self).self_group(against=against)
+            return super().self_group(against=against)
 
 
 and_ = BooleanClauseList.and_
@@ -3063,7 +3106,7 @@ class Tuple(ClauseList, ColumnElement[typing_Tuple[Any, ...]]):
             ]
 
         self.type = sqltypes.TupleType(*[arg.type for arg in init_clauses])
-        super(Tuple, self).__init__(*init_clauses)
+        super().__init__(*init_clauses)
 
     @property
     def _select_iterable(self) -> _SelectIterable:
@@ -3222,7 +3265,7 @@ class Cast(WrapsColumnExpression[_T]):
 
     _traverse_internals: _TraverseInternalsType = [
         ("clause", InternalTraversal.dp_clauseelement),
-        ("typeclause", InternalTraversal.dp_clauseelement),
+        ("type", InternalTraversal.dp_type),
     ]
 
     clause: ColumnElement[Any]
@@ -3452,7 +3495,7 @@ class UnaryExpression(ColumnElement[_T]):
 
     @classmethod
     def _create_desc(
-        cls, column: _ColumnExpressionArgument[_T]
+        cls, column: _ColumnExpressionOrStrLabelArgument[_T]
     ) -> UnaryExpression[_T]:
         return UnaryExpression(
             coercions.expect(roles.ByOfRole, column),
@@ -3463,7 +3506,7 @@ class UnaryExpression(ColumnElement[_T]):
     @classmethod
     def _create_asc(
         cls,
-        column: _ColumnExpressionArgument[_T],
+        column: _ColumnExpressionOrStrLabelArgument[_T],
     ) -> UnaryExpression[_T]:
         return UnaryExpression(
             coercions.expect(roles.ByOfRole, column),
@@ -3629,7 +3672,20 @@ class BinaryExpression(OperatorExpression[_T]):
         (
             "type",
             InternalTraversal.dp_type,
-        ),  # affects JSON CAST operators
+        ),
+    ]
+
+    _cache_key_traversal = [
+        ("left", InternalTraversal.dp_clauseelement),
+        ("right", InternalTraversal.dp_clauseelement),
+        ("operator", InternalTraversal.dp_operator),
+        ("modifiers", InternalTraversal.dp_plain_dict),
+        # "type" affects JSON CAST operators, so while redundant in most cases,
+        # is needed for that one
+        (
+            "type",
+            InternalTraversal.dp_type,
+        ),
     ]
 
     _is_implicitly_boolean = True
@@ -3721,8 +3777,8 @@ class BinaryExpression(OperatorExpression[_T]):
     if typing.TYPE_CHECKING:
 
         def __invert__(
-            self: "BinaryExpression[_T]",
-        ) -> "BinaryExpression[_T]":
+            self: BinaryExpression[_T],
+        ) -> BinaryExpression[_T]:
             ...
 
     @util.ro_non_memoized_property
@@ -3740,7 +3796,7 @@ class BinaryExpression(OperatorExpression[_T]):
                 modifiers=self.modifiers,
             )
         else:
-            return super(BinaryExpression, self)._negate()
+            return super()._negate()
 
 
 class Slice(ColumnElement[Any]):
@@ -3812,6 +3868,10 @@ class Grouping(GroupedElement, ColumnElement[_T]):
     _traverse_internals: _TraverseInternalsType = [
         ("element", InternalTraversal.dp_clauseelement),
         ("type", InternalTraversal.dp_type),
+    ]
+
+    _cache_key_traversal = [
+        ("element", InternalTraversal.dp_clauseelement),
     ]
 
     element: Union[TextClause, ClauseList, ColumnElement[_T]]
@@ -4283,6 +4343,7 @@ class NamedColumn(KeyedColumnElement[_T]):
         name: Optional[str] = None,
         key: Optional[str] = None,
         name_is_truncatable: bool = False,
+        compound_select_cols: Optional[Sequence[ColumnElement[Any]]] = None,
         disallow_is_literal: bool = False,
         **kw: Any,
     ) -> typing_Tuple[str, ColumnClause[_T]]:
@@ -4298,7 +4359,11 @@ class NamedColumn(KeyedColumnElement[_T]):
         c._propagate_attrs = selectable._propagate_attrs
         if name is None:
             c.key = self.key
-        c._proxies = [self]
+        if compound_select_cols:
+            c._proxies = list(compound_select_cols)
+        else:
+            c._proxies = [self]
+
         if selectable._is_clone_of is not None:
             c._is_clone_of = selectable._is_clone_of.columns.get(c.key)
         return c.key, c
@@ -4317,6 +4382,11 @@ class Label(roles.LabeledColumnExprRole[_T], NamedColumn[_T]):
     _traverse_internals: _TraverseInternalsType = [
         ("name", InternalTraversal.dp_anon_name),
         ("type", InternalTraversal.dp_type),
+        ("_element", InternalTraversal.dp_clauseelement),
+    ]
+
+    _cache_key_traversal = [
+        ("name", InternalTraversal.dp_anon_name),
         ("_element", InternalTraversal.dp_clauseelement),
     ]
 
@@ -4441,6 +4511,7 @@ class Label(roles.LabeledColumnExprRole[_T], NamedColumn[_T]):
         selectable: FromClause,
         *,
         name: Optional[str] = None,
+        compound_select_cols: Optional[Sequence[ColumnElement[Any]]] = None,
         **kw: Any,
     ) -> typing_Tuple[str, ColumnClause[_T]]:
         name = self.name if not name else name
@@ -4450,6 +4521,7 @@ class Label(roles.LabeledColumnExprRole[_T], NamedColumn[_T]):
             name=name,
             disallow_is_literal=True,
             name_is_truncatable=isinstance(name, _truncated_label),
+            compound_select_cols=compound_select_cols,
         )
 
         # there was a note here to remove this assertion, which was here
@@ -4459,7 +4531,7 @@ class Label(roles.LabeledColumnExprRole[_T], NamedColumn[_T]):
         # when a label name conflicts with other columns and select()
         # is attempting to disambiguate an explicit label, which is not what
         # the user would want.   See issue #6090.
-        if key != self.name:
+        if key != self.name and not isinstance(self.name, _anonymous_label):
             raise exc.InvalidRequestError(
                 "Label name %s is being renamed to an anonymous label due "
                 "to disambiguation "
@@ -4569,7 +4641,7 @@ class ColumnClause(
         if self.table is not None:
             return self.table.entity_namespace
         else:
-            return super(ColumnClause, self).entity_namespace
+            return super().entity_namespace
 
     def _clone(self, detect_subquery_cols=False, **kw):
         if (
@@ -4582,7 +4654,7 @@ class ColumnClause(
             new = table.c.corresponding_column(self)
             return new
 
-        return super(ColumnClause, self)._clone(**kw)
+        return super()._clone(**kw)
 
     @HasMemoized_ro_memoized_attribute
     def _from_objects(self) -> List[FromClause]:
@@ -4685,6 +4757,7 @@ class ColumnClause(
         name: Optional[str] = None,
         key: Optional[str] = None,
         name_is_truncatable: bool = False,
+        compound_select_cols: Optional[Sequence[ColumnElement[Any]]] = None,
         disallow_is_literal: bool = False,
         **kw: Any,
     ) -> typing_Tuple[str, ColumnClause[_T]]:
@@ -4715,7 +4788,11 @@ class ColumnClause(
         c._propagate_attrs = selectable._propagate_attrs
         if name is None:
             c.key = self.key
-        c._proxies = [self]
+        if compound_select_cols:
+            c._proxies = list(compound_select_cols)
+        else:
+            c._proxies = [self]
+
         if selectable._is_clone_of is not None:
             c._is_clone_of = selectable._is_clone_of.columns.get(c.key)
         return c.key, c
@@ -4940,7 +5017,7 @@ class AnnotatedColumnElement(Annotated):
                 self.__dict__.pop(attr)
 
     def _with_annotations(self, values):
-        clone = super(AnnotatedColumnElement, self)._with_annotations(values)
+        clone = super()._with_annotations(values)
         clone.__dict__.pop("comparator", None)
         return clone
 
@@ -4979,7 +5056,7 @@ class _truncated_label(quoted_name):
     def __new__(cls, value: str, quote: Optional[bool] = None) -> Any:
         quote = getattr(value, "quote", quote)
         # return super(_truncated_label, cls).__new__(cls, value, quote, True)
-        return super(_truncated_label, cls).__new__(cls, value, quote)
+        return super().__new__(cls, value, quote)
 
     def __reduce__(self) -> Any:
         return self.__class__, (str(self), self.quote)
@@ -5036,9 +5113,6 @@ class conv(_truncated_label):
     __slots__ = ()
 
 
-_NONE_NAME = util.symbol("NONE_NAME")
-"""indicate a 'deferred' name that was ultimately the value None."""
-
 # for backwards compatibility in case
 # someone is re-implementing the
 # _truncated_identifier() sequence in a custom
@@ -5061,8 +5135,13 @@ class _anonymous_label(_truncated_label):
         sanitize_key: bool = False,
     ) -> _anonymous_label:
 
+        # need to escape chars that interfere with format
+        # strings in any case, issue #8724
+        body = re.sub(r"[%\(\) \$]+", "_", body)
+
         if sanitize_key:
-            body = re.sub(r"[%\(\) \$]+", "_", body).strip("_")
+            # sanitize_key is then an extra step used by BindParameter
+            body = body.strip("_")
 
         label = "%%(%d %s)s" % (seed, body.replace("%", "%%"))
         if enclosing_label:

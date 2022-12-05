@@ -399,8 +399,7 @@ class ClassManager(
             if mgr is not None and mgr is not self:
                 yield mgr
                 if recursive:
-                    for m in mgr.subclass_managers(True):
-                        yield m
+                    yield from mgr.subclass_managers(True)
 
     def post_configure_attribute(self, key):
         _instrumentation_factory.dispatch.attribute_instrument(
@@ -622,7 +621,7 @@ class InstrumentationFactory(EventTarget):
 
         if factory is None:
             factory = ClassManager
-            manager = factory(class_)
+            manager = ClassManager(class_)
         else:
             assert manager is not None
 

@@ -70,9 +70,12 @@ to be used freely against ORM entities::
 
     with Session(engine, future=True) as sess:
 
-        stmt = select(User).where(
-            User.name == 'sandy'
-        ).join(User.addresses).where(Address.email_address.like("%gmail%"))
+        stmt = (
+            select(User)
+            .where(User.name == "sandy")
+            .join(User.addresses)
+            .where(Address.email_address.like("%gmail%"))
+        )
 
         result = sess.execute(stmt)
 
@@ -121,16 +124,19 @@ Similar adjustments have been made to "bulk updates and deletes" such that
 Core :func:`_sql.update` and :func:`_sql.delete` can be used for bulk
 operations.   A bulk update like the following::
 
-    session.query(User).filter(User.name == 'sandy').update({"password": "foobar"}, synchronize_session="fetch")
+    session.query(User).filter(User.name == "sandy").update(
+        {"password": "foobar"}, synchronize_session="fetch"
+    )
 
 can now be achieved in :term:`2.0 style` (and indeed the above runs internally
 in this way) as follows::
 
     with Session(engine, future=True) as sess:
-        stmt = update(User).where(
-            User.name == 'sandy'
-        ).values(password="foobar").execution_options(
-            synchronize_session="fetch"
+        stmt = (
+            update(User)
+            .where(User.name == "sandy")
+            .values(password="foobar")
+            .execution_options(synchronize_session="fetch")
         )
 
         sess.execute(stmt)
@@ -179,11 +185,15 @@ for queries that return many rows::
         result = session.query(Customer).filter(Customer.id == id_).one()
 
 This example in the 1.3 release of SQLAlchemy on a Dell XPS13 running Linux
-completes as follows::
+completes as follows:
+
+.. sourcecode:: text
 
     test_orm_query : (10000 iterations); total time 3.440652 sec
 
-In 1.4, the code above without modification completes::
+In 1.4, the code above without modification completes:
+
+.. sourcecode:: text
 
     test_orm_query : (10000 iterations); total time 2.367934 sec
 
@@ -208,7 +218,9 @@ Using this API looks as follows::
         stmt += lambda s: s.where(Customer.id == id_)
         session.execute(stmt).scalar_one()
 
-The code above completes::
+The code above completes:
+
+.. sourcecode:: text
 
     test_orm_query_newstyle_w_lambdas : (10000 iterations); total time 1.247092 sec
 
@@ -498,6 +510,7 @@ mutually-dependent module imports, like this::
 
     @util.dependency_for("sqlalchemy.sql.dml")
     def insert(self, dml, *args, **kw):
+        ...
 
 Where the above function would be rewritten to no longer have the ``dml`` parameter
 on the outside.  This would confuse code-linting tools into seeing a missing parameter
@@ -598,7 +611,9 @@ That is, this will now raise::
     stmt1 = select(user.c.id, user.c.name)
     stmt2 = select(addresses, stmt1).select_from(addresses.join(stmt1))
 
-Raising::
+Raising:
+
+.. sourcecode:: text
 
     sqlalchemy.exc.ArgumentError: Column expression or FROM clause expected,
     got <...Select object ...>. To create a FROM clause from a <class
@@ -630,7 +645,9 @@ The rationale for this change is based on the following:
   without first creating an alias or subquery would be that it creates an
   unnamed subquery.   While standard SQL does support this syntax, in practice
   it is rejected by most databases.  For example, both the MySQL and PostgreSQL
-  outright reject the usage of unnamed subqueries::
+  outright reject the usage of unnamed subqueries:
+
+  .. sourcecode:: sql
 
       # MySQL / MariaDB:
 
@@ -647,7 +664,9 @@ The rationale for this change is based on the following:
       HINT:  For example, FROM (SELECT ...) [AS] foo.
 
   A database like SQLite accepts them, however it is still often the case that
-  the names produced from such a subquery are too ambiguous to be useful::
+  the names produced from such a subquery are too ambiguous to be useful:
+
+  .. sourcecode:: sql
 
       sqlite> CREATE TABLE a(id integer);
       sqlite> CREATE TABLE b(id integer);
@@ -676,7 +695,7 @@ that are in the columns clause of the SELECT statement.   A common beginner mist
 is code such as the following::
 
     stmt = select(users)
-    stmt = stmt.where(stmt.c.name == 'foo')
+    stmt = stmt.where(stmt.c.name == "foo")
 
 The above code appears intuitive and that it would generate
 "SELECT * FROM users WHERE name='foo'", however veteran SQLAlchemy users will
@@ -688,8 +707,7 @@ the use case above, as in a case like the above it links directly to the columns
 present in the ``users.c`` collection::
 
     stmt = select(users)
-    stmt = stmt.where(stmt.selected_columns.name == 'foo')
-
+    stmt = stmt.where(stmt.selected_columns.name == "foo")
 
 :ticket:`4617`
 
@@ -745,9 +763,13 @@ With the new implementation, :meth:`_sql.Select.join` and
 :meth:`_orm.Query.join`, adding JOIN criteria to the existing statement by
 matching to the left entity::
 
-    stmt = select(user_table).join(addresses_table, user_table.c.id == addresses_table.c.user_id)
+    stmt = select(user_table).join(
+        addresses_table, user_table.c.id == addresses_table.c.user_id
+    )
 
-producing::
+producing:
+
+.. sourcecode:: sql
 
     SELECT user.id, user.name FROM user JOIN address ON user.id=address.user_id
 
@@ -771,7 +793,9 @@ allows easier specification of the left and right side of a join at once::
 
     stmt = select(Address.email_address, User.name).join_from(User, Address)
 
-producing::
+producing:
+
+.. sourcecode:: sql
 
     SELECT address.email_address, user.name FROM user JOIN address ON user.id == address.user_id
 
@@ -839,7 +863,7 @@ returns a new :class:`_engine.URL` object with changes applied::
 To alter the contents of the :attr:`_engine.URL.query` dictionary, methods
 such as :meth:`_engine.URL.update_query_dict` may be used::
 
-    >>> url.update_query_dict({"sslcert": '/path/to/crt'})
+    >>> url.update_query_dict({"sslcert": "/path/to/crt"})
     postgresql://user:***@host/dbname?sslcert=%2Fpath%2Fto%2Fcrt
 
 To upgrade code that is mutating these fields directly, a **backwards and
@@ -855,6 +879,7 @@ style::
             some_url.drivername = some_drivername
             return some_url
 
+
     def set_ssl_cert(some_url, ssl_cert):
         # check for 1.4
         if hasattr(some_url, "update_query_dict"):
@@ -869,7 +894,9 @@ to strings, using sequences of strings to represent multiple parameters.
 For example::
 
     >>> from sqlalchemy.engine import make_url
-    >>> url = make_url("postgresql://user:pass@host/dbname?alt_host=host1&alt_host=host2&sslcert=%2Fpath%2Fto%2Fcrt")
+    >>> url = make_url(
+    ...     "postgresql://user:pass@host/dbname?alt_host=host1&alt_host=host2&sslcert=%2Fpath%2Fto%2Fcrt"
+    ... )
     >>> url.query
     immutabledict({'alt_host': ('host1', 'host2'), 'sslcert': '/path/to/crt'})
 
@@ -901,25 +928,24 @@ method.  A backwards compatible approach would look like::
 
     from sqlalchemy.engine import CreateEnginePlugin
 
+
     class MyPlugin(CreateEnginePlugin):
         def __init__(self, url, kwargs):
             # check for 1.4 style
             if hasattr(CreateEnginePlugin, "update_url"):
-                self.my_argument_one = url.query['my_argument_one']
-                self.my_argument_two = url.query['my_argument_two']
+                self.my_argument_one = url.query["my_argument_one"]
+                self.my_argument_two = url.query["my_argument_two"]
             else:
                 # legacy
-                self.my_argument_one = url.query.pop('my_argument_one')
-                self.my_argument_two = url.query.pop('my_argument_two')
+                self.my_argument_one = url.query.pop("my_argument_one")
+                self.my_argument_two = url.query.pop("my_argument_two")
 
-            self.my_argument_three = kwargs.pop('my_argument_three', None)
+            self.my_argument_three = kwargs.pop("my_argument_three", None)
 
         def update_url(self, url):
             # this method runs in 1.4 only and should be used to consume
             # plugin-specific arguments
-            return url.difference_update_query(
-                ["my_argument_one", "my_argument_two"]
-            )
+            return url.difference_update_query(["my_argument_one", "my_argument_two"])
 
 See the docstring at :class:`_engine.CreateEnginePlugin` for complete details
 on how this class is used.
@@ -974,9 +1000,9 @@ track for the old calling style::
 
     stmt = select(users_table).where(
         case(
-            (users_table.c.name == 'wendy', 'W'),
-            (users_table.c.name == 'jack', 'J'),
-            else_='E'
+            (users_table.c.name == "wendy", "W"),
+            (users_table.c.name == "jack", "J"),
+            else_="E",
         )
     )
 
@@ -1064,7 +1090,9 @@ bound value to be rendered as it would be passed to the database::
     FROM a
     WHERE a.id IN (:id_1_1, :id_1_2, :id_1_3)
 
-Engine logging output shows the ultimate rendered statement as well::
+Engine logging output shows the ultimate rendered statement as well:
+
+.. sourcecode:: sql
 
     INFO sqlalchemy.engine.base.Engine SELECT a.id, a.data
     FROM a
@@ -1128,14 +1156,18 @@ not line up with these two tables will create an additional FROM entry::
 
     address_alias = aliased(Address)
 
-    q = session.query(User).\
-        join(address_alias, User.addresses).\
-        filter(Address.email_address == 'foo')
+    q = (
+        session.query(User)
+        .join(address_alias, User.addresses)
+        .filter(Address.email_address == "foo")
+    )
 
 The above query selects from a JOIN of ``User`` and ``address_alias``, the
 latter of which is an alias of the ``Address`` entity.  However, the
 ``Address`` entity is used within the WHERE clause directly, so the above would
-result in the SQL::
+result in the SQL:
+
+.. sourcecode:: sql
 
     SELECT
         users.id AS users_id, users.name AS users_name,
@@ -1189,11 +1221,13 @@ JOIN clauses but also through the WHERE clause  Above, we can add a WHERE
 clause to link the new ``Address`` entity with the previous ``address_alias``
 entity and that will remove the warning::
 
-    q = session.query(User).\
-        join(address_alias, User.addresses).\
-        filter(Address.email_address == 'foo').\
-        filter(Address.id == address_alias.id)  # resolve cartesian products,
-                                                # will no longer warn
+    q = (
+        session.query(User)
+        .join(address_alias, User.addresses)
+        .filter(Address.email_address == "foo")
+        .filter(Address.id == address_alias.id)
+    )  # resolve cartesian products,
+    # will no longer warn
 
 The cartesian product warning considers **any** kind of link between two
 FROM clauses to be a resolution, even if the end result set is still
@@ -1201,11 +1235,13 @@ wasteful, as the linter is intended only to detect the common case of a
 FROM clause that is completely unexpected.  If the FROM clause is referred
 to explicitly elsewhere and linked to the other FROMs, no warning is emitted::
 
-    q = session.query(User).\
-        join(address_alias, User.addresses).\
-        filter(Address.email_address == 'foo').\
-        filter(Address.id > address_alias.id)  # will generate a lot of rows,
-                                               # but no warning
+    q = (
+        session.query(User)
+        .join(address_alias, User.addresses)
+        .filter(Address.email_address == "foo")
+        .filter(Address.id > address_alias.id)
+    )  # will generate a lot of rows,
+    # but no warning
 
 Full cartesian products are also allowed if they are explicitly stated; if we
 wanted for example the cartesian product of ``User`` and ``Address``, we can
@@ -1256,7 +1292,6 @@ including methods such as:
     with engine.connect() as conn:
         row = conn.execute(table.select().where(table.c.id == 5)).one()
 
-
 :meth:`_engine.Result.one_or_none` - same, but also returns None for no rows
 
 :meth:`_engine.Result.all` - returns all rows
@@ -1268,22 +1303,23 @@ including methods such as:
     with engine.connect() as conn:
         result = conn.execute(
             table.select().order_by(table.c.id),
-            execution_options={"stream_results": True}
+            execution_options={"stream_results": True},
         )
         for chunk in result.partitions(500):
             # process up to 500 records
+            ...
 
 :meth:`_engine.Result.columns` - allows slicing and reorganizing of rows:
 
 .. sourcecode::
 
      with engine.connect() as conn:
-        # requests x, y, z
-        result = conn.execute(select(table.c.x, table.c.y, table.c.z))
+         # requests x, y, z
+         result = conn.execute(select(table.c.x, table.c.y, table.c.z))
 
-        # iterate rows as y, x
-        for y, x in result.columns("y", "x"):
-            print("Y: %s  X: %s" % (y, x))
+         # iterate rows as y, x
+         for y, x in result.columns("y", "x"):
+             print("Y: %s  X: %s" % (y, x))
 
 :meth:`_engine.Result.scalars` - returns lists of scalar objects, from the
 first column by default but can also be selected:
@@ -1292,7 +1328,7 @@ first column by default but can also be selected:
 
     result = session.execute(select(User).order_by(User.id))
     for user_obj in result.scalars():
-        # ...
+        ...
 
 :meth:`_engine.Result.mappings` - instead of named-tuple rows, returns
 dictionaries:
@@ -1300,10 +1336,10 @@ dictionaries:
 .. sourcecode::
 
      with engine.connect() as conn:
-        result = conn.execute(select(table.c.x, table.c.y, table.c.z))
+         result = conn.execute(select(table.c.x, table.c.y, table.c.z))
 
-        for map_ in result.mappings():
-            print("Y: %(y)s  X: %(x)s" % map_)
+         for map_ in result.mappings():
+             print("Y: %(y)s  X: %(x)s" % map_)
 
 When using Core, the object returned by :meth:`_engine.Connection.execute` is
 an instance of :class:`.CursorResult`, which continues to feature the same API
@@ -1368,14 +1404,16 @@ Rationale: To behave more like a named tuple rather than a mapping
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The difference between a named tuple and a mapping as far as boolean operators
-can be summarized.   Given a "named tuple" in pseudo code as::
+can be summarized.   Given a "named tuple" in pseudo code as:
+
+.. sourcecode:: text
 
     row = (id: 5,  name: 'some name')
 
 The biggest cross-incompatible difference is the behavior of ``__contains__``::
 
-    "id" in row          # True for a mapping, False for a named tuple
-    "some name" in row   # False for a mapping, True for a named tuple
+    "id" in row  # True for a mapping, False for a named tuple
+    "some name" in row  # False for a mapping, True for a named tuple
 
 In 1.4, when a ``LegacyRow`` is returned by a Core result set, the above
 ``"id" in row`` comparison will continue to succeed, however a deprecation
@@ -1402,7 +1440,7 @@ when the row was first fetched.     This means for example when retrieving
 a datetime value from SQLite, the data for the row as present in the
 :class:`.RowProxy` object would previously have looked like::
 
-    row_proxy = (1, '2019-12-31 19:56:58.272106')
+    row_proxy = (1, "2019-12-31 19:56:58.272106")
 
 and then upon access via ``__getitem__``, the ``datetime.strptime()`` function
 would be used on the fly to convert the above string date into a ``datetime``
@@ -1478,8 +1516,8 @@ allows for greater cross-compatibility between the two, which is a key goal of
 the 2.0 transition::
 
     >>> from sqlalchemy import column, select
-    >>> c1, c2, c3, c4 = column('c1'), column('c2'), column('c3'), column('c4')
-    >>> stmt = select(c1, c2, c3.label('c2'), c2, c4)
+    >>> c1, c2, c3, c4 = column("c1"), column("c2"), column("c3"), column("c4")
+    >>> stmt = select(c1, c2, c3.label("c2"), c2, c4)
     >>> print(stmt)
     SELECT c1, c2, c3 AS c2, c2, c4
 
@@ -1522,7 +1560,7 @@ does not imply deduplication of column objects, although it does imply
 deduplication of implicitly generated labels::
 
     >>> from sqlalchemy import table
-    >>> user = table('user', column('id'), column('name'))
+    >>> user = table("user", column("id"), column("name"))
     >>> stmt = select(user.c.id, user.c.name, user.c.id).apply_labels()
     >>> print(stmt)
     SELECT "user".id AS user_id, "user".name AS user_name, "user".id AS id_1
@@ -1554,7 +1592,9 @@ Improved column labeling for simple column expressions using CAST or similar
 
 A user pointed out that the PostgreSQL database has a convenient behavior when
 using functions like CAST against a named column, in that the result column name
-is named the same as the inner expression::
+is named the same as the inner expression:
+
+.. sourcecode:: text
 
     test=> SELECT CAST(data AS VARCHAR) FROM foo;
 
@@ -1566,7 +1606,9 @@ is named the same as the inner expression::
 This allows one to apply CAST to table columns while not losing the column
 name (above using the name ``"data"``) in the result row.    Compare to
 databases such as MySQL/MariaDB, as well as most others, where the column
-name is taken from the full SQL expression and is not very portable::
+name is taken from the full SQL expression and is not very portable:
+
+.. sourcecode:: text
 
     MariaDB [test]> SELECT CAST(data AS CHAR) FROM foo;
     +--------------------+
@@ -1606,7 +1648,7 @@ prominently with CAST::
 For CAST against expressions that don't have a name, the previous logic is used
 to generate the usual "anonymous" labels::
 
-    >>> print(select(cast('hi there,' + foo.c.data, String)))
+    >>> print(select(cast("hi there," + foo.c.data, String)))
     SELECT CAST(:data_1 + foo.data AS VARCHAR) AS anon_1
     FROM foo
 
@@ -1614,14 +1656,14 @@ A :func:`.cast` against a :class:`.Label`, despite having to omit the label
 expression as these don't render inside of a CAST, will nonetheless make use of
 the given name::
 
-    >>> print(select(cast(('hi there,' + foo.c.data).label('hello_data'), String)))
+    >>> print(select(cast(("hi there," + foo.c.data).label("hello_data"), String)))
     SELECT CAST(:data_1 + foo.data AS VARCHAR) AS hello_data
     FROM foo
 
 And of course as was always the case, :class:`.Label` can be applied to the
 expression on the outside to apply an "AS <name>" label directly::
 
-    >>> print(select(cast(('hi there,' + foo.c.data), String).label('hello_data')))
+    >>> print(select(cast(("hi there," + foo.c.data), String).label("hello_data")))
     SELECT CAST(:data_1 + foo.data AS VARCHAR) AS hello_data
     FROM foo
 
@@ -1641,7 +1683,9 @@ OFFSET values, typically used for pagination and "top N" style results.
 
 While SQLAlchemy has used bound parameters for LIMIT/OFFSET schemes for many
 years, a few outliers remained where such parameters were not allowed, including
-a SQL Server "TOP N" statement, such as::
+a SQL Server "TOP N" statement, such as:
+
+.. sourcecode:: sql
 
     SELECT TOP 5 mytable.id, mytable.data FROM mytable
 
@@ -1649,7 +1693,9 @@ as well as with Oracle, where the FIRST_ROWS() hint (which SQLAlchemy will
 use if the ``optimize_limits=True`` parameter is passed to
 :func:`_sa.create_engine` with an Oracle URL) does not allow them,
 but also that using bound parameters with ROWNUM comparisons has been reported
-as producing slower query plans::
+as producing slower query plans:
+
+.. sourcecode:: sql
 
     SELECT anon_1.id, anon_1.data FROM (
         SELECT /*+ FIRST_ROWS(5) */
@@ -1671,11 +1717,15 @@ be rendered literally into the SQL string before sending it to the DBAPI
 SQL Server and Oracle dialects, so that the drivers receive the literal
 rendered value but the rest of SQLAlchemy can still consider this as a
 bound parameter.   The above two statements when stringified using
-``str(statement.compile(dialect=<dialect>))`` now look like::
+``str(statement.compile(dialect=<dialect>))`` now look like:
+
+.. sourcecode:: sql
 
     SELECT TOP [POSTCOMPILE_param_1] mytable.id, mytable.data FROM mytable
 
-and::
+and:
+
+.. sourcecode:: sql
 
     SELECT anon_1.id, anon_1.data FROM (
         SELECT /*+ FIRST_ROWS([POSTCOMPILE__ora_frow_1]) */
@@ -1691,7 +1741,9 @@ The ``[POSTCOMPILE_<param>]`` format is also what is seen when an
 "expanding IN" is used.
 
 When viewing the SQL logging output, the final form of the statement will
-be seen::
+be seen:
+
+.. sourcecode:: sql
 
     SELECT anon_1.id, anon_1.data FROM (
         SELECT /*+ FIRST_ROWS(5) */
@@ -1762,12 +1814,11 @@ should be opted in to, rather than being turned on by default.
 To ensure that a CREATE CONSTRAINT is emitted for these types, set these
 flags to ``True``::
 
-  class Spam(Base):
-      __tablename__ = "spam"
-      id = Column(Integer, primary_key=True)
-      boolean = Column(Boolean(create_constraint=True))
-      enum = Column(Enum("a", "b", "c", create_constraint=True))
-
+    class Spam(Base):
+        __tablename__ = "spam"
+        id = Column(Integer, primary_key=True)
+        boolean = Column(Boolean(create_constraint=True))
+        enum = Column(Enum("a", "b", "c", create_constraint=True))
 
 :ticket:`5367`
 
@@ -1796,12 +1847,13 @@ To configure column-level raiseload on a mapping, the
 the attribute::
 
     class Book(Base):
-        __tablename__ = 'book'
+        __tablename__ = "book"
 
         book_id = Column(Integer, primary_key=True)
         title = Column(String(200), nullable=False)
         summary = deferred(Column(String(2000)), raiseload=True)
         excerpt = deferred(Column(Text), raiseload=True)
+
 
     book_w_excerpt = session.query(Book).options(undefer(Book.excerpt)).first()
 
@@ -1810,8 +1862,7 @@ works for :func:`_orm.relationship` attributes be expanded to also support colum
 attributes.    However, this would break the "wildcard" behavior of :func:`.raiseload`,
 which is documented as allowing one to prevent all relationships from loading::
 
-    session.query(Order).options(
-        joinedload(Order.items), raiseload('*'))
+    session.query(Order).options(joinedload(Order.items), raiseload("*"))
 
 Above, if we had expanded :func:`.raiseload` to accommodate for columns  as
 well, the wildcard would also prevent columns from loading and thus be  a
@@ -1842,7 +1893,7 @@ as was present previously.
 
 .. seealso::
 
-    :ref:`deferred_raiseload`
+    :ref:`orm_queryguide_deferred_raiseload`
 
 :ticket:`4826`
 
@@ -1867,7 +1918,9 @@ approach to be performant.
 SQLAlchemy includes a :ref:`performance suite <examples_performance>` within
 its examples, where we can compare the times generated for the "batch_inserts"
 runner against 1.3 and 1.4, revealing a 3x-5x speedup for most flavors
-of batch insert::
+of batch insert:
+
+.. sourcecode:: text
 
     # 1.3
     $ python -m examples.performance bulk_inserts --dburl postgresql://scott:tiger@localhost/test
@@ -1890,13 +1943,17 @@ of batch insert::
 Note that the ``execute_values()`` extension modifies the INSERT statement in the psycopg2
 layer, **after** it's been logged by SQLAlchemy.  So with SQL logging, one will see the
 parameter sets batched together, but the joining of multiple "values" will not be visible
-on the application side::
+on the application side:
+
+.. sourcecode:: text
 
     2020-06-27 19:08:18,166 INFO sqlalchemy.engine.Engine INSERT INTO a (data) VALUES (%(data)s) RETURNING a.id
     2020-06-27 19:08:18,166 INFO sqlalchemy.engine.Engine [generated in 0.00698s] ({'data': 'data 1'}, {'data': 'data 2'}, {'data': 'data 3'}, {'data': 'data 4'}, {'data': 'data 5'}, {'data': 'data 6'}, {'data': 'data 7'}, {'data': 'data 8'}  ... displaying 10 of 4999 total bound parameter sets ...  {'data': 'data 4998'}, {'data': 'data 4999'})
     2020-06-27 19:08:18,254 INFO sqlalchemy.engine.Engine COMMIT
 
-The ultimate INSERT statement can be seen by enabling statement logging on the PostgreSQL side::
+The ultimate INSERT statement can be seen by enabling statement logging on the PostgreSQL side:
+
+.. sourcecode:: text
 
     2020-06-27 19:08:18.169 EDT [26960] LOG:  statement: INSERT INTO a (data)
     VALUES ('data 1'),('data 2'),('data 3'),('data 4'),('data 5'),('data 6'),('data
@@ -1928,7 +1985,9 @@ An ORM bulk update or delete that uses the "fetch" strategy::
 
 Will now use RETURNING if the backend database supports it; this currently
 includes PostgreSQL and SQL Server (the Oracle dialect does not support RETURNING
-of multiple rows)::
+of multiple rows):
+
+.. sourcecode:: text
 
     UPDATE users SET age_int=(users.age_int - %(age_int_1)s) WHERE users.age_int > %(age_int_2)s RETURNING users.id
     [generated in 0.00060s] {'age_int_1': 10, 'age_int_2': 29}
@@ -1937,7 +1996,9 @@ of multiple rows)::
     Row (4,)
 
 For backends that do not support RETURNING of multiple rows, the previous approach
-of emitting SELECT for the primary keys beforehand is still used::
+of emitting SELECT for the primary keys beforehand is still used:
+
+.. sourcecode:: text
 
     SELECT users.id FROM users WHERE users.age_int > %(age_int_1)s
     [generated in 0.00043s] {'age_int_1': 29}
@@ -2003,11 +2064,7 @@ as entity / column should work::
     row._mapping[u1]  # same as row[0]
 
 
-    row = (
-        s.query(User.id, Address.email_address)
-        .join(User.addresses)
-        .first()
-    )
+    row = s.query(User.id, Address.email_address).join(User.addresses).first()
 
     row._mapping[User.id]  # same as row[0]
     row._mapping["id"]  # same as row[0]
@@ -2145,8 +2202,9 @@ in any way::
 
         addresses = relationship(Address, backref=backref("user", viewonly=True))
 
+
     class Address(Base):
-        # ...
+        ...
 
 
     u1 = session.query(User).filter_by(name="x").first()
@@ -2202,13 +2260,11 @@ use of the :paramref:`_orm.Session.future` flag to :term:`2.0-style` mode::
     Session = sessionmaker(engine, future=True)
 
     with Session() as session:
-      u1 = User()
-      session.add(u1)
+        u1 = User()
+        session.add(u1)
 
-      a1 = Address()
-      a1.user = u1  # <--- will not add "a1" to the Session
-
-
+        a1 = Address()
+        a1.user = u1  # <--- will not add "a1" to the Session
 
 :ticket:`5150`
 
@@ -2225,7 +2281,7 @@ selectin/subquery loaders will run an "immediateload" operation for a given
 relationship, when an expired object is unexpired or an object is refreshed::
 
     >>> a1 = session.query(A).options(joinedload(A.bs)).first()
-    >>> a1.data = 'new data'
+    >>> a1.data = "new data"
     >>> session.commit()
 
 Above, the ``A`` object was loaded with a ``joinedload()`` option associated
@@ -2251,7 +2307,7 @@ a refresh scenario, which resembles the query emitted by "lazyload", emitted as
 an additional query::
 
     >>> a1 = session.query(A).options(selectinload(A.bs)).first()
-    >>> a1.data = 'new data'
+    >>> a1.data = "new data"
     >>> session.commit()
     >>> a1.data
     SELECT a.id AS a_id, a.data AS a_data
@@ -2333,9 +2389,11 @@ eventually identified in :ticket:`4519` where this empty collection could be
 harmful, which is when the object is merged into a session::
 
     >>> u1 = User(id=1)  # create an empty User to merge with id=1 in the database
-    >>> merged1 = session.merge(u1)  # value of merged1.addresses is unchanged from that of the DB
+    >>> merged1 = session.merge(
+    ...     u1
+    ... )  # value of merged1.addresses is unchanged from that of the DB
 
-    >>> u2 = User(id=2) # create an empty User to merge with id=2 in the database
+    >>> u2 = User(id=2)  # create an empty User to merge with id=2 in the database
     >>> u2.addresses
     []
     >>> merged2 = session.merge(u2)  # value of merged2.addresses has been emptied in the DB
@@ -2364,7 +2422,9 @@ however is not added to ``__dict__`` until it is actually mutated::
     >>> u1 = User()
     >>> l1 = u1.addresses  # new list is created, associated with the state
     >>> assert u1.addresses is l1  # you get the same list each time you access it
-    >>> assert "addresses" not in u1.__dict__  # but it won't go into __dict__ until it's mutated
+    >>> assert (
+    ...     "addresses" not in u1.__dict__
+    ... )  # but it won't go into __dict__ until it's mutated
     >>> from sqlalchemy import inspect
     >>> inspect(u1).attrs.addresses.history
     History(added=None, unchanged=None, deleted=None)
@@ -2386,7 +2446,9 @@ the object contains certain values based on its ``__dict__``::
     >>> u1.addresses
     []
     # this will now fail, would pass before
-    >>> assert {k: v for k, v in u1.__dict__.items() if not k.startswith("_")} == {"addresses": []}
+    >>> assert {k: v for k, v in u1.__dict__.items() if not k.startswith("_")} == {
+    ...     "addresses": []
+    ... }
 
 or to ensure that the collection won't require a lazy load to proceed, the
 (admittedly awkward) code below will now also fail::
@@ -2415,9 +2477,10 @@ SQLAlchemy has always had logic to detect when an object in the :class:`.Session
 to be inserted has the same primary key as an object that is already present::
 
     class Product(Base):
-        __tablename__ = 'product'
+        __tablename__ = "product"
 
         id = Column(Integer, primary_key=True)
+
 
     session = Session(engine)
 
@@ -2429,7 +2492,9 @@ to be inserted has the same primary key as an object that is already present::
     session.add(Product(id=1))
     s.commit()  # <-- will raise FlushError
 
-The change is that the :class:`.FlushError` is altered to be only a warning::
+The change is that the :class:`.FlushError` is altered to be only a warning:
+
+.. sourcecode:: text
 
     sqlalchemy/orm/persistence.py:408: SAWarning: New instance <Product at 0x7f1ff65e0ba8> with identity key (<class '__main__.Product'>, (1,), None) conflicts with persistent instance <Product at 0x7f1ff60a4550>
 
@@ -2437,14 +2502,15 @@ The change is that the :class:`.FlushError` is altered to be only a warning::
 Subsequent to that, the condition will attempt to insert the row into the
 database which will emit :class:`.IntegrityError`, which is the same error that
 would be raised if the primary key identity was not already present in the
-:class:`.Session`::
+:class:`.Session`:
+
+.. sourcecode:: text
 
     sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: product.id
 
 The rationale is to allow code that is using :class:`.IntegrityError` to catch
 duplicates to function regardless of the existing state of the
 :class:`.Session`, as is often done using savepoints::
-
 
     # add another Product with same primary key
     try:
@@ -2500,10 +2566,11 @@ disallowed::
         # ...
 
         # this is now an error
-        addresses = relationship(
-            "Address", viewonly=True, cascade="all, delete-orphan")
+        addresses = relationship("Address", viewonly=True, cascade="all, delete-orphan")
 
-The above will raise::
+The above will raise:
+
+.. sourcecode:: text
 
     sqlalchemy.exc.ArgumentError: Cascade settings
     "delete, delete-orphan, merge, save-update" apply to persistence
@@ -2542,14 +2609,13 @@ inheritance mapping::
 
     s.commit()
 
-    print(
-        s.query(Manager).select_entity_from(s.query(Employee).subquery()).all()
-    )
-
+    print(s.query(Manager).select_entity_from(s.query(Employee).subquery()).all())
 
 The subquery selects both the ``Engineer`` and the ``Manager`` rows, and
 even though the outer query is against ``Manager``, we get a non ``Manager``
-object back::
+object back:
+
+.. sourcecode:: text
 
     SELECT anon_1.type AS anon_1_type, anon_1.id AS anon_1_id
     FROM (SELECT employee.type AS type, employee.id AS id
@@ -2557,7 +2623,9 @@ object back::
     2020-01-29 18:04:13,524 INFO sqlalchemy.engine.base.Engine ()
     [<__main__.Engineer object at 0x7f7f5b9a9810>, <__main__.Manager object at 0x7f7f5b9a9750>]
 
-The new behavior is that this condition raises an error::
+The new behavior is that this condition raises an error:
+
+.. sourcecode:: text
 
     sqlalchemy.exc.InvalidRequestError: Row with identity key
     (<class '__main__.Employee'>, (1,), None) can't be loaded into an object;
@@ -2572,7 +2640,9 @@ to construct an entity is made.
 In the case of single inheritance mapping, the change in behavior is slightly
 more involved;   if ``Engineer`` and ``Manager`` above are mapped with
 single table inheritance, in 1.3 the following query would be emitted and
-only a ``Manager`` object is returned::
+only a ``Manager`` object is returned:
+
+.. sourcecode:: text
 
     SELECT anon_1.type AS anon_1_type, anon_1.id AS anon_1_id
     FROM (SELECT employee.type AS type, employee.id AS id
@@ -2590,7 +2660,9 @@ to return additional rows where the columns that correspond to the inheriting
 entity are NULL, which is a valid use case.    The behavior is now equivalent
 to that of joined table inheritance, where it is assumed that the subquery
 returns the correct rows and an error is raised if an unexpected polymorphic
-identity is encountered::
+identity is encountered:
+
+.. sourcecode:: text
 
     SELECT anon_1.type AS anon_1_type, anon_1.id AS anon_1_id
     FROM (SELECT employee.type AS type, employee.id AS id
@@ -2609,10 +2681,14 @@ is to adjust the given subquery to correctly filter the rows based on the
 discriminator column::
 
     print(
-        s.query(Manager).select_entity_from(
-            s.query(Employee).filter(Employee.discriminator == 'manager').
-            subquery()).all()
+        s.query(Manager)
+        .select_entity_from(
+            s.query(Employee).filter(Employee.discriminator == "manager").subquery()
+        )
+        .all()
     )
+
+.. sourcecode:: sql
 
     SELECT anon_1.type AS anon_1_type, anon_1.id AS anon_1_id
     FROM (SELECT employee.type AS type, employee.id AS id
@@ -2695,7 +2771,9 @@ be cached before the VALUES are rendered.
 
 A quick test of the ``execute_values()`` approach using the
 ``bulk_inserts.py`` script in the :ref:`examples_performance` example
-suite reveals an approximate **fivefold performance increase**::
+suite reveals an approximate **fivefold performance increase**:
+
+.. sourcecode:: text
 
     $ python -m examples.performance bulk_inserts --test test_core_insert --num 100000 --dburl postgresql://scott:tiger@localhost/test
 
@@ -2818,8 +2896,11 @@ effect. When "optional" is used on a :class:`.Sequence` that is present in the
 integer primary key column of a table::
 
     Table(
-        "some_table", metadata,
-        Column("id", Integer, Sequence("some_seq", optional=True), primary_key=True)
+        "some_table",
+        metadata,
+        Column(
+            "id", Integer, Sequence("some_seq", start=1, optional=True), primary_key=True
+        ),
     )
 
 The above :class:`.Sequence` is only used for DDL and INSERT statements if the

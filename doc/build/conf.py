@@ -67,6 +67,7 @@ changelog_sections = [
     "orm declarative",
     "orm querying",
     "orm configuration",
+    "orm extensions",
     "examples",
     "engine",
     "sql",
@@ -109,7 +110,7 @@ changelog_render_pullreq = {
 
 changelog_render_changeset = "https://www.sqlalchemy.org/trac/changeset/%s"
 
-exclude_patterns = ["build", "**/unreleased*/*", "**/*_include.rst"]
+exclude_patterns = ["build", "**/unreleased*/*", "**/*_include.rst", ".venv"]
 
 autodoc_class_signature = "separated"
 
@@ -235,9 +236,9 @@ copyright = "2007-2022, the SQLAlchemy authors and contributors"  # noqa
 # The short X.Y version.
 version = "2.0"
 # The full version, including alpha/beta/rc tags.
-release = "2.0.0b1"
+release = "2.0.0b3"
 
-release_date = None
+release_date = "November 4, 2022"
 
 site_base = os.environ.get("RTD_SITE_BASE", "https://www.sqlalchemy.org")
 site_adapter_template = "docs_adapter.mako"

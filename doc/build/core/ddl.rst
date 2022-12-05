@@ -32,9 +32,11 @@ other DDL elements except it accepts a string which is the text to be emitted:
     event.listen(
         metadata,
         "after_create",
-        DDL("ALTER TABLE users ADD CONSTRAINT "
+        DDL(
+            "ALTER TABLE users ADD CONSTRAINT "
             "cst_user_name_length "
-            " CHECK (length(user_name) >= 8)")
+            " CHECK (length(user_name) >= 8)"
+        ),
     )
 
 A more comprehensive method of creating libraries of DDL constructs is to use
@@ -54,9 +56,10 @@ method.  For example, if we wanted to create a trigger but only on
 the PostgreSQL backend, we could invoke this as::
 
     mytable = Table(
-        'mytable', metadata,
-        Column('id', Integer, primary_key=True),
-        Column('data', String(50))
+        "mytable",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("data", String(50)),
     )
 
     func = DDL(
@@ -73,30 +76,18 @@ the PostgreSQL backend, we could invoke this as::
         "FOR EACH ROW EXECUTE PROCEDURE my_func();"
     )
 
-    event.listen(
-        mytable,
-        'after_create',
-        func.execute_if(dialect='postgresql')
-    )
+    event.listen(mytable, "after_create", func.execute_if(dialect="postgresql"))
 
-    event.listen(
-        mytable,
-        'after_create',
-        trigger.execute_if(dialect='postgresql')
-    )
+    event.listen(mytable, "after_create", trigger.execute_if(dialect="postgresql"))
 
 The :paramref:`.ExecutableDDLElement.execute_if.dialect` keyword also accepts a tuple
 of string dialect names::
 
     event.listen(
-        mytable,
-        "after_create",
-        trigger.execute_if(dialect=('postgresql', 'mysql'))
+        mytable, "after_create", trigger.execute_if(dialect=("postgresql", "mysql"))
     )
     event.listen(
-        mytable,
-        "before_drop",
-        trigger.execute_if(dialect=('postgresql', 'mysql'))
+        mytable, "before_drop", trigger.execute_if(dialect=("postgresql", "mysql"))
     )
 
 The :meth:`.ExecutableDDLElement.execute_if` method can also work against a callable
@@ -108,12 +99,14 @@ first looking within the PostgreSQL catalogs to see if it exists:
 
     def should_create(ddl, target, connection, **kw):
         row = connection.execute(
-            "select conname from pg_constraint where conname='%s'" %
-            ddl.element.name).scalar()
+            "select conname from pg_constraint where conname='%s'" % ddl.element.name
+        ).scalar()
         return not bool(row)
+
 
     def should_drop(ddl, target, connection, **kw):
         return not should_create(ddl, target, connection, **kw)
+
 
     event.listen(
         users,
@@ -121,28 +114,29 @@ first looking within the PostgreSQL catalogs to see if it exists:
         DDL(
             "ALTER TABLE users ADD CONSTRAINT "
             "cst_user_name_length CHECK (length(user_name) >= 8)"
-        ).execute_if(callable_=should_create)
+        ).execute_if(callable_=should_create),
     )
     event.listen(
         users,
         "before_drop",
-        DDL(
-            "ALTER TABLE users DROP CONSTRAINT cst_user_name_length"
-        ).execute_if(callable_=should_drop)
+        DDL("ALTER TABLE users DROP CONSTRAINT cst_user_name_length").execute_if(
+            callable_=should_drop
+        ),
     )
 
-    {sql}users.create(engine)
-    CREATE TABLE users (
+    users.create(engine)
+    {opensql}CREATE TABLE users (
         user_id SERIAL NOT NULL,
         user_name VARCHAR(40) NOT NULL,
         PRIMARY KEY (user_id)
     )
 
-    select conname from pg_constraint where conname='cst_user_name_length'
-    ALTER TABLE users ADD CONSTRAINT cst_user_name_length  CHECK (length(user_name) >= 8){stop}
+    SELECT conname FROM pg_constraint WHERE conname='cst_user_name_length'
+    ALTER TABLE users ADD CONSTRAINT cst_user_name_length  CHECK (length(user_name) >= 8)
+    {stop}
 
-    {sql}users.drop(engine)
-    select conname from pg_constraint where conname='cst_user_name_length'
+    users.drop(engine)
+    {opensql}SELECT conname FROM pg_constraint WHERE conname='cst_user_name_length'
     ALTER TABLE users DROP CONSTRAINT cst_user_name_length
     DROP TABLE users{stop}
 
@@ -157,9 +151,10 @@ one can use the :class:`.CreateTable` construct:
 .. sourcecode:: python+sql
 
     from sqlalchemy.schema import CreateTable
+
     with engine.connect() as conn:
-    {sql}    conn.execute(CreateTable(mytable))
-    CREATE TABLE mytable (
+        conn.execute(CreateTable(mytable))
+    {opensql}CREATE TABLE mytable (
         col1 INTEGER,
         col2 INTEGER,
         col3 INTEGER,
@@ -226,7 +221,7 @@ elements will be included in the CREATE TABLE sequence only against the
 PostgreSQL dialect.  If we run ``meta.create_all()`` against the SQLite
 dialect, for example, neither construct will be included:
 
-.. sourcecode:: python+sql
+.. sourcecode:: pycon+sql
 
     >>> from sqlalchemy import create_engine
     >>> sqlite_engine = create_engine("sqlite+pysqlite://", echo=True)
@@ -248,10 +243,12 @@ However, if we run the same commands against a PostgreSQL database, we will
 see inline DDL for the CHECK constraint as well as a separate CREATE
 statement emitted for the index:
 
-.. sourcecode:: python+sql
+.. sourcecode:: pycon+sql
 
     >>> from sqlalchemy import create_engine
-    >>> postgresql_engine = create_engine("postgresql+psycopg2://scott:tiger@localhost/test", echo=True)
+    >>> postgresql_engine = create_engine(
+    ...     "postgresql+psycopg2://scott:tiger@localhost/test", echo=True
+    ... )
     >>> meta.create_all(postgresql_engine)
     {opensql}BEGIN (implicit)
     select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where pg_catalog.pg_table_is_visible(c.oid) and relname=%(name)s
@@ -286,10 +283,8 @@ to inspect the database versioning information would best use the given
 .. sourcecode:: python+sql
 
     def only_pg_14(ddl_element, target, bind, dialect, **kw):
-        return (
-            dialect.name == "postgresql" and
-            dialect.server_version_info >= (14,)
-        )
+        return dialect.name == "postgresql" and dialect.server_version_info >= (14,)
+
 
     my_table = Table(
         "my_table",

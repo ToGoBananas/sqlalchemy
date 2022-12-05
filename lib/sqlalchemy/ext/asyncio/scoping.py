@@ -44,10 +44,10 @@ if TYPE_CHECKING:
     from ...engine import RowMapping
     from ...engine.interfaces import _CoreAnyExecuteParams
     from ...engine.interfaces import _CoreSingleExecuteParams
-    from ...engine.interfaces import _ExecuteOptionsParameter
     from ...engine.result import ScalarResult
     from ...orm._typing import _IdentityKeyType
     from ...orm._typing import _O
+    from ...orm._typing import OrmExecuteOptionsParameter
     from ...orm.interfaces import ORMOption
     from ...orm.session import _BindArguments
     from ...orm.session import _EntityBindKey
@@ -219,7 +219,7 @@ class async_scoped_session(Generic[_AS]):
         populate_existing: bool = False,
         with_for_update: Optional[ForUpdateArg] = None,
         identity_token: Optional[Any] = None,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
     ) -> Optional[_O]:
         r"""Return an instance based on the given primary key identifier,
         or ``None`` if not found.
@@ -301,7 +301,7 @@ class async_scoped_session(Generic[_AS]):
         return self._proxied.__iter__()
 
     def add(self, instance: object, _warn: bool = True) -> None:
-        r"""Place an object in the ``Session``.
+        r"""Place an object into this :class:`_orm.Session`.
 
         .. container:: class_bases
 
@@ -313,11 +313,26 @@ class async_scoped_session(Generic[_AS]):
             Proxied for the :class:`_orm.Session` class on
             behalf of the :class:`_asyncio.AsyncSession` class.
 
-        Its state will be persisted to the database on the next flush
-        operation.
+        Objects that are in the :term:`transient` state when passed to the
+        :meth:`_orm.Session.add` method will move to the
+        :term:`pending` state, until the next flush, at which point they
+        will move to the :term:`persistent` state.
 
-        Repeated calls to ``add()`` will be ignored. The opposite of ``add()``
-        is ``expunge()``.
+        Objects that are in the :term:`detached` state when passed to the
+        :meth:`_orm.Session.add` method will move to the :term:`persistent`
+        state directly.
+
+        If the transaction used by the :class:`_orm.Session` is rolled back,
+        objects which were transient when they were passed to
+        :meth:`_orm.Session.add` will be moved back to the
+        :term:`transient` state, and will no longer be present within this
+        :class:`_orm.Session`.
+
+        .. seealso::
+
+            :meth:`_orm.Session.add_all`
+
+            :ref:`session_adding` - at :ref:`session_basics`
 
 
 
@@ -326,7 +341,7 @@ class async_scoped_session(Generic[_AS]):
         return self._proxied.add(instance, _warn=_warn)
 
     def add_all(self, instances: Iterable[object]) -> None:
-        r"""Add the given collection of instances to this ``Session``.
+        r"""Add the given collection of instances to this :class:`_orm.Session`.
 
         .. container:: class_bases
 
@@ -337,6 +352,16 @@ class async_scoped_session(Generic[_AS]):
 
             Proxied for the :class:`_orm.Session` class on
             behalf of the :class:`_asyncio.AsyncSession` class.
+
+        See the documentation for :meth:`_orm.Session.add` for a general
+        behavioral description.
+
+        .. seealso::
+
+            :meth:`_orm.Session.add`
+
+            :ref:`session_adding` - at :ref:`session_basics`
+
 
 
         """  # noqa: E501
@@ -493,7 +518,7 @@ class async_scoped_session(Generic[_AS]):
         statement: TypedReturnsRows[_T],
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -506,7 +531,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         _parent_execute_state: Optional[Any] = None,
         _add_event: Optional[Any] = None,
@@ -518,7 +543,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> Result[Any]:
@@ -955,7 +980,7 @@ class async_scoped_session(Generic[_AS]):
         statement: TypedReturnsRows[Tuple[_T]],
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> Optional[_T]:
@@ -967,7 +992,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> Any:
@@ -978,7 +1003,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> Any:
@@ -1010,7 +1035,7 @@ class async_scoped_session(Generic[_AS]):
         statement: TypedReturnsRows[Tuple[_T]],
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> ScalarResult[_T]:
@@ -1022,7 +1047,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> ScalarResult[Any]:
@@ -1033,7 +1058,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> ScalarResult[Any]:
@@ -1071,7 +1096,7 @@ class async_scoped_session(Generic[_AS]):
         statement: TypedReturnsRows[_T],
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> AsyncResult[_T]:
@@ -1083,7 +1108,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> AsyncResult[Any]:
@@ -1094,7 +1119,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreAnyExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> AsyncResult[Any]:
@@ -1123,7 +1148,7 @@ class async_scoped_session(Generic[_AS]):
         statement: TypedReturnsRows[Tuple[_T]],
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> AsyncScalarResult[_T]:
@@ -1135,7 +1160,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> AsyncScalarResult[Any]:
@@ -1146,7 +1171,7 @@ class async_scoped_session(Generic[_AS]):
         statement: Executable,
         params: Optional[_CoreSingleExecuteParams] = None,
         *,
-        execution_options: _ExecuteOptionsParameter = util.EMPTY_DICT,
+        execution_options: OrmExecuteOptionsParameter = util.EMPTY_DICT,
         bind_arguments: Optional[_BindArguments] = None,
         **kw: Any,
     ) -> AsyncScalarResult[Any]:

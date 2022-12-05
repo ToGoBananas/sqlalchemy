@@ -1230,7 +1230,7 @@ class CompoundTest(fixtures.TablesTest):
 
     @testing.crashes("oracle", "FIXME: unknown, verify not fails_on")
     @testing.fails_on(
-        testing.requires._mysql_not_mariadb_104, "FIXME: unknown"
+        testing.requires._mysql_not_mariadb_104_not_mysql8031, "FIXME: unknown"
     )
     @testing.fails_on("sqlite", "FIXME: unknown")
     def test_union_all(self, connection):
@@ -1351,7 +1351,7 @@ class CompoundTest(fixtures.TablesTest):
         eq_(found2, wanted)
 
     @testing.fails_on(
-        ["sqlite", testing.requires._mysql_not_mariadb_104],
+        ["sqlite", testing.requires._mysql_not_mariadb_104_not_mysql8031],
         "Can't handle this style of nesting",
     )
     @testing.requires.except_
@@ -1389,7 +1389,7 @@ class CompoundTest(fixtures.TablesTest):
 
     @testing.requires.intersect
     @testing.fails_on(
-        ["sqlite", testing.requires._mysql_not_mariadb_104],
+        ["sqlite", testing.requires._mysql_not_mariadb_104_not_mysql8031],
         "sqlite can't handle leading parenthesis",
     )
     def test_intersect_unions(self, connection):
@@ -1586,10 +1586,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(t1.c.name == "t1 #10")
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1599,10 +1597,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(t1.c.t1_id < 12)
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1617,10 +1613,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(t2.c.name == "t2 #20")
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1630,10 +1624,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(t2.c.t2_id < 29)
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1648,10 +1640,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(t3.c.name == "t3 #30")
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1661,10 +1651,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(t3.c.t3_id < 39)
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1692,10 +1680,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(and_(t1.c.t1_id < 19, t3.c.t3_id < 39))
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1711,10 +1697,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(and_(t1.c.name == "t1 #10", t2.c.name == "t2 #20"))
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1724,10 +1708,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(and_(t1.c.t1_id < 12, t2.c.t2_id < 39))
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1748,10 +1730,8 @@ class JoinTest(fixtures.TablesTest):
                     )
                 )
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1761,10 +1741,8 @@ class JoinTest(fixtures.TablesTest):
                 select(t1.c.t1_id, t2.c.t2_id, t3.c.t3_id)
                 .where(and_(t1.c.t1_id < 19, t2.c.t2_id < 29, t3.c.t3_id < 39))
                 .select_from(
-                    (
-                        t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
-                            t3, criteria
-                        )
+                    t1.outerjoin(t2, t1.c.t1_id == t2.c.t1_id).outerjoin(
+                        t3, criteria
                     )
                 )
             )
@@ -1791,7 +1769,7 @@ class JoinTest(fixtures.TablesTest):
                 .where(
                     t1.c.name == "t1 #10",
                 )
-                .select_from((t1.join(t2).outerjoin(t3, criteria)))
+                .select_from(t1.join(t2).outerjoin(t3, criteria))
             )
             self.assertRows(expr, [(10, 20, 30)])
 
@@ -1800,7 +1778,7 @@ class JoinTest(fixtures.TablesTest):
                 .where(
                     t2.c.name == "t2 #20",
                 )
-                .select_from((t1.join(t2).outerjoin(t3, criteria)))
+                .select_from(t1.join(t2).outerjoin(t3, criteria))
             )
             self.assertRows(expr, [(10, 20, 30)])
 
@@ -1809,7 +1787,7 @@ class JoinTest(fixtures.TablesTest):
                 .where(
                     t3.c.name == "t3 #30",
                 )
-                .select_from((t1.join(t2).outerjoin(t3, criteria)))
+                .select_from(t1.join(t2).outerjoin(t3, criteria))
             )
             self.assertRows(expr, [(10, 20, 30)])
 
@@ -1818,7 +1796,7 @@ class JoinTest(fixtures.TablesTest):
                 .where(
                     and_(t1.c.name == "t1 #10", t2.c.name == "t2 #20"),
                 )
-                .select_from((t1.join(t2).outerjoin(t3, criteria)))
+                .select_from(t1.join(t2).outerjoin(t3, criteria))
             )
             self.assertRows(expr, [(10, 20, 30)])
 
@@ -1827,7 +1805,7 @@ class JoinTest(fixtures.TablesTest):
                 .where(
                     and_(t2.c.name == "t2 #20", t3.c.name == "t3 #30"),
                 )
-                .select_from((t1.join(t2).outerjoin(t3, criteria)))
+                .select_from(t1.join(t2).outerjoin(t3, criteria))
             )
             self.assertRows(expr, [(10, 20, 30)])
 
@@ -1840,7 +1818,7 @@ class JoinTest(fixtures.TablesTest):
                         t3.c.name == "t3 #30",
                     ),
                 )
-                .select_from((t1.join(t2).outerjoin(t3, criteria)))
+                .select_from(t1.join(t2).outerjoin(t3, criteria))
             )
             self.assertRows(expr, [(10, 20, 30)])
 

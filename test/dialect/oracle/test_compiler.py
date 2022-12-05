@@ -1,4 +1,3 @@
-# coding: utf-8
 from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import cast
@@ -9,6 +8,7 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import func
 from sqlalchemy import Identity
 from sqlalchemy import Index
+from sqlalchemy import insert
 from sqlalchemy import Integer
 from sqlalchemy import literal
 from sqlalchemy import literal_column
@@ -42,6 +42,7 @@ from sqlalchemy.testing import fixtures
 from sqlalchemy.testing.assertions import eq_ignore_whitespace
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
+from sqlalchemy.types import TypeEngine
 
 
 class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
@@ -1359,6 +1360,35 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "t1.c2, t1.c3 INTO :ret_0, :ret_1",
         )
 
+    @testing.fixture
+    def column_expression_fixture(self):
+        class MyString(TypeEngine):
+            def column_expression(self, column):
+                return func.lower(column)
+
+        return table(
+            "some_table", column("name", String), column("value", MyString)
+        )
+
+    @testing.combinations("columns", "table", argnames="use_columns")
+    def test_plain_returning_column_expression(
+        self, column_expression_fixture, use_columns
+    ):
+        """test #8770"""
+        table1 = column_expression_fixture
+
+        if use_columns == "columns":
+            stmt = insert(table1).returning(table1)
+        else:
+            stmt = insert(table1).returning(table1.c.name, table1.c.value)
+
+        self.assert_compile(
+            stmt,
+            "INSERT INTO some_table (name, value) VALUES (:name, :value) "
+            "RETURNING some_table.name, lower(some_table.value) "
+            "INTO :ret_0, :ret_1",
+        )
+
     def test_returning_insert_computed(self):
         m = MetaData()
         t1 = Table(
@@ -1622,7 +1652,7 @@ class SequenceTest(fixtures.TestBase, AssertsCompiledSQL):
             ddl.CreateSequence(
                 Sequence("my_seq", nomaxvalue=True, nominvalue=True)
             ),
-            "CREATE SEQUENCE my_seq START WITH 1 NOMINVALUE NOMAXVALUE",
+            "CREATE SEQUENCE my_seq NOMINVALUE NOMAXVALUE",
             dialect=oracle.OracleDialect(),
         )
 
@@ -1740,11 +1770,11 @@ class RegexpTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             self.table.c.myid.regexp_replace(
                 "pattern", "replacement", flags="ig"
             ),
-            "REGEXP_REPLACE(mytable.myid, :myid_1, :myid_3, :myid_2)",
+            "REGEXP_REPLACE(mytable.myid, :myid_1, :myid_2, :myid_3)",
             checkparams={
                 "myid_1": "pattern",
-                "myid_3": "replacement",
-                "myid_2": "ig",
+                "myid_2": "replacement",
+                "myid_3": "ig",
             },
         )
 

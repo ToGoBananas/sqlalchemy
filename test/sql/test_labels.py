@@ -2,7 +2,10 @@ from sqlalchemy import bindparam
 from sqlalchemy import Boolean
 from sqlalchemy import cast
 from sqlalchemy import exc as exceptions
+from sqlalchemy import func
+from sqlalchemy import insert
 from sqlalchemy import Integer
+from sqlalchemy import literal_column
 from sqlalchemy import MetaData
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -20,6 +23,7 @@ from sqlalchemy.sql.elements import _truncated_label
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.elements import WrapsColumnExpression
 from sqlalchemy.sql.selectable import LABEL_STYLE_NONE
+from sqlalchemy.sql.visitors import prefix_anon_map
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import AssertsCompiledSQL
@@ -30,6 +34,7 @@ from sqlalchemy.testing import is_
 from sqlalchemy.testing import mock
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
+from sqlalchemy.types import TypeEngine
 
 IDENT_LENGTH = 29
 
@@ -790,7 +795,7 @@ class LabelLengthTest(fixtures.TestBase, AssertsCompiledSQL):
         compiled = stmt.compile(dialect=dialect)
         eq_(
             set(compiled._create_result_map()),
-            set(["tablename_columnn_1", "tablename_columnn_2"]),
+            {"tablename_columnn_1", "tablename_columnn_2"},
         )
 
 
@@ -824,6 +829,100 @@ class ColExprLabelTest(fixtures.TestBase, AssertsCompiledSQL):
             )
 
         return SomeColThing
+
+    @testing.fixture
+    def compiler_column_fixture(self):
+        return self._fixture()
+
+    @testing.fixture
+    def column_expression_fixture(self):
+        class MyString(TypeEngine):
+            def column_expression(self, column):
+                return func.lower(column)
+
+        return table(
+            "some_table", column("name", String), column("value", MyString)
+        )
+
+    def test_plain_select_compiler_expression(self, compiler_column_fixture):
+        expr = compiler_column_fixture
+        table1 = self.table1
+
+        self.assert_compile(
+            select(
+                table1.c.name,
+                expr(table1.c.value),
+            ),
+            "SELECT some_table.name, SOME_COL_THING(some_table.value) "
+            "AS value FROM some_table",
+        )
+
+    def test_plain_select_column_expression(self, column_expression_fixture):
+        table1 = column_expression_fixture
+
+        self.assert_compile(
+            select(table1),
+            "SELECT some_table.name, lower(some_table.value) AS value "
+            "FROM some_table",
+        )
+
+    def test_plain_returning_compiler_expression(
+        self, compiler_column_fixture
+    ):
+        expr = compiler_column_fixture
+        table1 = self.table1
+
+        self.assert_compile(
+            insert(table1).returning(
+                table1.c.name,
+                expr(table1.c.value),
+            ),
+            "INSERT INTO some_table (name, value) VALUES (:name, :value) "
+            "RETURNING some_table.name, "
+            "SOME_COL_THING(some_table.value) AS value",
+        )
+
+    @testing.combinations("columns", "table", argnames="use_columns")
+    def test_plain_returning_column_expression(
+        self, column_expression_fixture, use_columns
+    ):
+        table1 = column_expression_fixture
+
+        if use_columns == "columns":
+            stmt = insert(table1).returning(table1)
+        else:
+            stmt = insert(table1).returning(table1.c.name, table1.c.value)
+
+        self.assert_compile(
+            stmt,
+            "INSERT INTO some_table (name, value) VALUES (:name, :value) "
+            "RETURNING some_table.name, lower(some_table.value) AS value",
+        )
+
+    def test_select_dupes_column_expression(self, column_expression_fixture):
+        table1 = column_expression_fixture
+
+        self.assert_compile(
+            select(table1.c.name, table1.c.value, table1.c.value),
+            "SELECT some_table.name, lower(some_table.value) AS value, "
+            "lower(some_table.value) AS value__1 FROM some_table",
+        )
+
+    def test_returning_dupes_column_expression(
+        self, column_expression_fixture
+    ):
+        table1 = column_expression_fixture
+
+        stmt = insert(table1).returning(
+            table1.c.name, table1.c.value, table1.c.value
+        )
+
+        self.assert_compile(
+            stmt,
+            "INSERT INTO some_table (name, value) VALUES (:name, :value) "
+            "RETURNING some_table.name, lower(some_table.value) AS value, "
+            "lower(some_table.value) AS value__1",
+        )
 
     def test_column_auto_label_dupes_label_style_none(self):
         expr = self._fixture()
@@ -1038,3 +1137,35 @@ class ColExprLabelTest(fixtures.TestBase, AssertsCompiledSQL):
             "SOME_COL_THING(some_table.value) "
             "AS some_table_value FROM some_table",
         )
+
+    @testing.combinations(
+        # the resulting strings are completely arbitrary and are not
+        # exposed in SQL with current implementations.  we want to
+        # only assert that the operation doesn't fail.  It's safe to
+        # change the assertion cases for this test if the label escaping
+        # format changes
+        (literal_column("'(1,2]'"), "'_1,2]'_1"),
+        (literal_column("))"), "__1"),
+        (literal_column("'%('"), "'_'_1"),
+    )
+    def test_labels_w_strformat_chars_in_isolation(self, test_case, expected):
+        """test #8724"""
+
+        pa = prefix_anon_map()
+        eq_(test_case._anon_key_label % pa, expected)
+
+    @testing.combinations(
+        (
+            select(literal_column("'(1,2]'"), literal_column("'(1,2]'")),
+            "SELECT '(1,2]', '(1,2]'",
+        ),
+        (select(literal_column("))"), literal_column("))")), "SELECT )), ))"),
+        (
+            select(literal_column("'%('"), literal_column("'%('")),
+            "SELECT '%(', '%('",
+        ),
+    )
+    def test_labels_w_strformat_chars_in_statements(self, test_case, expected):
+        """test #8724"""
+
+        self.assert_compile(test_case, expected)

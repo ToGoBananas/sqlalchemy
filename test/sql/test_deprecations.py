@@ -1,5 +1,3 @@
-#! coding: utf-8
-
 from sqlalchemy import alias
 from sqlalchemy import and_
 from sqlalchemy import bindparam
@@ -32,11 +30,13 @@ from sqlalchemy.sql import visitors
 from sqlalchemy.sql.selectable import SelectStatementGrouping
 from sqlalchemy.testing import assertions
 from sqlalchemy.testing import AssertsCompiledSQL
+from sqlalchemy.testing import config
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import mock
+from sqlalchemy.testing.provision import normalize_sequence
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
 
@@ -603,7 +603,9 @@ class PKIncrementTest(fixtures.TablesTest):
             Column(
                 "id",
                 Integer,
-                Sequence("ai_id_seq", optional=True),
+                normalize_sequence(
+                    config, Sequence("ai_id_seq", optional=True)
+                ),
                 primary_key=True,
             ),
             Column("int1", Integer),

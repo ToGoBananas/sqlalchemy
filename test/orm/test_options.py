@@ -101,8 +101,8 @@ class PathTest:
 
         assert_paths = [k[1] for k in attr]
         eq_(
-            set([p for p in assert_paths]),
-            set([self._make_path(p) for p in paths]),
+            {p for p in assert_paths},
+            {self._make_path(p) for p in paths},
         )
 
 
@@ -941,7 +941,7 @@ class OptionsNoPropTest(_fixtures.FixtureTest):
             lambda: (joinedload(Keyword.id).joinedload(Item.keywords),),
             'Can\'t apply "joined loader" strategy to property "Keyword.id", '
             'which is a "column property"; this loader strategy is intended '
-            'to be used with a "relationship".',
+            'to be used with a "relationship property".',
         )
 
     def test_option_against_wrong_multi_entity_type_attr_two(self):
@@ -951,8 +951,9 @@ class OptionsNoPropTest(_fixtures.FixtureTest):
             [Keyword, Item],
             lambda: (joinedload(Keyword.keywords).joinedload(Item.keywords),),
             'Can\'t apply "joined loader" strategy to property '
-            '"Keyword.keywords", which is a "column property"; this loader '
-            'strategy is intended to be used with a "relationship".',
+            '"Keyword.keywords", which is a "mapped sql expression"; '
+            "this loader "
+            'strategy is intended to be used with a "relationship property".',
         )
 
     def test_option_against_wrong_multi_entity_type_attr_three(self):

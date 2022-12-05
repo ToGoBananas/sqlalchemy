@@ -35,7 +35,7 @@ A simple example of :class:`_sql.Insert` illustrating the target table
 and the VALUES clause at once::
 
     >>> from sqlalchemy import insert
-    >>> stmt = insert(user_table).values(name='spongebob', fullname="Spongebob Squarepants")
+    >>> stmt = insert(user_table).values(name="spongebob", fullname="Spongebob Squarepants")
 
 The above ``stmt`` variable is an instance of :class:`_sql.Insert`.  Most
 SQL expressions can be stringified in place as a means to see the general
@@ -112,7 +112,7 @@ in fact has some variants that allow for special forms such as multiple rows in
 one statement and insertion of SQL expressions.   However the usual way that
 :class:`_sql.Insert` is used is such that the VALUES clause is generated
 automatically from the parameters passed to the
-:meth:`_future.Connection.execute` method; below we INSERT two more rows to
+:meth:`_engine.Connection.execute` method; below we INSERT two more rows to
 illustrate this:
 
 .. sourcecode:: pycon+sql
@@ -122,8 +122,8 @@ illustrate this:
     ...         insert(user_table),
     ...         [
     ...             {"name": "sandy", "fullname": "Sandy Cheeks"},
-    ...             {"name": "patrick", "fullname": "Patrick Star"}
-    ...         ]
+    ...             {"name": "patrick", "fullname": "Patrick Star"},
+    ...         ],
     ...     )
     ...     conn.commit()
     {opensql}BEGIN (implicit)
@@ -134,9 +134,9 @@ illustrate this:
 The execution above features "executemany" form first illustrated at
 :ref:`tutorial_multiple_parameters`, however unlike when using the
 :func:`_sql.text` construct, we didn't have to spell out any SQL.
-By passing a dictionary or list of dictionaries to the :meth:`_future.Connection.execute`
+By passing a dictionary or list of dictionaries to the :meth:`_engine.Connection.execute`
 method in conjunction with the :class:`_sql.Insert` construct, the
-:class:`_future.Connection` ensures that the column names which are passed
+:class:`_engine.Connection` ensures that the column names which are passed
 will be expressed in the VALUES clause of the :class:`_sql.Insert`
 construct automatically.
 
@@ -167,19 +167,22 @@ construct automatically.
 
         >>> from sqlalchemy import select, bindparam
         >>> scalar_subq = (
-        ...     select(user_table.c.id).
-        ...     where(user_table.c.name==bindparam('username')).
-        ...     scalar_subquery()
+        ...     select(user_table.c.id)
+        ...     .where(user_table.c.name == bindparam("username"))
+        ...     .scalar_subquery()
         ... )
 
         >>> with engine.connect() as conn:
         ...     result = conn.execute(
         ...         insert(address_table).values(user_id=scalar_subq),
         ...         [
-        ...             {"username": 'spongebob', "email_address": "spongebob@sqlalchemy.org"},
-        ...             {"username": 'sandy', "email_address": "sandy@sqlalchemy.org"},
-        ...             {"username": 'sandy', "email_address": "sandy@squirrelpower.org"},
-        ...         ]
+        ...             {
+        ...                 "username": "spongebob",
+        ...                 "email_address": "spongebob@sqlalchemy.org",
+        ...             },
+        ...             {"username": "sandy", "email_address": "sandy@sqlalchemy.org"},
+        ...             {"username": "sandy", "email_address": "sandy@squirrelpower.org"},
+        ...         ],
         ...     )
         ...     conn.commit()
         {opensql}BEGIN (implicit)
@@ -221,7 +224,9 @@ method; in this case, the :class:`_engine.Result`
 object that's returned when the statement is executed has rows which
 can be fetched::
 
-    >>> insert_stmt = insert(address_table).returning(address_table.c.id, address_table.c.email_address)
+    >>> insert_stmt = insert(address_table).returning(
+    ...     address_table.c.id, address_table.c.email_address
+    ... )
     >>> print(insert_stmt)
     {opensql}INSERT INTO address (id, user_id, email_address)
     VALUES (:id, :user_id, :email_address)

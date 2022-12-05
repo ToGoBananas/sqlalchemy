@@ -55,15 +55,13 @@ to the mapped table, then establish it as the ``version_id_col`` within the
 mapper options::
 
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
         id = mapped_column(Integer, primary_key=True)
         version_id = mapped_column(Integer, nullable=False)
         name = mapped_column(String(50), nullable=False)
 
-        __mapper_args__ = {
-            "version_id_col": version_id
-        }
+        __mapper_args__ = {"version_id_col": version_id}
 
 .. note::  It is **strongly recommended** that the ``version_id`` column
    be made NOT NULL.  The versioning feature **does not support** a NULL
@@ -73,11 +71,13 @@ Above, the ``User`` mapping tracks integer versions using the column
 ``version_id``.   When an object of type ``User`` is first flushed, the
 ``version_id`` column will be given a value of "1".   Then, an UPDATE
 of the table later on will always be emitted in a manner similar to the
-following::
+following:
+
+.. sourcecode:: sql
 
     UPDATE user SET version_id=:version_id, name=:name
     WHERE user.id = :user_id AND user.version_id = :user_version_id
-    {"name": "new name", "version_id": 2, "user_id": 1, "user_version_id": 1}
+    -- {"name": "new name", "version_id": 2, "user_id": 1, "user_version_id": 1}
 
 The above UPDATE statement is updating the row that not only matches
 ``user.id = 1``, it also is requiring that ``user.version_id = 1``, where "1"
@@ -105,16 +105,17 @@ support a native GUID type, but we illustrate here using a simple string)::
 
     import uuid
 
+
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
         id = mapped_column(Integer, primary_key=True)
         version_uuid = mapped_column(String(32), nullable=False)
         name = mapped_column(String(50), nullable=False)
 
         __mapper_args__ = {
-            'version_id_col':version_uuid,
-            'version_id_generator':lambda version: uuid.uuid4().hex
+            "version_id_col": version_uuid,
+            "version_id_generator": lambda version: uuid.uuid4().hex,
         }
 
 The persistence engine will call upon ``uuid.uuid4()`` each time a
@@ -148,17 +149,15 @@ class as follows::
 
     from sqlalchemy import FetchedValue
 
+
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
         id = mapped_column(Integer, primary_key=True)
         name = mapped_column(String(50), nullable=False)
         xmin = mapped_column("xmin", String, system=True, server_default=FetchedValue())
 
-        __mapper_args__ = {
-            'version_id_col': xmin,
-            'version_id_generator': False
-        }
+        __mapper_args__ = {"version_id_col": xmin, "version_id_generator": False}
 
 With the above mapping, the ORM will rely upon the ``xmin`` column for
 automatically providing the new value of the version id counter.
@@ -184,23 +183,27 @@ otherwise if emitting a SELECT statement afterwards, there is still a potential
 race condition where the version counter may change before it can be fetched.
 
 When the target database supports RETURNING, an INSERT statement for our ``User`` class will look
-like this::
+like this:
+
+.. sourcecode:: sql
 
     INSERT INTO "user" (name) VALUES (%(name)s) RETURNING "user".id, "user".xmin
-    {'name': 'ed'}
+    -- {'name': 'ed'}
 
 Where above, the ORM can acquire any newly generated primary key values along
 with server-generated version identifiers in one statement.   When the backend
 does not support RETURNING, an additional SELECT must be emitted for **every**
 INSERT and UPDATE, which is much less efficient, and also introduces the possibility of
-missed version counters::
+missed version counters:
+
+.. sourcecode:: sql
 
     INSERT INTO "user" (name) VALUES (%(name)s)
-    {'name': 'ed'}
+    -- {'name': 'ed'}
 
     SELECT "user".version_id AS user_version_id FROM "user" where
     "user".id = :param_1
-    {"param_1": 1}
+    -- {"param_1": 1}
 
 It is *strongly recommended* that server side version counters only be used
 when absolutely necessary and only on backends that support :term:`RETURNING`,
@@ -221,25 +224,24 @@ at our choosing::
 
     import uuid
 
+
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
         id = mapped_column(Integer, primary_key=True)
         version_uuid = mapped_column(String(32), nullable=False)
         name = mapped_column(String(50), nullable=False)
 
-        __mapper_args__ = {
-            'version_id_col':version_uuid,
-            'version_id_generator': False
-        }
+        __mapper_args__ = {"version_id_col": version_uuid, "version_id_generator": False}
 
-    u1 = User(name='u1', version_uuid=uuid.uuid4())
+
+    u1 = User(name="u1", version_uuid=uuid.uuid4())
 
     session.add(u1)
 
     session.commit()
 
-    u1.name = 'u2'
+    u1.name = "u2"
     u1.version_uuid = uuid.uuid4()
 
     session.commit()
@@ -251,7 +253,7 @@ for schemes where only certain classes of UPDATE are sensitive to concurrency
 issues::
 
     # will leave version_uuid unchanged
-    u1.name = 'u3'
+    u1.name = "u3"
     session.commit()
 
 .. versionadded:: 0.9.0

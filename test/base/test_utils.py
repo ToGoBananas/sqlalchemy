@@ -1,7 +1,6 @@
-#! coding: utf-8
-
 import copy
 import inspect
+from pathlib import Path
 import pickle
 import sys
 
@@ -33,6 +32,8 @@ from sqlalchemy.util import langhelpers
 from sqlalchemy.util import preloaded
 from sqlalchemy.util import WeakSequence
 from sqlalchemy.util._collections import merge_lists_w_ordering
+from sqlalchemy.util._has_cy import _import_cy_extensions
+from sqlalchemy.util._has_cy import HAS_CYEXTENSION
 
 
 class WeakSequenceTest(fixtures.TestBase):
@@ -340,6 +341,23 @@ class ImmutableDictTest(fixtures.TestBase):
         i2 = util.immutabledict({"a": 42, 42: "a"})
         eq_(str(i2), "immutabledict({'a': 42, 42: 'a'})")
 
+    @testing.requires.python39
+    def test_pep584(self):
+        i = util.immutabledict({"a": 2})
+        with expect_raises_message(TypeError, "object is immutable"):
+            i |= {"b": 42}
+        eq_(i, {"a": 2})
+
+        i2 = i | {"x": 3}
+        eq_(i, {"a": 2})
+        eq_(i2, {"a": 2, "x": 3})
+        is_true(isinstance(i2, util.immutabledict))
+
+        i2 = {"x": 3} | i2
+        eq_(i, {"a": 2})
+        eq_(i2, {"a": 2, "x": 3})
+        is_true(isinstance(i2, util.immutabledict))
+
 
 class ImmutableTest(fixtures.TestBase):
     @combinations(util.immutabledict({1: 2, 3: 4}), util.FacadeDict({2: 3}))
@@ -523,7 +541,7 @@ class ToListTest(fixtures.TestBase):
         eq_(util.to_list("xyz"), ["xyz"])
 
     def test_from_set(self):
-        spec = util.to_list(set([1, 2, 3]))
+        spec = util.to_list({1, 2, 3})
         assert isinstance(spec, list)
         eq_(sorted(spec), [1, 2, 3])
 
@@ -547,14 +565,31 @@ class ToListTest(fixtures.TestBase):
 
 class ColumnCollectionCommon(testing.AssertsCompiledSQL):
     def _assert_collection_integrity(self, coll):
-        eq_(coll._colset, set(c for k, c in coll._collection))
+        eq_(coll._colset, {c for k, c, _ in coll._collection})
         d = {}
-        for k, col in coll._collection:
+        for k, col, _ in coll._collection:
             d.setdefault(k, (k, col))
         d.update(
-            {idx: (k, col) for idx, (k, col) in enumerate(coll._collection)}
+            {idx: (k, col) for idx, (k, col, _) in enumerate(coll._collection)}
         )
         eq_(coll._index, d)
+
+        if not coll._proxy_index:
+            coll._init_proxy_index()
+
+        all_metrics = {
+            metrics for mm in coll._proxy_index.values() for metrics in mm
+        }
+        eq_(
+            all_metrics,
+            {m for (_, _, m) in coll._collection},
+        )
+
+        for mm in all_metrics:
+            for eps_col in mm.get_expanded_proxy_set():
+                assert mm in coll._proxy_index[eps_col]
+                for mm_ in coll._proxy_index[eps_col]:
+                    assert eps_col in mm_.get_expanded_proxy_set()
 
     def test_keys(self):
         c1, c2, c3 = sql.column("c1"), sql.column("c2"), sql.column("c3")
@@ -1927,7 +1962,7 @@ class IdentitySetTest(fixtures.TestBase):
             assert True
 
         try:
-            s = set([o1, o2])
+            s = {o1, o2}
             s |= ids
             assert False
         except TypeError:
@@ -1982,7 +2017,7 @@ class OrderedIdentitySetTest(fixtures.TestBase):
 
 
 class DictlikeIteritemsTest(fixtures.TestBase):
-    baseline = set([("a", 1), ("b", 2), ("c", 3)])
+    baseline = {("a", 1), ("b", 2), ("c", 3)}
 
     def _ok(self, instance):
         iterator = util.dictlike_iteritems(instance)
@@ -2326,17 +2361,92 @@ class SymbolTest(fixtures.TestBase):
 
     def test_fast_int_flag(self):
         class Enum(FastIntFlag):
-            sym1 = 1
-            sym2 = 2
+            fi_sym1 = 1
+            fi_sym2 = 2
 
-            sym3 = 3
+            fi_sym3 = 3
 
-        assert Enum.sym1 is not Enum.sym3
-        assert Enum.sym1 != Enum.sym3
+        assert Enum.fi_sym1 is not Enum.fi_sym3
+        assert Enum.fi_sym1 != Enum.fi_sym3
 
-        assert Enum.sym1.name == "sym1"
+        assert Enum.fi_sym1.name == "fi_sym1"
 
-        eq_(list(Enum), [Enum.sym1, Enum.sym2, Enum.sym3])
+        # modified for #8783
+        eq_(
+            list(Enum.__members__.values()),
+            [Enum.fi_sym1, Enum.fi_sym2, Enum.fi_sym3],
+        )
+
+    def test_fast_int_flag_still_global(self):
+        """FastIntFlag still causes elements to be global symbols.
+
+        This is to support pickling.  There are likely other ways to
+        achieve this, however this is what we have for now.
+
+        """
+
+        class Enum1(FastIntFlag):
+            fi_sym1 = 1
+            fi_sym2 = 2
+
+        class Enum2(FastIntFlag):
+            fi_sym1 = 1
+            fi_sym2 = 2
+
+        # they are global
+        assert Enum1.fi_sym1 is Enum2.fi_sym1
+
+    def test_fast_int_flag_dont_allow_conflicts(self):
+        """FastIntFlag still causes elements to be global symbols.
+
+        While we do this and haven't yet changed it, make sure conflicting
+        int values for the same name don't come in.
+
+        """
+
+        class Enum1(FastIntFlag):
+            fi_sym1 = 1
+            fi_sym2 = 2
+
+        with expect_raises_message(
+            TypeError,
+            "Can't replace canonical symbol for fi_sym1 with new int value 2",
+        ):
+
+            class Enum2(FastIntFlag):
+                fi_sym1 = 2
+                fi_sym2 = 3
+
+    @testing.combinations("native", "ours", argnames="native")
+    def test_compare_to_native_py_intflag(self, native):
+        """monitor IntFlag behavior in upstream Python for #8783"""
+
+        if native == "native":
+            from enum import IntFlag
+        else:
+            from sqlalchemy.util import FastIntFlag as IntFlag
+
+        class Enum(IntFlag):
+            fi_sym1 = 1
+            fi_sym2 = 2
+            fi_sym4 = 4
+
+            fi_sym1plus2 = 3
+
+            # not an alias because there's no 16
+            fi_sym17 = 17
+
+        sym1, sym2, sym4, sym1plus2, sym17 = Enum.__members__.values()
+        eq_(
+            [sym1, sym2, sym4, sym1plus2, sym17],
+            [
+                Enum.fi_sym1,
+                Enum.fi_sym2,
+                Enum.fi_sym4,
+                Enum.fi_sym1plus2,
+                Enum.fi_sym17,
+            ],
+        )
 
     def test_pickle(self):
         sym1 = util.symbol("foo")
@@ -2375,6 +2485,20 @@ class SymbolTest(fixtures.TestBase):
         assert not (sym1 | sym2) & (sym3 | sym4)
         assert (sym1 | sym2) & (sym2 | sym4)
 
+    def test_fast_int_flag_no_more_iter(self):
+        """test #8783"""
+
+        class MyEnum(FastIntFlag):
+            sym1 = 1
+            sym2 = 2
+            sym3 = 4
+            sym4 = 8
+
+        with expect_raises_message(
+            NotImplementedError, "iter not implemented to ensure compatibility"
+        ):
+            list(MyEnum)
+
     def test_parser(self):
         class MyEnum(FastIntFlag):
             sym1 = 1
@@ -2382,7 +2506,7 @@ class SymbolTest(fixtures.TestBase):
             sym3 = 4
             sym4 = 8
 
-        sym1, sym2, sym3, sym4 = tuple(MyEnum)
+        sym1, sym2, sym3, sym4 = tuple(MyEnum.__members__.values())
         lookup_one = {sym1: [], sym2: [True], sym3: [False], sym4: [None]}
         lookup_two = {sym1: [], sym2: [True], sym3: [False]}
         lookup_three = {sym1: [], sym2: ["symbol2"], sym3: []}
@@ -2840,7 +2964,7 @@ class GenericReprTest(fixtures.TestBase):
                 self.e = e
                 self.f = f
                 self.g = g
-                super(Bar, self).__init__(**kw)
+                super().__init__(**kw)
 
         eq_(
             util.generic_repr(
@@ -2863,7 +2987,7 @@ class GenericReprTest(fixtures.TestBase):
         class Bar(Foo):
             def __init__(self, b=3, c=4, **kw):
                 self.c = c
-                super(Bar, self).__init__(b=b, **kw)
+                super().__init__(b=b, **kw)
 
         eq_(
             util.generic_repr(Bar(a="a", b="b", c="c"), to_inspect=[Bar, Foo]),
@@ -2999,7 +3123,7 @@ class AsInterfaceTest(fixtures.TestBase):
 
         def assertAdapted(obj, *methods):
             assert isinstance(obj, type)
-            found = set([m for m in dir(obj) if not m.startswith("_")])
+            found = {m for m in dir(obj) if not m.startswith("_")}
             for method in methods:
                 assert method in found
                 found.remove(method)
@@ -3037,7 +3161,7 @@ class AsInterfaceTest(fixtures.TestBase):
 
 class TestClassHierarchy(fixtures.TestBase):
     def test_object(self):
-        eq_(set(util.class_hierarchy(object)), set((object,)))
+        eq_(set(util.class_hierarchy(object)), {object})
 
     def test_single(self):
         class A:
@@ -3046,14 +3170,14 @@ class TestClassHierarchy(fixtures.TestBase):
         class B:
             pass
 
-        eq_(set(util.class_hierarchy(A)), set((A, object)))
-        eq_(set(util.class_hierarchy(B)), set((B, object)))
+        eq_(set(util.class_hierarchy(A)), {A, object})
+        eq_(set(util.class_hierarchy(B)), {B, object})
 
         class C(A, B):
             pass
 
-        eq_(set(util.class_hierarchy(A)), set((A, B, C, object)))
-        eq_(set(util.class_hierarchy(B)), set((A, B, C, object)))
+        eq_(set(util.class_hierarchy(A)), {A, B, C, object})
+        eq_(set(util.class_hierarchy(B)), {A, B, C, object})
 
 
 class TestClassProperty(fixtures.TestBase):
@@ -3064,7 +3188,7 @@ class TestClassProperty(fixtures.TestBase):
         class B(A):
             @classproperty
             def something(cls):
-                d = dict(super(B, cls).something)
+                d = dict(super().something)
                 d.update({"bazz": 2})
                 return d
 
@@ -3193,7 +3317,7 @@ class BackslashReplaceTest(fixtures.TestBase):
     def test_utf8_to_utf8(self):
         eq_(
             compat.decode_backslashreplace(
-                "some message méil".encode("utf-8"), "utf-8"
+                "some message méil".encode(), "utf-8"
             ),
             "some message méil",
         )
@@ -3346,3 +3470,18 @@ class MethodOveriddenTest(fixtures.TestBase):
                 pass
 
         is_true(util.method_is_overridden(HoHo(), Bat.bar))
+
+
+class CyExtensionTest(fixtures.TestBase):
+    @testing.only_if(lambda: HAS_CYEXTENSION, "No Cython")
+    def test_all_cyext_imported(self):
+        ext = _import_cy_extensions()
+        lib_folder = (Path(__file__).parent / ".." / ".." / "lib").resolve()
+        sa_folder = lib_folder / "sqlalchemy"
+        cython_files = [f.resolve() for f in sa_folder.glob("**/*.pyx")]
+        eq_(len(ext), len(cython_files))
+        names = {
+            ".".join(f.relative_to(lib_folder).parts).replace(".pyx", "")
+            for f in cython_files
+        }
+        eq_({m.__name__ for m in ext}, set(names))

@@ -5,14 +5,14 @@ SQL Statements and Expressions API
 
 .. module:: sqlalchemy.sql.expression
 
-This section presents the API reference for the SQL Expression Language.  For a full introduction to its usage,
-see :ref:`sqlexpression_toplevel`.
+This section presents the API reference for the SQL Expression Language.
+For an introduction, start with :ref:`tutorial_working_with_data`
+in the :ref:`unified_tutorial`.
 
 
 .. toctree::
     :maxdepth: 3
 
-    foundation
     sqlelement
     operators
     selectable
@@ -20,4 +20,5 @@ see :ref:`sqlexpression_toplevel`.
     functions
     compiler
     serializer
+    foundation
     visitors

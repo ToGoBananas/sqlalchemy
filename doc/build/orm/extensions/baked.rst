@@ -134,7 +134,9 @@ compared to the equivalent "baked" query::
         q(s).params(id=id_).one()
 
 The difference in Python function call count for an iteration of 10000
-calls to each block are::
+calls to each block are:
+
+.. sourcecode:: text
 
     test_baked_query : test a baked query of the full entity.
                        (10000 iterations); total fn calls 1951294
@@ -142,7 +144,9 @@ calls to each block are::
     test_orm_query :   test a straight ORM query of the full entity.
                        (10000 iterations); total fn calls 7900535
 
-In terms of number of seconds on a powerful laptop, this comes out as::
+In terms of number of seconds on a powerful laptop, this comes out as:
+
+.. sourcecode:: text
 
     test_baked_query : test a baked query of the full entity.
                        (10000 iterations); total time 2.174126 sec
@@ -212,6 +216,7 @@ query, producing a new object that can be invoked with minimal overhead.
 Our example becomes::
 
     my_simple_cache = {}
+
 
     def lookup(session, id_argument):
         if "my_key" not in my_simple_cache:
@@ -294,6 +299,7 @@ into a direct use of "bakery" as follows::
         parameterized_query = bakery.bake(create_model_query)
 
         if include_frobnizzle:
+
             def include_frobnizzle_in_query(query):
                 return query.filter(Model.frobnizzle == True)
 
@@ -362,9 +368,7 @@ statement compilation time::
     bakery = baked.bakery()
 
     baked_query = bakery(lambda session: session.query(User))
-    baked_query += lambda q: q.filter(
-        User.name.in_(bindparam("username", expanding=True))
-    )
+    baked_query += lambda q: q.filter(User.name.in_(bindparam("username", expanding=True)))
 
     result = baked_query.with_session(session).params(username=["ed", "fred"]).all()
 

@@ -77,6 +77,7 @@ was needed in order to allow this combination to work, described below.
     from sqlalchemy import TypeDecorator
     from sqlalchemy.dialects.postgresql import ARRAY
 
+
     class ArrayOfEnum(TypeDecorator):
         impl = ARRAY
 
@@ -84,8 +85,7 @@ was needed in order to allow this combination to work, described below.
             return sa.cast(bindvalue, self)
 
         def result_processor(self, dialect, coltype):
-            super_rp = super(ArrayOfEnum, self).result_processor(
-                dialect, coltype)
+            super_rp = super(ArrayOfEnum, self).result_processor(dialect, coltype)
 
             def handle_raw_string(value):
                 inner = re.match(r"^{(.*)}$", value).group(1)
@@ -95,15 +95,16 @@ was needed in order to allow this combination to work, described below.
                 if value is None:
                     return None
                 return super_rp(handle_raw_string(value))
+
             return process
 
 E.g.::
 
     Table(
-        'mydata', metadata,
-        Column('id', Integer, primary_key=True),
-        Column('data', ArrayOfEnum(ENUM('a', 'b, 'c', name='myenum')))
-
+        "mydata",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("data", ArrayOfEnum(ENUM("a", "b", "c", name="myenum"))),
     )
 
 This type is not included as a built-in type as it would be incompatible
@@ -132,9 +133,10 @@ the result set correctly without any special steps.
 E.g.::
 
     Table(
-        'mydata', metadata,
-        Column('id', Integer, primary_key=True),
-        Column('data', CastingArray(JSONB))
+        "mydata",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("data", CastingArray(JSONB)),
     )
 
 .. _postgresql_ranges:
@@ -156,52 +158,53 @@ values or by using the :class:`_postgresql.Range` data object.
 E.g. an example of a fully typed model using the
 :class:`_postgresql.TSRANGE` datatype::
 
-  from datetime import datetime
+    from datetime import datetime
 
-  from sqlalchemy.dialects.postgresql import Range
-  from sqlalchemy.dialects.postgresql import TSRANGE
-  from sqlalchemy.orm import DeclarativeBase
-  from sqlalchemy.orm import Mapped
-  from sqlalchemy.orm import mapped_column
+    from sqlalchemy.dialects.postgresql import Range
+    from sqlalchemy.dialects.postgresql import TSRANGE
+    from sqlalchemy.orm import DeclarativeBase
+    from sqlalchemy.orm import Mapped
+    from sqlalchemy.orm import mapped_column
 
-  class Base(DeclarativeBase):
-      pass
 
-  class RoomBooking(Base):
+    class Base(DeclarativeBase):
+        pass
 
-      __tablename__ = 'room_booking'
 
-      id: Mapped[int] = mapped_column(primary_key=True)
-      room: Mapped[str]
-      during: Mapped[Range[datetime]] = mapped_column(TSRANGE)
+    class RoomBooking(Base):
+
+        __tablename__ = "room_booking"
+
+        id: Mapped[int] = mapped_column(primary_key=True)
+        room: Mapped[str]
+        during: Mapped[Range[datetime]] = mapped_column(TSRANGE)
 
 To represent data for the ``during`` column above, the :class:`_postgresql.Range`
 type is a simple dataclass that will represent the bounds of the range.
 Below illustrates an INSERT of a row into the above ``room_booking`` table::
 
-  from sqlalchemy import create_engine
-  from sqlalchemy.orm import Session
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
 
-  engine = create_engine("postgresql+psycopg://scott:tiger@pg14/dbname")
+    engine = create_engine("postgresql+psycopg://scott:tiger@pg14/dbname")
 
-  Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
 
-  with Session(engine) as session:
-      booking = RoomBooking(
-          room="101",
-          during=Range(datetime(2013, 3, 23), datetime(2013, 3, 25))
-      )
-      session.add(booking)
-      session.commit()
+    with Session(engine) as session:
+        booking = RoomBooking(
+            room="101", during=Range(datetime(2013, 3, 23), datetime(2013, 3, 25))
+        )
+        session.add(booking)
+        session.commit()
 
 Selecting from any range column will also return :class:`_postgresql.Range`
 objects as indicated::
 
-  from sqlalchemy import select
+    from sqlalchemy import select
 
-  with Session(engine) as session:
-      for row in session.execute(select(RoomBooking.during)):
-          print(row)
+    with Session(engine) as session:
+        for row in session.execute(select(RoomBooking.during)):
+            print(row)
 
 The available range datatypes are as follows:
 
@@ -213,6 +216,7 @@ The available range datatypes are as follows:
 * :class:`_postgresql.TSTZRANGE`
 
 .. autoclass:: sqlalchemy.dialects.postgresql.Range
+    :members:
 
 Multiranges
 ^^^^^^^^^^^
@@ -236,12 +240,14 @@ datatype::
     from sqlalchemy.orm import Mapped
     from sqlalchemy.orm import mapped_column
 
+
     class Base(DeclarativeBase):
         pass
 
+
     class EventCalendar(Base):
 
-        __tablename__ = 'event_calendar'
+        __tablename__ = "event_calendar"
 
         id: Mapped[int] = mapped_column(primary_key=True)
         event_name: Mapped[str]
@@ -260,11 +266,11 @@ Illustrating insertion and selecting of a record::
     with Session(engine) as session:
         calendar = EventCalendar(
             event_name="SQLAlchemy Tutorial Sessions",
-            in_session_periods= [
+            in_session_periods=[
                 Range(datetime(2013, 3, 23), datetime(2013, 3, 25)),
                 Range(datetime(2013, 4, 12), datetime(2013, 4, 15)),
                 Range(datetime(2013, 5, 9), datetime(2013, 5, 12)),
-            ]
+            ],
         )
         session.add(calendar)
         session.commit()
@@ -298,12 +304,43 @@ As with all SQLAlchemy dialects, all UPPERCASE types that are known to be
 valid with PostgreSQL are importable from the top level dialect, whether
 they originate from :mod:`sqlalchemy.types` or from the local dialect::
 
-    from sqlalchemy.dialects.postgresql import \
-        ARRAY, BIGINT, BIT, BOOLEAN, BYTEA, CHAR, CIDR, DATE, \
-        DOUBLE_PRECISION, ENUM, FLOAT, HSTORE, INET, INTEGER, \
-        INTERVAL, JSON, JSONB, MACADDR, MONEY, NUMERIC, OID, REAL, SMALLINT, TEXT, \
-        TIME, TIMESTAMP, UUID, VARCHAR, INT4RANGE, INT8RANGE, NUMRANGE, \
-        DATERANGE, TSRANGE, TSTZRANGE, TSVECTOR
+    from sqlalchemy.dialects.postgresql import (
+        ARRAY,
+        BIGINT,
+        BIT,
+        BOOLEAN,
+        BYTEA,
+        CHAR,
+        CIDR,
+        DATE,
+        DOUBLE_PRECISION,
+        ENUM,
+        FLOAT,
+        HSTORE,
+        INET,
+        INTEGER,
+        INTERVAL,
+        JSON,
+        JSONB,
+        MACADDR,
+        MONEY,
+        NUMERIC,
+        OID,
+        REAL,
+        SMALLINT,
+        TEXT,
+        TIME,
+        TIMESTAMP,
+        UUID,
+        VARCHAR,
+        INT4RANGE,
+        INT8RANGE,
+        NUMRANGE,
+        DATERANGE,
+        TSRANGE,
+        TSTZRANGE,
+        TSVECTOR,
+    )
 
 Types which are specific to PostgreSQL, or have PostgreSQL-specific
 construction arguments, are as follows:
@@ -313,6 +350,11 @@ construction arguments, are as follows:
    in the sphinx build
 
 .. currentmodule:: sqlalchemy.dialects.postgresql
+
+.. autoclass:: sqlalchemy.dialects.postgresql.AbstractRange
+    :members: comparator_factory
+
+.. autoclass:: sqlalchemy.dialects.postgresql.AbstractMultiRange
 
 .. autoclass:: aggregate_order_by
 
@@ -441,18 +483,17 @@ SQLAlchemy supports PostgreSQL EXCLUDE constraints via the
 
 For example::
 
-  from sqlalchemy.dialects.postgresql import ExcludeConstraint, TSRANGE
+    from sqlalchemy.dialects.postgresql import ExcludeConstraint, TSRANGE
 
-  class RoomBooking(Base):
 
-      __tablename__ = 'room_booking'
+    class RoomBooking(Base):
 
-      room = Column(Integer(), primary_key=True)
-      during = Column(TSRANGE())
+        __tablename__ = "room_booking"
 
-      __table_args__ = (
-          ExcludeConstraint(('room', '='), ('during', '&&')),
-      )
+        room = Column(Integer(), primary_key=True)
+        during = Column(TSRANGE())
+
+        __table_args__ = (ExcludeConstraint(("room", "="), ("during", "&&")),)
 
 PostgreSQL DML Constructs
 -------------------------

@@ -970,7 +970,7 @@
 
             del_ = delete(SomeMappedClass).where(SomeMappedClass.id == 5)
 
-            upd = update(SomeMappedClass).where(SomeMappedClass.id == 5).values(name='ed')
+            upd = update(SomeMappedClass).where(SomeMappedClass.id == 5).values(name="ed")
 
     .. change::
         :tags: bug, orm
@@ -2070,7 +2070,9 @@
 
       Will maintain the columns clause of the SELECT as coming from the
       unaliased "user", as specified; the select_from only takes place in the
-      FROM clause::
+      FROM clause:
+
+      .. sourcecode:: sql
 
         SELECT users.name AS users_name FROM users AS users_1
         JOIN users ON users.name < users_1.name
@@ -2079,10 +2081,11 @@
       to the original, older use case for :meth:`_query.Query.select_from`, which is that
       of restating the mapped entity in terms of a different selectable::
 
-        session.query(User.name).\
-          select_from(user_table.select().where(user_table.c.id > 5))
+        session.query(User.name).select_from(user_table.select().where(user_table.c.id > 5))
 
-      Which produces::
+      Which produces:
+
+      .. sourcecode:: sql
 
         SELECT anon_1.name AS anon_1_name FROM (SELECT users.id AS id,
         users.name AS name FROM users WHERE users.id > :id_1) AS anon_1
@@ -2281,11 +2284,11 @@
       original.   Allows symmetry when using :class:`_engine.Engine` and
       :class:`_engine.Connection` objects as context managers::
 
-        with conn.connect() as c: # leaves the Connection open
-          c.execute("...")
+        with conn.connect() as c:  # leaves the Connection open
+            c.execute("...")
 
         with engine.connect() as c:  # closes the Connection
-          c.execute("...")
+            c.execute("...")
 
     .. change::
         :tags: engine

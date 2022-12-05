@@ -47,7 +47,7 @@ SQLAlchemy 2.0 - Major Migration Guide
     newer capabilities that have proven to be very effective.
 
 The 1.4->2.0 Migration Path
-===========================
+---------------------------
 
 The most prominent architectural features and API changes that are considered
 to be "SQLAlchemy 2.0" were in fact released as fully available within the 1.4
@@ -86,392 +86,11 @@ APIs are available to provide for the "2.0" way of working, and then to the
 The complete steps for this migration path are later in this document at
 :ref:`migration_20_overview`.
 
-New Features and Improvements
-=============================
-
-This section covers new features and improvements in SQLAlchemy 2.0 which
-are not otherwise part of the major 1.4->2.0 migration path.
-
-.. _ticket_6842:
-
-Dialect support for psycopg 3 (a.k.a. "psycopg")
--------------------------------------------------
-
-Added dialect support for the `psycopg 3 <https://pypi.org/project/psycopg/>`_
-DBAPI, which despite the number "3" now goes by the package name ``psycopg``,
-superseding the previous ``psycopg2`` package that for the time being remains
-SQLAlchemy's "default" driver for the ``postgresql`` dialects. ``psycopg`` is a
-completely reworked and modernized database adapter for PostgreSQL which
-supports concepts such as prepared statements as well as Python asyncio.
-
-``psycopg`` is the first DBAPI supported by SQLAlchemy which provides
-both a pep-249 synchronous API as well as an asyncio driver.  The same
-``psycopg`` database URL may be used with the :func:`_sa.create_engine`
-and :func:`_asyncio.create_async_engine` engine-creation functions, and the
-corresponding sync or asyncio version of the dialect will be selected
-automatically.
-
-.. seealso::
-
-    :ref:`postgresql_psycopg`
-
-.. _ticket_7631:
-
-New Conditional DDL for Constraints and Indexes
-------------------------------------------------
-
-A new method :meth:`_schema.Constraint.ddl_if` and :meth:`_schema.Index.ddl_if`
-allows constructs such as :class:`_schema.CheckConstraint`, :class:`_schema.UniqueConstraint`
-and :class:`_schema.Index` to be rendered conditionally for a given
-:class:`_schema.Table`, based on the same kinds of criteria that are accepted
-by the :meth:`_schema.DDLElement.execute_if` method.  In the example below,
-the CHECK constraint and index will only be produced against a PostgreSQL
-backend::
-
-    meta = MetaData()
-
-
-    my_table = Table(
-        "my_table",
-        meta,
-        Column("id", Integer, primary_key=True),
-        Column("num", Integer),
-        Column("data", String),
-        Index("my_pg_index", "data").ddl_if(dialect="postgresql"),
-        CheckConstraint("num > 5").ddl_if(dialect="postgresql"),
-    )
-
-    e1 = create_engine("sqlite://", echo=True)
-    meta.create_all(e1)  # will not generate CHECK and INDEX
-
-
-    e2 = create_engine("postgresql://scott:tiger@localhost/test", echo=True)
-    meta.create_all(e2)  # will generate CHECK and INDEX
-
-.. seealso::
-
-    :ref:`schema_ddl_ddl_if`
-
-:ticket:`7631`
-
-Behavioral Changes
-==================
-
-This section covers behavioral changes made in SQLAlchemy 2.0 which are
-not otherwise part of the major 1.4->2.0 migration path; changes here are
-not expected to have significant effects on backwards compatibility.
-
-.. _change_7311:
-
-Installation is now fully pep-517 enabled
-------------------------------------------
-
-The source distribution now includes a ``pyproject.toml`` file to allow for
-complete :pep:`517` support. In particular this allows a local source build
-using ``pip`` to automatically install the Cython_ optional dependency.
-
-:ticket:`7311`
-
-.. _change_7256:
-
-C Extensions now ported to Cython
----------------------------------
-
-The SQLAlchemy C extensions have been replaced with all new extensions written
-in Cython_. While Cython was evaluated back in 2010 when the C extensions were
-first created, the nature and focus of the C extensions in use today has
-changed quite a bit from that time. At the same time, Cython has apparently
-evolved significantly, as has the Python build / distribution toolchain which
-made it feasible for us to revisit it.
-
-The move to Cython provides dramatic new advantages with
-no apparent downsides:
-
-* The Cython extensions that replace specific C extensions have all benchmarked
-  as **faster**, often slightly, but sometimes significantly, than
-  virtually all the C code that SQLAlchemy previously
-  included. While this seems amazing, it appears to be a product of
-  non-obvious optimizations within Cython's implementation that would not be
-  present in a direct Python to C port of a function, as was particularly the
-  case for many of the custom collection types added to the C extensions.
-
-* Cython extensions are much easier to write, maintain and debug compared to
-  raw C code, and in most cases are line-per-line equivalent to the Python
-  code.   It is expected that many more elements of SQLAlchemy will be
-  ported to Cython in the coming releases which should open many new doors
-  to performance improvements that were previously out of reach.
-
-* Cython is very mature and widely used, including being the basis of some
-  of the prominent database drivers supported by SQLAlchemy including
-  ``asyncpg``, ``psycopg3`` and ``asyncmy``.
-
-Like the previous C extensions, the Cython extensions are pre-built within
-SQLAlchemy's wheel distributions which are automatically available to ``pip``
-from PyPi.  Manual build instructions are also unchanged with the exception
-of the Cython requirement.
-
-.. seealso::
-
-    :ref:`c_extensions`
-
-
-:ticket:`7256`
-
-.. _Cython: https://cython.org/
-
-.. _change_6980:
-
-"with_variant()" clones the original TypeEngine rather than changing the type
------------------------------------------------------------------------------
-
-The :meth:`_sqltypes.TypeEngine.with_variant` method, which is used to apply
-alternate per-database behaviors to a particular type, now returns a copy of
-the original :class:`_sqltypes.TypeEngine` object with the variant information
-stored internally, rather than wrapping it inside the ``Variant`` class.
-
-While the previous ``Variant`` approach was able to maintain all the in-Python
-behaviors of the original type using dynamic attribute getters, the improvement
-here is that when calling upon a variant, the returned type remains an instance
-of the original type, which works more smoothly with type checkers such as mypy
-and pylance.  Given a program as below::
-
-    import typing
-
-
-    from sqlalchemy import String
-    from sqlalchemy.dialects.mysql import VARCHAR
-
-
-    type_ = String(255).with_variant(VARCHAR(255, charset='utf8mb4'), "mysql", "mariadb")
-
-    if typing.TYPE_CHECKING:
-        reveal_type(type_)
-
-A type checker like pyright will now report the type as::
-
-    info: Type of "type_" is "String"
-
-In addition, as illustrated above, multiple dialect names may be passed for
-single type, in particular this is helpful for the pair of ``"mysql"`` and
-``"mariadb"`` dialects which are considered separately as of SQLAlchemy 1.4.
-
-:ticket:`6980`
-
-
-.. _change_4926:
-
-Python division operator performs true division for all backends; added floor division
----------------------------------------------------------------------------------------
-
-The Core expression language now supports both "true division" (i.e. the ``/``
-Python operator) and "floor division" (i.e. the ``//`` Python operator)
-including backend-specific behaviors to normalize different databases in this
-regard.
-
-Given a "true division" operation against two integer values::
-
-    expr = literal(5, Integer) / literal(10, Integer)
-
-The SQL division operator on PostgreSQL for example normally acts as "floor division"
-when used against integers, meaning the above result would return the integer
-"0".  For this and similar backends, SQLAlchemy now renders the SQL using
-a form which is equivalent towards::
-
-    %(param_1)s / CAST(%(param_2)s AS NUMERIC)
-
-With param_1=5, param_2=10, so that the return expression will be of type
-NUMERIC, typically as the Python value ``decimal.Decimal("0.5")``.
-
-Given a "floor division" operation against two integer values::
-
-    expr = literal(5, Integer) // literal(10, Integer)
-
-The SQL division operator on MySQL and Oracle for example normally acts
-as "true division" when used against integers, meaning the above result
-would return the floating point value "0.5".  For these and similar backends,
-SQLAlchemy now renders the SQL using a form which is equivalent towards::
-
-    FLOOR(%(param_1)s / %(param_2)s)
-
-With param_1=5, param_2=10, so that the return expression will be of type
-INTEGER, as the Python value ``0``.
-
-The backwards-incompatible change here would be if an application using
-PostgreSQL, SQL Server, or SQLite which relied on the Python "truediv" operator
-to return an integer value in all cases.  Applications which rely upon this
-behavior should instead use the Python "floor division" operator ``//``
-for these operations, or for forwards compatibility when using a previous
-SQLAlchemy version, the floor function::
-
-    expr = func.floor(literal(5, Integer) / literal(10, Integer))
-
-The above form would be needed on any SQLAlchemy version prior to 2.0
-in order to provide backend-agnostic floor division.
-
-:ticket:`4926`
-
-.. _change_7433:
-
-Session raises proactively when illegal concurrent or reentrant access is detected
-----------------------------------------------------------------------------------
-
-The :class:`_orm.Session` can now trap more errors related to illegal concurrent
-state changes within multithreaded or other concurrent scenarios as well as for
-event hooks which perform unexpected state changes.
-
-One error that's been known to occur when a :class:`_orm.Session` is used in
-multiple threads simultaneously is
-``AttributeError: 'NoneType' object has no attribute 'twophase'``, which is
-completely cryptic. This error occurs when a thread calls
-:meth:`_orm.Session.commit` which internally invokes the
-:meth:`_orm.SessionTransaction.close` method to end the transactional context,
-at the same time that another thread is in progress running a query
-as from :meth:`_orm.Session.execute`.  Within :meth:`_orm.Session.execute`,
-the internal method that acquires a database connection for the current
-transaction first begins by asserting that the session is "active", but
-after this assertion passes, the concurrent call to :meth:`_orm.Session.close`
-interferes with this state which leads to the undefined condition above.
-
-The change applies guards to all state-changing methods surrounding the
-:class:`_orm.SessionTransaction` object so that in the above case, the
-:meth:`_orm.Session.commit` method will instead fail as it will seek to change
-the state to one that is disallowed for the duration of the already-in-progress
-method that wants to get the current connection to run a database query.
-
-Using the test script illustrated at :ticket:`7433`, the previous
-error case looks like::
-
-    Traceback (most recent call last):
-    File "/home/classic/dev/sqlalchemy/test3.py", line 30, in worker
-        sess.execute(select(A)).all()
-    File "/home/classic/tmp/sqlalchemy/lib/sqlalchemy/orm/session.py", line 1691, in execute
-        conn = self._connection_for_bind(bind)
-    File "/home/classic/tmp/sqlalchemy/lib/sqlalchemy/orm/session.py", line 1532, in _connection_for_bind
-        return self._transaction._connection_for_bind(
-    File "/home/classic/tmp/sqlalchemy/lib/sqlalchemy/orm/session.py", line 754, in _connection_for_bind
-        if self.session.twophase and self._parent is None:
-    AttributeError: 'NoneType' object has no attribute 'twophase'
-
-Where the ``_connection_for_bind()`` method isn't able to continue since
-concurrent access placed it into an invalid state.  Using the new approach, the
-originator of the state change throws the error instead::
-
-    File "/home/classic/dev/sqlalchemy/lib/sqlalchemy/orm/session.py", line 1785, in close
-       self._close_impl(invalidate=False)
-    File "/home/classic/dev/sqlalchemy/lib/sqlalchemy/orm/session.py", line 1827, in _close_impl
-       transaction.close(invalidate)
-    File "<string>", line 2, in close
-    File "/home/classic/dev/sqlalchemy/lib/sqlalchemy/orm/session.py", line 506, in _go
-       raise sa_exc.InvalidRequestError(
-    sqlalchemy.exc.InvalidRequestError: Method 'close()' can't be called here;
-    method '_connection_for_bind()' is already in progress and this would cause
-    an unexpected state change to symbol('CLOSED')
-
-The state transition checks intentionally don't use explicit locks to detect
-concurrent thread activity, instead relying upon simple attribute set / value
-test operations that inherently fail when unexpected concurrent changes occur.
-The rationale is that the approach can detect illegal state changes that occur
-entirely within a single thread, such as an event handler that runs on session
-transaction events calls a state-changing method that's not expected, or under
-asyncio if a particular :class:`_orm.Session` were shared among multiple
-asyncio tasks, as well as when using patching-style concurrency approaches
-such as gevent.
-
-:ticket:`7433`
-
-
-.. _change_7490:
-
-The SQLite dialect uses QueuePool for file-based databases
-------------------------------------------------------------
-
-The SQLite dialect now defaults to :class:`_pool.QueuePool` when a file
-based database is used. This is set along with setting the
-``check_same_thread`` parameter to ``False``. It has been observed that the
-previous approach of defaulting to :class:`_pool.NullPool`, which does not
-hold onto database connections after they are released, did in fact have a
-measurable negative performance impact. As always, the pool class is
-customizable via the :paramref:`_sa.create_engine.poolclass` parameter.
-
-.. seealso::
-
-    :ref:`pysqlite_threading_pooling`
-
-
-:ticket:`7490`
-
-.. _change_5465_oracle:
-
-New Oracle FLOAT type with binary precision; decimal precision not accepted directly
-------------------------------------------------------------------------------------
-
-A new datatype :class:`_oracle.FLOAT` has been added to the Oracle dialect, to
-accompany the addition of :class:`_sqltypes.Double` and database-specific
-:class:`_sqltypes.DOUBLE`, :class:`_sqltypes.DOUBLE_PRECISION` and
-:class:`_sqltypes.REAL` datatypes. Oracle's ``FLOAT`` accepts a so-called
-"binary precision" parameter that per Oracle documentation is roughly a
-standard "precision" value divided by 0.3103::
-
-    from sqlalchemy.dialects import oracle
-
-    Table(
-        "some_table", metadata,
-        Column("value", oracle.FLOAT(126))
-    )
-
-A binary precision value of 126 is synonymous with using the
-:class:`_sqltypes.DOUBLE_PRECISION` datatype, and a value of 63 is equivalent
-to using the :class:`_sqltypes.REAL` datatype.  Other precision values are
-specific to the :class:`_oracle.FLOAT` type itself.
-
-The SQLAlchemy :class:`_sqltypes.Float` datatype also accepts a "precision"
-parameter, but this is decimal precision which is not accepted by
-Oracle.  Rather than attempting to guess the conversion, the Oracle dialect
-will now raise an informative error if :class:`_sqltypes.Float` is used with
-a precision value against the Oracle backend.  To specify a
-:class:`_sqltypes.Float` datatype with an explicit precision value for
-supporting backends, while also supporting other backends, use
-the :meth:`_types.TypeEngine.with_variant` method as follows::
-
-    from sqlalchemy.types import Float
-    from sqlalchemy.dialects import oracle
-
-    Table(
-        "some_table", metadata,
-        Column("value", Float(5).with_variant(oracle.FLOAT(16), "oracle"))
-    )
-
-
-.. _change_7086:
-
-``match()`` operator on PostgreSQL uses ``plainto_tsquery()`` rather than ``to_tsquery()``
-------------------------------------------------------------------------------------------
-
-The :meth:`.Operators.match` function now renders
-``col @@ plainto_tsquery(expr)`` on the PostgreSQL backend, rather than
-``col @@ to_tsquery()``.  ``plainto_tsquery()`` accepts plain text whereas
-``to_tsquery()`` accepts specialized query symbols, and is therefore less
-cross-compatible with other backends.
-
-All PostgreSQL search functions and operators are available through use of
-:data:`.func` to generate PostgreSQL-specific functions and
-:meth:`.Operators.bool_op` (a boolean-typed version of :meth:`.Operators.op`)
-to generate arbitrary operators, in the same manner as they are available
-in previous versions.  See the examples at :ref:`postgresql_match`.
-
-Existing SQLAlchemy projects that make use of PG-specific directives within
-:meth:`.Operators.match` should make use of ``func.to_tsquery()`` directly.
-To render SQL in exactly the same form as would be present
-in 1.4, see the version note at :ref:`postgresql_simple_match`.
-
-
-
-:ticket:`7086`
 
 .. _migration_20_overview:
 
 1.x -> 2.x Migration Overview
-=============================
+-----------------------------
 
 The SQLAlchemy 2.0 transition presents itself in the SQLAlchemy 1.4 release as
 a series of steps that allow an application of any size or complexity to be
@@ -495,7 +114,7 @@ now cross-compatible with SQLAlchemy 2.0.
 
 
 First Prerequisite, step one - A Working 1.3 Application
----------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The first step is getting an existing application onto 1.4, in the case of
 a typical non trivial application, is to ensure it runs on SQLAlchemy 1.3 with
@@ -511,7 +130,7 @@ warnings; these are warnings emitted for the :class:`_exc.SADeprecationWarning`
 class.
 
 First Prerequisite, step two - A Working 1.4 Application
---------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Once the application is good to go on SQLAlchemy 1.3, the next step is to get
 it running on SQLAlchemy 1.4.  In the vast majority of cases, applications
@@ -558,26 +177,21 @@ as being in this realm are as follows:
 For the full overview of SQLAlchemy 1.4 changes, see the
 :doc:`/changelog/migration_14` document.
 
-Migration to 2.0 Step One - Python 3 only (Python 3.6 minimum)
---------------------------------------------------------------
+Migration to 2.0 Step One - Python 3 only (Python 3.7 minimum for 2.0 compatibility)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-SQLAlchemy 2.0 was first inspired by the fact that Python 2's EOL was in
-2020.   SQLAlchemy is taking a longer period of time than other major
-projects to drop Python 2.7 support, since it is not too much in the way
-of things for the moment.   However, version 2.0 hopes to start embracing
-:pep:`484` and other new features to a great degree, so it is likely
-that release 1.4 will be the last Python 2 supporting version, even if
-there is a SQLAlchemy 1.5 (which is also unlikely at the moment).
-
-In order to use SQLAlchemy 2.0, the application will need to be runnable on
-at least **Python 3.6** as of this writing.  SQLAlchemy 1.4 now supports
-Python 3.6 or newer within the Python 3 series; throughout the 1.4 series,
-the application can remain running on Python 2.7 or on at least Python 3.6.
+SQLAlchemy 2.0 was first inspired by the fact that Python 2's EOL was in 2020.
+SQLAlchemy is taking a longer period of time than other major projects to drop
+Python 2.7 support. However, in order to use SQLAlchemy 2.0, the application
+will need to be runnable on at least **Python 3.7**. SQLAlchemy 1.4 supports
+Python 3.6 or newer within the Python 3 series; throughout the 1.4 series, the
+application can remain running on Python 2.7 or on at least Python 3.6. Version
+2.0 however starts at Python 3.7.
 
 .. _migration_20_deprecations_mode:
 
 Migration to 2.0 Step Two - Turn on RemovedIn20Warnings
--------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 SQLAlchemy 1.4 features a conditional deprecation warning system inspired
 by the Python "-3" flag that would indicate legacy patterns in a running
@@ -587,34 +201,38 @@ deprecation class is emitted only when an environment variable
 
 Given the example program below::
 
-  from sqlalchemy import column
-  from sqlalchemy import create_engine
-  from sqlalchemy import select
-  from sqlalchemy import table
+    from sqlalchemy import column
+    from sqlalchemy import create_engine
+    from sqlalchemy import select
+    from sqlalchemy import table
 
 
-  engine = create_engine("sqlite://")
+    engine = create_engine("sqlite://")
 
-  engine.execute("CREATE TABLE foo (id integer)")
-  engine.execute("INSERT INTO foo (id) VALUES (1)")
+    engine.execute("CREATE TABLE foo (id integer)")
+    engine.execute("INSERT INTO foo (id) VALUES (1)")
 
 
-  foo = table("foo", column("id"))
-  result = engine.execute(select([foo.c.id]))
+    foo = table("foo", column("id"))
+    result = engine.execute(select([foo.c.id]))
 
-  print(result.fetchall())
+    print(result.fetchall())
 
 The above program uses several patterns that many users will already identify
 as "legacy", namely the use of the :meth:`_engine.Engine.execute` method
 that's part of the "connectionless execution" API.  When we run the above
-program against 1.4, it returns a single line::
+program against 1.4, it returns a single line:
+
+.. sourcecode:: text
 
   $ python test3.py
   [(1,)]
 
 To enable "2.0 deprecations mode", we enable the ``SQLALCHEMY_WARN_20=1``
 variable, and additionally ensure that a `warnings filter`_ that will not
-suppress any warnings is selected::
+suppress any warnings is selected:
+
+.. sourcecode:: text
 
     SQLALCHEMY_WARN_20=1 python -W always::DeprecationWarning test3.py
 
@@ -625,7 +243,9 @@ using Python option ``-W error::DeprecationWarning``.
 
 .. _warnings filter: https://docs.python.org/3/library/warnings.html#the-warnings-filter
 
-With warnings turned on, our program now has a lot to say::
+With warnings turned on, our program now has a lot to say:
+
+.. sourcecode:: text
 
   $ SQLALCHEMY_WARN_20=1 python2 -W always::DeprecationWarning test3.py
   test3.py:9: RemovedIn20Warning: The Engine.execute() function/method is considered legacy as of the 1.x series of SQLAlchemy and will be removed in 2.0. All statement execution in SQLAlchemy 2.0 is performed by the Connection.execute() method of Connection, or in the ORM by the Session.execute() method of Session. (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
@@ -649,32 +269,31 @@ With warnings turned on, our program now has a lot to say::
 With the above guidance, we can migrate our program to use 2.0 styles, and
 as a bonus our program is much clearer::
 
-  from sqlalchemy import column
-  from sqlalchemy import create_engine
-  from sqlalchemy import select
-  from sqlalchemy import table
-  from sqlalchemy import text
+    from sqlalchemy import column
+    from sqlalchemy import create_engine
+    from sqlalchemy import select
+    from sqlalchemy import table
+    from sqlalchemy import text
 
 
-  engine = create_engine("sqlite://")
+    engine = create_engine("sqlite://")
 
-  # don't rely on autocommit for DML and DDL
-  with engine.begin() as connection:
-      # use connection.execute(), not engine.execute()
-      # use the text() construct to execute textual SQL
-      connection.execute(text("CREATE TABLE foo (id integer)"))
-      connection.execute(text("INSERT INTO foo (id) VALUES (1)"))
+    # don't rely on autocommit for DML and DDL
+    with engine.begin() as connection:
+        # use connection.execute(), not engine.execute()
+        # use the text() construct to execute textual SQL
+        connection.execute(text("CREATE TABLE foo (id integer)"))
+        connection.execute(text("INSERT INTO foo (id) VALUES (1)"))
 
 
-  foo = table("foo", column("id"))
+    foo = table("foo", column("id"))
 
-  with engine.connect() as connection:
-      # use connection.execute(), not engine.execute()
-      # select() now accepts column / table expressions positionally
-      result = connection.execute(select(foo.c.id))
+    with engine.connect() as connection:
+        # use connection.execute(), not engine.execute()
+        # select() now accepts column / table expressions positionally
+        result = connection.execute(select(foo.c.id))
 
-  print(result.fetchall())
-
+    print(result.fetchall())
 
 The goal of "2.0 deprecations mode" is that a program which runs with no
 :class:`_exc.RemovedIn20Warning` warnings with "2.0 deprecations mode" turned
@@ -682,7 +301,7 @@ on is then ready to run in SQLAlchemy 2.0.
 
 
 Migration to 2.0 Step Three - Resolve all RemovedIn20Warnings
---------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Code can be developed iteratively to resolve these warnings.  Within
 the SQLAlchemy project itself, the approach taken is as follows:
@@ -703,24 +322,23 @@ the SQLAlchemy project itself, the approach taken is as follows:
         from sqlalchemy import exc
 
         # for warnings not included in regex-based filter below, just log
-        warnings.filterwarnings(
-          "always", category=exc.RemovedIn20Warning
-        )
+        warnings.filterwarnings("always", category=exc.RemovedIn20Warning)
 
         # for warnings related to execute() / scalar(), raise
         for msg in [
             r"The (?:Executable|Engine)\.(?:execute|scalar)\(\) function",
-            r"The current statement is being autocommitted using implicit "
-            "autocommit,",
+            r"The current statement is being autocommitted using implicit autocommit,",
             r"The connection.execute\(\) method in SQLAlchemy 2.0 will accept "
             "parameters as a single dictionary or a single sequence of "
             "dictionaries only.",
             r"The Connection.connect\(\) function/method is considered legacy",
             r".*DefaultGenerator.execute\(\)",
         ]:
-          warnings.filterwarnings(
-              "error", message=msg, category=exc.RemovedIn20Warning,
-          )
+            warnings.filterwarnings(
+                "error",
+                message=msg,
+                category=exc.RemovedIn20Warning,
+            )
 
 3. As each sub-category of warnings are resolved in the application, new
    warnings that are caught by the "always" filter can be added to the list
@@ -729,19 +347,19 @@ the SQLAlchemy project itself, the approach taken is as follows:
 4. Once no more warnings are emitted, the filter can be removed.
 
 Migration to 2.0 Step Four - Use the ``future`` flag on Engine
---------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The :class:`_engine.Engine` object features an updated
 transaction-level API in version 2.0.  In 1.4, this new API is available
 by passing the flag ``future=True`` to the :func:`_sa.create_engine`
 function.
 
-When the :paramref:`_sa.create_engine.future` flag is used, the :class:`_future.Engine`
-and :class:`_future.Connection` objects support the 2.0 API fully and not at all
-any legacy features, including the new argument format for :meth:`_future.Connection.execute`,
+When the :paramref:`_sa.create_engine.future` flag is used, the :class:`_engine.Engine`
+and :class:`_engine.Connection` objects support the 2.0 API fully and not at all
+any legacy features, including the new argument format for :meth:`_engine.Connection.execute`,
 the removal of "implicit autocommit", string statements require the
-:func:`_sql.text` construct unless the :meth:`_future.Connection.exec_driver_sql`
-method is used, and connectionless execution from the :class:`_future.Engine`
+:func:`_sql.text` construct unless the :meth:`_engine.Connection.exec_driver_sql`
+method is used, and connectionless execution from the :class:`_engine.Engine`
 is removed.
 
 If all :class:`_exc.RemovedIn20Warning` warnings have been resolved regarding
@@ -749,11 +367,11 @@ use of the :class:`_engine.Engine` and :class:`_engine.Connection`, then the
 :paramref:`_sa.create_engine.future` flag may be enabled and there should be
 no errors raised.
 
-The new engine is described at :class:`_future.Engine` which delivers a new
-:class:`_future.Connection` object.    In addition to the above changes, the,
-:class:`_future.Connection` object features
-:meth:`_future.Connection.commit` and
-:meth:`_future.Connection.rollback` methods, to support the new
+The new engine is described at :class:`_engine.Engine` which delivers a new
+:class:`_engine.Connection` object.    In addition to the above changes, the,
+:class:`_engine.Connection` object features
+:meth:`_engine.Connection.commit` and
+:meth:`_engine.Connection.rollback` methods, to support the new
 "commit-as-you-go" mode of operation::
 
 
@@ -766,10 +384,8 @@ The new engine is described at :class:`_future.Engine` which delivers a new
 
         conn.commit()  # commit as you go
 
-
-
 Migration to 2.0 Step Five - Use the ``future`` flag on Session
----------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The :class:`_orm.Session` object also features an updated transaction/connection
 level API in version 2.0.  This API is available in 1.4 using the
@@ -801,6 +417,7 @@ in 1.4 which are now closely matched to the patterns used by the
 :class:`_orm.Session` may be used as a context manager::
 
     from sqlalchemy.orm import Session
+
     with Session(engine) as session:
         session.add(MyObject())
         session.commit()
@@ -827,15 +444,102 @@ and all ``exc.RemovedIn20Warning`` occurrences set to raise an error,
 The sections that follow will detail the specific changes to make for all
 major API modifications.
 
+.. _migration_20_step_six:
+
+Migration to 2.0 Step Six - Add ``__allow_unmapped__`` to explicitly typed ORM models
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+SQLAlchemy 2.0 has new support for runtime interpretation of :pep:`484` typing annotations
+on ORM models.   A requirement of these annotations is that they must make use
+of the :class:`_orm.Mapped` generic container.  Annotations which don't use
+:class:`_orm.Mapped` which link to constructs such as :func:`_orm.relationship`
+will raise errors in Python, as they suggest mis-configurations.
+
+SQLAlchemy applications that use the :ref:`Mypy plugin <mypy_toplevel>` with
+explicit annotations that don't use :class:`_orm.Mapped` in their annotations
+are subject to these errors, as would occur in the example below::
+
+    Base = declarative_base()
+
+
+    class Foo(Base):
+        __tablename__ = "foo"
+
+        id: int = Column(Integer, primary_key=True)
+
+        # will raise
+        bars: list["Bar"] = relationship("Bar", back_populates="foo")
+
+
+    class Bar(Base):
+        __tablename__ = "bar"
+
+        id: int = Column(Integer, primary_key=True)
+        foo_id = Column(ForeignKey("foo.id"))
+
+        # will raise
+        foo: Foo = relationship(Foo, back_populates="bars", cascade="all")
+
+Above, the ``Foo.bars`` and ``Bar.foo`` :func:`_orm.relationship` declarations
+will raise an error at class construction time because they don't use
+:class:`_orm.Mapped` (by contrast, the annotations that use
+:class:`_schema.Column` are ignored by 2.0, as these are able to be
+recognized as a legacy configuration style). To allow all annotations that
+don't use :class:`_orm.Mapped` to pass without error,
+the ``__allow_unmapped__`` attribute may be used on the class or any
+subclasses, which will cause the annotations in these cases to be
+ignored completely by the new Declarative system.
+
+.. note:: The ``__allow_unmapped__`` directive applies **only** to the
+   *runtime* behavior of the ORM.  It does not affect the behavior of
+   Mypy, and the above mapping as written still requires that the Mypy
+   plugin be installed.   For fully 2.0 style ORM models that will type
+   correctly under Mypy *without* a plugin, follow the migration steps
+   at :ref:`whatsnew_20_orm_typing_migration`.
+
+The example below illustrates the application of ``__allow_unmapped__``
+to the Declarative ``Base`` class, where it will take effect for all classes
+that descend from ``Base``::
+
+    # qualify the base with __allow_unmapped__.  Can also be
+    # applied to classes directly if preferred
+    class Base:
+        __allow_unmapped__ = True
+
+
+    Base = declarative_base(cls=Base)
+
+    # existing mapping proceeds, Declarative will ignore any annotations
+    # which don't include ``Mapped[]``
+    class Foo(Base):
+        __tablename__ = "foo"
+
+        id: int = Column(Integer, primary_key=True)
+
+        bars: list["Bar"] = relationship("Bar", back_populates="foo")
+
+
+    class Bar(Base):
+        __tablename__ = "bar"
+
+        id: int = Column(Integer, primary_key=True)
+        foo_id = Column(ForeignKey("foo.id"))
+
+        foo: Foo = relationship(Foo, back_populates="bars", cascade="all")
+
+.. versionchanged:: 2.0.0beta3 - improved the ``__allow_unmapped__``
+   attribute support to allow for 1.4-style explicit annotated relationships
+   that don't use :class:`_orm.Mapped` to remain usable.
+
 
 2.0 Migration - Core Connection / Transaction
-=============================================
+---------------------------------------------
 
 
 .. _migration_20_autocommit:
 
 Library-level (but not driver level) "Autocommit" removed from both Core and ORM
---------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -846,7 +550,7 @@ the underlying DBAPI transaction, but in SQLAlchemy
     conn = engine.connect()
 
     # won't autocommit in 2.0
-    conn.execute(some_table.insert().values(foo='bar'))
+    conn.execute(some_table.insert().values(foo="bar"))
 
 Nor will this autocommit::
 
@@ -862,10 +566,7 @@ execution option, will be removed::
     conn = engine.connect()
 
     # won't autocommit in 2.0
-    conn.execute(
-      text("EXEC my_procedural_thing()").execution_options(autocommit=True)
-    )
-
+    conn.execute(text("EXEC my_procedural_thing()").execution_options(autocommit=True))
 
 **Migration to 2.0**
 
@@ -874,26 +575,26 @@ style` execution is to make use of the :meth:`_engine.Connection.begin` method,
 or the :meth:`_engine.Engine.begin` context manager::
 
     with engine.begin() as conn:
-        conn.execute(some_table.insert().values(foo='bar'))
-        conn.execute(some_other_table.insert().values(bat='hoho'))
+        conn.execute(some_table.insert().values(foo="bar"))
+        conn.execute(some_other_table.insert().values(bat="hoho"))
 
     with engine.connect() as conn:
         with conn.begin():
-            conn.execute(some_table.insert().values(foo='bar'))
-            conn.execute(some_other_table.insert().values(bat='hoho'))
+            conn.execute(some_table.insert().values(foo="bar"))
+            conn.execute(some_other_table.insert().values(bat="hoho"))
 
     with engine.begin() as conn:
         conn.execute(text("EXEC my_procedural_thing()"))
 
 When using :term:`2.0 style` with the :paramref:`_sa.create_engine.future`
 flag, "commit as you go" style may also be used, as the
-:class:`_future.Connection` features **autobegin** behavior, which takes place
+:class:`_engine.Connection` features **autobegin** behavior, which takes place
 when a statement is first invoked in the absence of an explicit call to
-:meth:`_future.Connection.begin`::
+:meth:`_engine.Connection.begin`::
 
     with engine.connect() as conn:
-        conn.execute(some_table.insert().values(foo='bar'))
-        conn.execute(some_other_table.insert().values(bat='hoho'))
+        conn.execute(some_table.insert().values(foo="bar"))
+        conn.execute(some_other_table.insert().values(bat="hoho"))
 
         conn.commit()
 
@@ -931,14 +632,14 @@ explicit as to how the transaction should be used.    For the vast majority
 of Core use cases, it's the pattern that is already recommended::
 
     with engine.begin() as conn:
-        conn.execute(some_table.insert().values(foo='bar'))
+        conn.execute(some_table.insert().values(foo="bar"))
 
 For "commit as you go, or rollback instead" usage, which resembles how the
 :class:`_orm.Session` is normally used today, the "future" version of
-:class:`_future.Connection`, which is the one that is returned from an
-:class:`_future.Engine` that was created using the
+:class:`_engine.Connection`, which is the one that is returned from an
+:class:`_engine.Engine` that was created using the
 :paramref:`_sa.create_engine.future` flag, includes new
-:meth:`_future.Connection.commit` and :meth:`_future.Connection.rollback`
+:meth:`_engine.Connection.commit` and :meth:`_engine.Connection.rollback`
 methods, which act upon a transaction that is now begun automatically when
 a statement is first invoked::
 
@@ -949,7 +650,7 @@ a statement is first invoked::
     engine = create_engine(..., future=True)
 
     with engine.connect() as conn:
-        conn.execute(some_table.insert().values(foo='bar'))
+        conn.execute(some_table.insert().values(foo="bar"))
         conn.commit()
 
         conn.execute(text("some other SQL"))
@@ -959,8 +660,8 @@ Above, the ``engine.connect()`` method will return a :class:`_engine.Connection`
 features **autobegin**, meaning the ``begin()`` event is emitted when the
 execute method is first used (note however that there is no actual "BEGIN" in
 the Python DBAPI).  "autobegin" is a new pattern in SQLAlchemy 1.4 that
-is featured both by :class:`_future.Connection` as well as the ORM
-:class:`_orm.Session` object; autobegin allows that the :meth:`_future.Connection.begin`
+is featured both by :class:`_engine.Connection` as well as the ORM
+:class:`_orm.Session` object; autobegin allows that the :meth:`_engine.Connection.begin`
 method may be called explicitly when the object is first acquired, for schemes
 that wish to demarcate the beginning of the transaction, but if the method
 is not called, then it occurs implicitly when work is first done on the object.
@@ -980,14 +681,14 @@ implementations, and is supported by SQLAlchemy via the
 discussed at :ref:`dbapi_autocommit`.  True autocommit is treated as an "isolation level"
 so that the structure of application code does not change when autocommit is
 used; the :meth:`_engine.Connection.begin` context manager as well as
-methods like :meth:`_future.Connection.commit` may still be used, they are
+methods like :meth:`_engine.Connection.commit` may still be used, they are
 simply no-ops at the database driver level when DBAPI-level autocommit
 is turned on.
 
 .. _migration_20_implicit_execution:
 
 "Implicit" and "Connectionless" execution, "bound metadata" removed
---------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -999,11 +700,11 @@ execution patterns, is removed::
 
     metadata_obj = MetaData(bind=engine)  # no longer supported
 
-    metadata_obj.create_all()   # requires Engine or Connection
+    metadata_obj.create_all()  # requires Engine or Connection
 
     metadata_obj.reflect()  # requires Engine or Connection
 
-    t = Table('t', metadata_obj, autoload=True)  # use autoload_with=engine
+    t = Table("t", metadata_obj, autoload=True)  # use autoload_with=engine
 
     result = engine.execute(t.select())  # no longer supported
 
@@ -1033,7 +734,7 @@ the ORM-level :meth:`_orm.Session.execute` method)::
     metadata_obj.reflect(engine)
 
     # reflect individual table
-    t = Table('t', metadata_obj, autoload_with=engine)
+    t = Table("t", metadata_obj, autoload_with=engine)
 
 
     # connection level:
@@ -1048,11 +749,10 @@ the ORM-level :meth:`_orm.Session.execute` method)::
         metadata_obj.reflect(connection)
 
         # reflect individual table
-        t = Table('t', metadata_obj, autoload_with=connection)
+        t = Table("t", metadata_obj, autoload_with=connection)
 
         # execute SQL statements
         result = conn.execute(t.select())
-
 
 **Discussion**
 
@@ -1123,36 +823,36 @@ execution and "bound metadata" are no longer as widely used so in 2.0 we seek
 to finally reduce the number of choices for how to execute a statement in
 Core from "many choices"::
 
-  # many choices
+    # many choices
 
-  # bound metadata?
-  metadata_obj = MetaData(engine)
+    # bound metadata?
+    metadata_obj = MetaData(engine)
 
-  # or not?
-  metadata_obj = MetaData()
+    # or not?
+    metadata_obj = MetaData()
 
-  # execute from engine?
-  result = engine.execute(stmt)
+    # execute from engine?
+    result = engine.execute(stmt)
 
-  # or execute the statement itself (but only if you did
-  # "bound metadata" above, which means you can't get rid of "bound" if any
-  # part of your program uses this form)
-  result = stmt.execute()
+    # or execute the statement itself (but only if you did
+    # "bound metadata" above, which means you can't get rid of "bound" if any
+    # part of your program uses this form)
+    result = stmt.execute()
 
-  # execute from connection, but it autocommits?
-  conn = engine.connect()
-  conn.execute(stmt)
+    # execute from connection, but it autocommits?
+    conn = engine.connect()
+    conn.execute(stmt)
 
-  # execute from connection, but autocommit isn't working, so use the special
-  # option?
-  conn.execution_options(autocommit=True).execute(stmt)
+    # execute from connection, but autocommit isn't working, so use the special
+    # option?
+    conn.execution_options(autocommit=True).execute(stmt)
 
-  # or on the statement ?!
-  conn.execute(stmt.execution_options(autocommit=True))
+    # or on the statement ?!
+    conn.execute(stmt.execution_options(autocommit=True))
 
-  # or execute from connection, and we use explicit transaction?
-  with conn.begin():
-      conn.execute(stmt)
+    # or execute from connection, and we use explicit transaction?
+    with conn.begin():
+        conn.execute(stmt)
 
 to "one choice", where by "one choice" we mean "explicit connection with
 explicit transaction"; there are still a few ways to demarcate
@@ -1160,84 +860,79 @@ transaction blocks depending on need.  The "one choice" is to procure a
 :class:`_engine.Connection` and then to explicitly demarcate the transaction,
 in the case that the operation is a write operation::
 
-  # one choice - work with explicit connection, explicit transaction
-  # (there remain a few variants on how to demarcate the transaction)
+    # one choice - work with explicit connection, explicit transaction
+    # (there remain a few variants on how to demarcate the transaction)
 
-  # "begin once" - one transaction only per checkout
-  with engine.begin() as conn:
-      result = conn.execute(stmt)
+    # "begin once" - one transaction only per checkout
+    with engine.begin() as conn:
+        result = conn.execute(stmt)
 
-  # "commit as you go" - zero or more commits per checkout
-  with engine.connect() as conn:
-      result = conn.execute(stmt)
-      conn.commit()
+    # "commit as you go" - zero or more commits per checkout
+    with engine.connect() as conn:
+        result = conn.execute(stmt)
+        conn.commit()
 
-  # "commit as you go" but with a transaction block instead of autobegin
-  with engine.connect() as conn:
-      with conn.begin():
-          result = conn.execute(stmt)
-
+    # "commit as you go" but with a transaction block instead of autobegin
+    with engine.connect() as conn:
+        with conn.begin():
+            result = conn.execute(stmt)
 
 execute() method more strict, execution options are more prominent
--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
 The argument patterns that may be used with the :meth:`_engine.Connection`
 execute method in SQLAlchemy 2.0 are highly simplified, removing many previously
 available argument patterns.  The new API in the 1.4 series is described at
-:meth:`_future.Connection`. The examples below illustrate the patterns that
+:meth:`_engine.Connection`. The examples below illustrate the patterns that
 require modification::
 
 
-  connection = engine.connect()
+    connection = engine.connect()
 
-  # direct string SQL not supported; use text() or exec_driver_sql() method
-  result = connection.execute("select * from table")
+    # direct string SQL not supported; use text() or exec_driver_sql() method
+    result = connection.execute("select * from table")
 
-  # positional parameters no longer supported, only named
-  # unless using exec_driver_sql()
-  result = connection.execute(table.insert(), ('x', 'y', 'z'))
+    # positional parameters no longer supported, only named
+    # unless using exec_driver_sql()
+    result = connection.execute(table.insert(), ("x", "y", "z"))
 
-  # **kwargs no longer accepted, pass a single dictionary
-  result = connection.execute(table.insert(), x=10, y=5)
+    # **kwargs no longer accepted, pass a single dictionary
+    result = connection.execute(table.insert(), x=10, y=5)
 
-  # multiple *args no longer accepted, pass a list
-  result = connection.execute(
-      table.insert(),
-      {"x": 10, "y": 5}, {"x": 15, "y": 12}, {"x": 9, "y": 8}
-  )
-
+    # multiple *args no longer accepted, pass a list
+    result = connection.execute(
+        table.insert(), {"x": 10, "y": 5}, {"x": 15, "y": 12}, {"x": 9, "y": 8}
+    )
 
 **Migration to 2.0**
 
-The new :meth:`_future.Connection.execute` method now accepts a subset of the
+The new :meth:`_engine.Connection.execute` method now accepts a subset of the
 argument styles that are accepted by the 1.x :meth:`_engine.Connection.execute`
 method, so the following code is cross-compatible between 1.x and 2.0::
 
 
-  connection = engine.connect()
+    connection = engine.connect()
 
-  from sqlalchemy import text
-  result = connection.execute(text("select * from table"))
+    from sqlalchemy import text
 
-  # pass a single dictionary for single statement execution
-  result = connection.execute(table.insert(), {"x": 10, "y": 5})
+    result = connection.execute(text("select * from table"))
 
-  # pass a list of dictionaries for executemany
-  result = connection.execute(
-      table.insert(),
-      [{"x": 10, "y": 5}, {"x": 15, "y": 12}, {"x": 9, "y": 8}]
-  )
+    # pass a single dictionary for single statement execution
+    result = connection.execute(table.insert(), {"x": 10, "y": 5})
 
-
+    # pass a list of dictionaries for executemany
+    result = connection.execute(
+        table.insert(), [{"x": 10, "y": 5}, {"x": 15, "y": 12}, {"x": 9, "y": 8}]
+    )
 
 **Discussion**
 
 The use of ``*args`` and ``**kwargs`` has been removed both to remove the
 complexity of guessing what kind of arguments were passed to the method, as
 well as to make room for other options, namely the
-:paramref:`_future.Connection.execute.execution_options` dictionary that is now
+:paramref:`_engine.Connection.execute.execution_options` dictionary that is now
 available to provide options on a per statement basis. The method is also
 modified so that its use pattern matches that of the
 :meth:`_orm.Session.execute` method, which is a much more prominent API in 2.0
@@ -1258,7 +953,7 @@ given.
 .. _migration_20_result_rows:
 
 Result rows act like named tuples
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -1273,10 +968,9 @@ tuples when using "future" mode::
 
         row = result.first()  # suppose the row is (1, 2)
 
-        "x" in row   # evaluates to False, in 1.x / future=False, this would be True
+        "x" in row  # evaluates to False, in 1.x / future=False, this would be True
 
         1 in row  # evaluates to True, in 1.x / future=False, this would be False
-
 
 **Migration to 2.0**
 
@@ -1322,10 +1016,7 @@ or attribute::
     stmt = select(User, Address).join(User.addresses)
 
     for row in session.execute(stmt).mappings():
-        print("the user is: %s  the address is: %s" % (
-            row[User],
-            row[Address]
-        ))
+        print("the user is: %s  the address is: %s" % (row[User], row[Address]))
 
 .. seealso::
 
@@ -1333,12 +1024,12 @@ or attribute::
 
 
 2.0 Migration - Core Usage
-=============================
+-----------------------------
 
 .. _migration_20_5284:
 
 select() no longer accepts varied constructor arguments, columns are passed positionally
------------------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **synopsis**
 
@@ -1362,13 +1053,9 @@ now accepts its WHEN criteria positionally, rather than as a list::
 
     # list emits a deprecation warning
     case_clause = case(
-      [
-        (table.c.x == 5, "five"),
-        (table.c.x == 7, "seven")
-      ],
-      else_="neither five nor seven"
+        [(table.c.x == 5, "five"), (table.c.x == 7, "seven")],
+        else_="neither five nor seven",
     )
-
 
 **Migration to 2.0**
 
@@ -1392,9 +1079,7 @@ is cross-compatible with 1.4 and 2.0::
 
     # case conditions passed positionally
     case_clause = case(
-      (table.c.x == 5, "five"),
-      (table.c.x == 7, "seven"),
-      else_="neither five nor seven"
+        (table.c.x == 5, "five"), (table.c.x == 7, "seven"), else_="neither five nor seven"
     )
 
 **Discussion**
@@ -1413,14 +1098,14 @@ documented style in the Core tutorial.
 
 Examples of "structural" vs. "data" elements are as follows::
 
-  # table columns for CREATE TABLE - structural
-  table = Table("table", metadata_obj, Column('x', Integer), Column('y', Integer))
+    # table columns for CREATE TABLE - structural
+    table = Table("table", metadata_obj, Column("x", Integer), Column("y", Integer))
 
-  # columns in a SELECT statement - structural
-  stmt = select(table.c.x, table.c.y)
+    # columns in a SELECT statement - structural
+    stmt = select(table.c.x, table.c.y)
 
-  # literal elements in an IN clause - data
-  stmt = stmt.where(table.c.y.in_([1, 2, 3]))
+    # literal elements in an IN clause - data
+    stmt = stmt.where(table.c.y.in_([1, 2, 3]))
 
 .. seealso::
 
@@ -1429,7 +1114,7 @@ Examples of "structural" vs. "data" elements are as follows::
     :ref:`error_c9ae`
 
 insert/update/delete DML no longer accept keyword constructor arguments
------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -1447,10 +1132,7 @@ constructor arguments to :func:`_sql.insert`, :func:`_sql.update` and
     stmt = table.delete(table.c.x > 15)
 
     # no longer supported
-    stmt = table.update(
-        table.c.x < 15,
-        preserve_parameter_order=True
-    ).values(
+    stmt = table.update(table.c.x < 15, preserve_parameter_order=True).values(
         [(table.c.y, 20), (table.c.x, table.c.y + 10)]
     )
 
@@ -1469,10 +1151,12 @@ examples::
     stmt = table.delete().where(table.c.x > 15)
 
     # use generative methods, ordered_values() replaces preserve_parameter_order
-    stmt = table.update().where(
-        table.c.x < 15,
-    ).ordered_values(
-        (table.c.y, 20), (table.c.x, table.c.y + 10)
+    stmt = (
+        table.update()
+        .where(
+            table.c.x < 15,
+        )
+        .ordered_values((table.c.y, 20), (table.c.x, table.c.y + 10))
     )
 
 **Discussion**
@@ -1483,10 +1167,10 @@ manner as that of the :func:`_sql.select` construct.
 
 
 2.0 Migration - ORM Configuration
-=============================================
+---------------------------------------------
 
 Declarative becomes a first class API
--------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -1527,7 +1211,7 @@ at :ref:`change_5508`.
 
 
 The original "mapper()" function now a core element of Declarative, renamed
-----------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -1543,9 +1227,7 @@ Code that works with classical mappings should change imports and code from::
     from sqlalchemy.orm import mapper
 
 
-    mapper(SomeClass, some_table, properties={
-        "related": relationship(SomeRelatedClass)
-    })
+    mapper(SomeClass, some_table, properties={"related": relationship(SomeRelatedClass)})
 
 To work from a central :class:`_orm.registry` object::
 
@@ -1553,9 +1235,9 @@ To work from a central :class:`_orm.registry` object::
 
     mapper_reg = registry()
 
-    mapper_reg.map_imperatively(SomeClass, some_table, properties={
-        "related": relationship(SomeRelatedClass)
-    })
+    mapper_reg.map_imperatively(
+        SomeClass, some_table, properties={"related": relationship(SomeRelatedClass)}
+    )
 
 The above :class:`_orm.registry` is also the source for declarative mappings,
 and classical mappings now have access to this registry including string-based
@@ -1567,19 +1249,23 @@ configuration on :func:`_orm.relationship`::
 
     Base = mapper_reg.generate_base()
 
+
     class SomeRelatedClass(Base):
-        __tablename__ = 'related'
+        __tablename__ = "related"
 
         # ...
 
 
-    mapper_reg.map_imperatively(SomeClass, some_table, properties={
-        "related": relationship(
-            "SomeRelatedClass",
-            primaryjoin="SomeRelatedClass.related_id == SomeClass.id"
-        )
-    })
-
+    mapper_reg.map_imperatively(
+        SomeClass,
+        some_table,
+        properties={
+            "related": relationship(
+                "SomeRelatedClass",
+                primaryjoin="SomeRelatedClass.related_id == SomeClass.id",
+            )
+        },
+    )
 
 **Discussion**
 
@@ -1603,8 +1289,10 @@ declarative decorator and classical mapping forms.
   :ref:`orm_mapping_classes_toplevel` - all new unified documentation for
   Declarative, classical mapping, dataclasses, attrs, etc.
 
+.. _migration_20_query_usage:
+
 2.0 Migration - ORM Usage
-=============================================
+---------------------------------------------
 
 The biggest visible change in SQLAlchemy 2.0 is the use of
 :meth:`_orm.Session.execute` in conjunction with :func:`_sql.select` to run ORM
@@ -1618,6 +1306,7 @@ calling form with links to documentation for each technique
 presented.  The individual migration notes are in the embedded sections
 following the table, and may include additional notes not summarized here.
 
+.. format: off
 
 .. container:: sliding-table
 
@@ -1645,10 +1334,14 @@ following the table, and may include additional notes not summarized here.
       - ::
 
           session.execute(
-              select(User)
+            select(User)
           ).scalars().all()
+
           # or
-          session.scalars(select(User)).all()
+
+          session.scalars(
+            select(User)
+          ).all()
 
       - :ref:`migration_20_unify_select`
 
@@ -1658,13 +1351,14 @@ following the table, and may include additional notes not summarized here.
     * - ::
 
           session.query(User).\
-          filter_by(name='some user').one()
+            filter_by(name="some user").\
+            one()
 
       - ::
 
           session.execute(
-              select(User).
-              filter_by(name="some user")
+            select(User).
+            filter_by(name="some user")
           ).scalar_one()
 
       - :ref:`migration_20_unify_select`
@@ -1674,8 +1368,8 @@ following the table, and may include additional notes not summarized here.
     * - ::
 
           session.query(User).\
-          filter_by(name='some user').first()
-
+            filter_by(name="some user").\
+            first()
 
       - ::
 
@@ -1692,16 +1386,16 @@ following the table, and may include additional notes not summarized here.
     * - ::
 
             session.query(User).options(
-                joinedload(User.addresses)
+              joinedload(User.addresses)
             ).all()
 
       - ::
 
             session.scalars(
-                select(User).
-                options(
-                  joinedload(User.addresses)
-                )
+              select(User).
+              options(
+                joinedload(User.addresses)
+              )
             ).unique().all()
 
       - :ref:`joinedload_not_uniqued`
@@ -1709,16 +1403,20 @@ following the table, and may include additional notes not summarized here.
     * - ::
 
           session.query(User).\
-              join(Address).\
-              filter(Address.email == 'e@sa.us').\
-              all()
+            join(Address).\
+            filter(
+              Address.email == "e@sa.us"
+            ).\
+            all()
 
       - ::
 
           session.execute(
-              select(User).
-              join(Address).
-              where(Address.email == 'e@sa.us')
+            select(User).
+            join(Address).
+            where(
+              Address.email == "e@sa.us"
+            )
           ).scalars().all()
 
       - :ref:`migration_20_unify_select`
@@ -1727,17 +1425,19 @@ following the table, and may include additional notes not summarized here.
 
     * - ::
 
-          session.query(User).from_statement(
+          session.query(User).\
+            from_statement(
               text("select * from users")
-          ).all()
+            ).\
+            all()
 
       - ::
 
           session.scalars(
-              select(User).
-              from_statement(
-                  text("select * from users")
-              )
+            select(User).
+            from_statement(
+              text("select * from users")
+            )
           ).all()
 
       - :ref:`orm_queryguide_selecting_text`
@@ -1745,19 +1445,23 @@ following the table, and may include additional notes not summarized here.
     * - ::
 
           session.query(User).\
-              join(User.addresses).\
-              options(
-                contains_eager(User.addresses)
-              ).\
-              populate_existing().all()
+            join(User.addresses).\
+            options(
+              contains_eager(User.addresses)
+            ).\
+            populate_existing().all()
 
       - ::
 
           session.execute(
-              select(User).
-              join(User.addresses).
-              options(contains_eager(User.addresses)).
-              execution_options(populate_existing=True)
+            select(User)
+            .join(User.addresses)
+            .options(
+              contains_eager(User.addresses)
+            )
+            .execution_options(
+                populate_existing=True
+            )
           ).scalars().all()
 
       -
@@ -1770,20 +1474,21 @@ following the table, and may include additional notes not summarized here.
       - ::
 
           session.query(User).\
-              filter(User.name == 'foo').\
-              update(
-                  {"fullname": "Foo Bar"},
-                  synchronize_session="evaluate"
-              )
-
+            filter(User.name == "foo").\
+            update(
+              {"fullname": "Foo Bar"},
+              synchronize_session="evaluate"
+            )
 
       - ::
 
           session.execute(
-              update(User).
-              where(User.name == 'foo').
-              values(fullname="Foo Bar").
-              execution_options(synchronize_session="evaluate")
+            update(User)
+            .where(User.name == "foo")
+            .values(fullname="Foo Bar")
+            .execution_options(
+              synchronize_session="evaluate"
+            )
           )
 
       - :ref:`orm_expression_update_delete`
@@ -1795,15 +1500,22 @@ following the table, and may include additional notes not summarized here.
 
       - ::
 
-          session.scalar(select(func.count()).select_from(User))
-          session.scalar(select(func.count(User.id)))
+          session.scalar(
+            select(func.count()).
+            select_from(User)
+          )
+          session.scalar(
+            select(func.count(User.id))
+          )
 
       - :meth:`_orm.Session.scalar`
+
+.. format: on
 
 .. _migration_20_unify_select:
 
 ORM Query Unified with Core Select
-----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -1821,25 +1533,25 @@ Legacy code examples are illustrated below::
     session = Session(engine)
 
     # becomes legacy use case
-    user = session.query(User).filter_by(name='some user').one()
+    user = session.query(User).filter_by(name="some user").one()
 
     # becomes legacy use case
-    user = session.query(User).filter_by(name='some user').first()
+    user = session.query(User).filter_by(name="some user").first()
 
     # becomes legacy use case
     user = session.query(User).get(5)
 
     # becomes legacy use case
-    for user in session.query(User).join(User.addresses).filter(Address.email == 'some@email.com'):
-        # ...
+    for user in (
+        session.query(User).join(User.addresses).filter(Address.email == "some@email.com")
+    ):
+        ...
 
     # becomes legacy use case
     users = session.query(User).options(joinedload(User.addresses)).order_by(User.id).all()
 
     # becomes legacy use case
-    users = session.query(User).from_statement(
-        text("select * from users")
-    ).all()
+    users = session.query(User).from_statement(text("select * from users")).all()
 
     # etc
 
@@ -1883,15 +1595,13 @@ Below are some examples of how to migrate to :func:`_sql.select`::
 
     session = Session(engine)
 
-    user = session.execute(
-        select(User).filter_by(name="some user")
-    ).scalar_one()
+    user = session.execute(select(User).filter_by(name="some user")).scalar_one()
 
     # for first(), no LIMIT is applied automatically; add limit(1) if LIMIT
     # is desired on the query
-    user = session.execute(
-        select(User).filter_by(name="some user").limit(1)
-    ).scalars().first()
+    user = (
+        session.execute(select(User).filter_by(name="some user").limit(1)).scalars().first()
+    )
 
     # get() moves to the Session directly
     user = session.get(User, 5)
@@ -1899,18 +1609,22 @@ Below are some examples of how to migrate to :func:`_sql.select`::
     for user in session.execute(
         select(User).join(User.addresses).filter(Address.email == "some@email.case")
     ).scalars():
-        # ...
+        ...
 
     # when using joinedload() against collections, use unique() on the result
-    users = session.execute(
-        select(User).options(joinedload(User.addresses)).order_by(User.id)
-    ).unique().all()
+    users = (
+        session.execute(select(User).options(joinedload(User.addresses)).order_by(User.id))
+        .unique()
+        .all()
+    )
 
     # select() has ORM-ish methods like from_statement() that only work
     # if the statement is against ORM entities
-    users = session.execute(
-        select(User).from_statement(text("select * from users"))
-    ).scalars().all()
+    users = (
+        session.execute(select(User).from_statement(text("select * from users")))
+        .scalars()
+        .all()
+    )
 
 **Discussion**
 
@@ -1962,7 +1676,7 @@ the majority of this ORM logic is also cached.
 .. _migration_20_get_to_session:
 
 ORM Query - get() method moves to Session
-------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -1998,7 +1712,7 @@ with writing a SQL query.
 .. _migration_20_orm_query_join_strings:
 
 ORM Query  - Joining / loading on relationships uses attributes, not strings
-----------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -2015,7 +1729,6 @@ will all be removed in 2.0::
 
     # string use removed
     q = session.query(Address).filter(with_parent(u1, "addresses"))
-
 
 **Migration to 2.0**
 
@@ -2053,7 +1766,7 @@ more potentially compatible with IDEs and pep-484 integrations.
 
 
 ORM Query - Chaining using lists of attributes, rather than individual calls, removed
--------------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -2062,7 +1775,6 @@ attributes in a list will be removed::
 
     # chaining removed
     q = session.query(User).join("orders", "items", "keywords")
-
 
 **Migration to 2.0**
 
@@ -2092,31 +1804,36 @@ interface of methods such as :meth:`_sql.Select.join`.
 .. _migration_20_query_join_options:
 
 ORM Query - join(..., aliased=True), from_joinpoint removed
------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
 The ``aliased=True`` option on :meth:`_query.Query.join` is removed, as is
 the ``from_joinpoint`` flag::
 
-  # no longer supported
-  q = session.query(Node).\
-    join("children", aliased=True).filter(Node.name == "some sub child").
-    join("children", from_joinpoint=True, aliased=True).\
-    filter(Node.name == 'some sub sub child')
+    # no longer supported
+    q = (
+        session.query(Node)
+        .join("children", aliased=True)
+        .filter(Node.name == "some sub child")
+        .join("children", from_joinpoint=True, aliased=True)
+        .filter(Node.name == "some sub sub child")
+    )
 
 **Migration to 2.0**
 
 Use explicit aliases instead::
 
-  n1 = aliased(Node)
-  n2 = aliased(Node)
+    n1 = aliased(Node)
+    n2 = aliased(Node)
 
-  q = select(Node).join(Node.children.of_type(n1)).\
-      where(n1.name == "some sub child").\
-      join(n1.children.of_type(n2)).\
-      where(n2.name == "some sub child")
-
+    q = (
+        select(Node)
+        .join(Node.children.of_type(n1))
+        .where(n1.name == "some sub child")
+        .join(n1.children.of_type(n2))
+        .where(n2.name == "some sub child")
+    )
 
 **Discussion**
 
@@ -2145,7 +1862,7 @@ construct itself didn't exist early on.
 .. _migration_20_query_distinct:
 
 Using DISTINCT with additional columns, but only select the entity
--------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -2155,8 +1872,13 @@ as well as "address.email_address" but only return User objects::
 
     # 1.xx code
 
-    result = session.query(User).join(User.addresses).\
-        distinct().order_by(Address.email_address).all()
+    result = (
+        session.query(User)
+        .join(User.addresses)
+        .distinct()
+        .order_by(Address.email_address)
+        .all()
+    )
 
 In version 2.0, the "email_address" column will not be automatically added
 to the columns clause, and the above query will fail, since relational
@@ -2171,8 +1893,12 @@ returning the main entity object, and not the extra column, use the
 
     # 1.4 / 2.0 code
 
-    stmt = select(User, Address.email_address).join(User.addresses).\
-        distinct().order_by(Address.email_address)
+    stmt = (
+        select(User, Address.email_address)
+        .join(User.addresses)
+        .distinct()
+        .order_by(Address.email_address)
+    )
 
     result = session.execute(stmt).columns(User).all()
 
@@ -2192,17 +1918,19 @@ without inconvenience.
 .. _migration_20_query_from_self:
 
 Selecting from the query itself as a subquery, e.g. "from_self()"
--------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
 The :meth:`_orm.Query.from_self` method will be removed from :class:`_orm.Query`::
 
     # from_self is removed
-    q = session.query(User, Address.email_address).\
-      join(User.addresses).\
-      from_self(User).order_by(Address.email_address)
-
+    q = (
+        session.query(User, Address.email_address)
+        .join(User.addresses)
+        .from_self(User)
+        .order_by(Address.email_address)
+    )
 
 **Migration to 2.0**
 
@@ -2216,8 +1944,7 @@ since the final query wants to query in terms of both the ``User`` and
 
     from sqlalchemy.orm import aliased
 
-    subq = session.query(User, Address.email_address).\
-      join(User.addresses).subquery()
+    subq = session.query(User, Address.email_address).join(User.addresses).subquery()
 
     ua = aliased(User, subq)
 
@@ -2229,8 +1956,7 @@ The same form may be used in :term:`2.0 style`::
 
     from sqlalchemy.orm import aliased
 
-    subq = select(User, Address.email_address).\
-      join(User.addresses).subquery()
+    subq = select(User, Address.email_address).join(User.addresses).subquery()
 
     ua = aliased(User, subq)
 
@@ -2239,7 +1965,6 @@ The same form may be used in :term:`2.0 style`::
     stmt = select(ua, aa).order_by(aa.email_address)
 
     result = session.execute(stmt)
-
 
 **Discussion**
 
@@ -2271,19 +1996,20 @@ our ``User`` and ``Address`` entities have overlapping column names, we can
 select from both entities at once without having to specify any particular
 labeling::
 
-  # 1.4 / 2.0 code
+    # 1.4 / 2.0 code
 
-  subq = select(User, Address).\
-      join(User.addresses).subquery()
+    subq = select(User, Address).join(User.addresses).subquery()
 
-  ua = aliased(User, subq)
-  aa = aliased(Address, subq)
+    ua = aliased(User, subq)
+    aa = aliased(Address, subq)
 
-  stmt = select(ua, aa).order_by(aa.email_address)
-  result = session.execute(stmt)
+    stmt = select(ua, aa).order_by(aa.email_address)
+    result = session.execute(stmt)
 
 The above query will disambiguate the ``.id`` column of ``User`` and
-``Address``, where ``Address.id`` is rendered and tracked as ``id_1``::
+``Address``, where ``Address.id`` is rendered and tracked as ``id_1``:
+
+.. sourcecode:: sql
 
   SELECT anon_1.id AS anon_1_id, anon_1.id_1 AS anon_1_id_1,
          anon_1.user_id AS anon_1_user_id,
@@ -2298,7 +2024,7 @@ The above query will disambiguate the ``.id`` column of ``User`` and
 :ticket:`5221`
 
 Selecting entities from alternative selectables; Query.select_entity_from()
----------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -2350,7 +2076,7 @@ of view as well as how the internals of the SQLAlchemy ORM must handle it.
 .. _joinedload_not_uniqued:
 
 ORM Rows not uniquified by default
-----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -2364,9 +2090,7 @@ where the "joined eager loading" loader strategy is used with collections::
 
     # In the new API, uniquing is available but not implicitly
     # enabled
-    result = session.execute(
-        select(User).options(joinedload(User.addresses))
-    )
+    result = session.execute(select(User).options(joinedload(User.addresses)))
 
     # this actually will raise an error to let the user know that
     # uniquing should be applied
@@ -2412,21 +2136,45 @@ and should be preferred.
 
 .. _migration_20_dynamic_loaders:
 
-Making use of "dynamic" relationship loads without using Query
----------------------------------------------------------------
+"Dynamic" relationship loaders superseded by "Write Only"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
 The ``lazy="dynamic"`` relationship loader strategy, discussed at
 :ref:`dynamic_relationship`, makes use of the :class:`_query.Query` object
-which is legacy in 2.0.
+which is legacy in 2.0. The "dynamic" relationship is not directly compatible
+with asyncio without workarounds, and additionally it does not fulfill its
+original purpose of preventing iteration of large collections as it has several
+behaviors where this iteration occurs implicitly.
 
+A new loader strategy known as ``lazy="write_only"`` is introduced, which
+through the :class:`_orm.WriteOnlyCollection` collection class
+provides a very strict "no implicit iteration" API and additionally integrates
+with 2.0 style statement execution, supporting asyncio as well as
+direct integrations with the new :ref:`ORM-enabled Bulk DML <change_8360>`
+featureset.
+
+At the same time, ``lazy="dynamic"`` remains **fully supported** in version
+2.0; applications can delay migrating this particular pattern until they
+are fully on the 2.0 series.
 
 **Migration to 2.0**
 
-This pattern is still under adjustment for SQLAlchemy 2.0, and it is expected
-that new APIs will be introduced.    In the interim, there are two ways
-to achieve 2.0 style querying that's in terms of a specific relationship:
+The new "write only" feature is only available in SQLAlchemy 2.0, and is
+not part of 1.4.  At the same time, the ``lazy="dynamic"`` loader strategy
+remains fully supported in version 2.0, and even includes new pep-484
+and annotated mapping support.
+
+Therefore the best strategy for migrating from "dynamic" is to **wait until
+the application is fully running on 2.0**, then migrate directly from
+:class:`.AppenderQuery`, which is the collection type used by the "dynamic"
+strategy, to :class:`.WriteOnlyCollection`, which is the collection type
+used by hte "write_only" strategy.
+
+Some techniques are available to use ``lazy="dynamic"`` under 1.4 in a more
+"2.0" style however. There are two ways to achieve 2.0 style querying that's in
+terms of a specific relationship:
 
 * Make use of the :attr:`_orm.Query.statement` attribute on an existing
   ``lazy="dynamic"`` relationship.   We can use methods like
@@ -2435,16 +2183,15 @@ to achieve 2.0 style querying that's in terms of a specific relationship:
 
 
     class User(Base):
-        __tablename__ = 'user'
+        __tablename__ = "user"
 
         posts = relationship(Post, lazy="dynamic")
+
 
     jack = session.get(User, 5)
 
     # filter Jack's blog posts
-    posts = session.scalars(
-        jack.posts.statement.where(Post.headline == "this is a post")
-    )
+    posts = session.scalars(jack.posts.statement.where(Post.headline == "this is a post"))
 
 * Use the :func:`_orm.with_parent` function to construct a :func:`_sql.select`
   construct directly::
@@ -2454,9 +2201,9 @@ to achieve 2.0 style querying that's in terms of a specific relationship:
     jack = session.get(User, 5)
 
     posts = session.scalars(
-        select(Post).
-        where(with_parent(jack, User.posts)).
-        where(Post.headline == "this is a post")
+        select(Post)
+        .where(with_parent(jack, User.posts))
+        .where(Post.headline == "this is a post")
     )
 
 **Discussion**
@@ -2464,15 +2211,30 @@ to achieve 2.0 style querying that's in terms of a specific relationship:
 The original idea was that the :func:`_orm.with_parent` function should be
 sufficient, however continuing to make use of special attributes on the
 relationship itself remains appealing, and there's no reason a 2.0 style
-construct can't be made to work here as well.  There will likely be a new
-loader strategy name that sets up an API similar to the example above that
-uses the ``.statement`` attribute, such as
-``jack.posts.select().where(Post.headline == 'headline')``.
+construct can't be made to work here as well.
+
+The new "write_only" loader strategy provides a new kind of collection which
+does not support implicit iteration or item access.  Instead, reading the
+contents of the collection is performed by calling upon its ``.select()``
+method to help construct an appropriate SELECT statement.  The collection
+also includes methods ``.insert()``, ``.update()``, ``.delete()``
+which may be used to emit bulk DML statements for the items in the collection.
+In a manner similar to that of the "dynamic" feature, there are also methods
+``.add()``, ``.add_all()`` and ``.remove()`` which queue individual members
+for addition or removal using the unit of work process.  An introduction to the
+new feature is as :ref:`change_7123`.
+
+.. seealso::
+
+    :ref:`change_7123`
+
+    :ref:`write_only_relationship`
+
 
 .. _migration_20_session_autocommit:
 
 Autocommit mode removed from Session; autobegin support added
--------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -2491,7 +2253,6 @@ is, this pattern::
     # commits, won't be supported
     sess.flush()
 
-
 **Migration to 2.0**
 
 The main reason a :class:`_orm.Session` is used in "autocommit" mode
@@ -2507,7 +2268,7 @@ be called::
     sess = Session(engine)
 
     sess.begin()  # begin explicitly; if not called, will autobegin
-                  # when database access is needed
+    # when database access is needed
 
     sess.add(obj)
 
@@ -2524,7 +2285,7 @@ as well as to allow the use of "subtransactions", which are also removed in
 .. _migration_20_session_subtransaction:
 
 Session "subtransaction" behavior removed
-------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Synopsis**
 
@@ -2545,6 +2306,7 @@ a decorator may be used::
 
     import contextlib
 
+
     @contextlib.contextmanager
     def transaction(session):
         if not session.in_transaction():
@@ -2552,7 +2314,6 @@ a decorator may be used::
                 yield
         else:
             yield
-
 
 The above context manager may be used in the same way the
 "subtransaction" flag works, such as in the following example::
@@ -2563,12 +2324,14 @@ The above context manager may be used in the same way the
         with transaction(session):
             method_b(session)
 
+
     # method_b also starts a transaction, but when
     # called from method_a participates in the ongoing
     # transaction.
     def method_b(session):
         with transaction(session):
-            session.add(SomeObject('bat', 'lala'))
+            session.add(SomeObject("bat", "lala"))
+
 
     Session = sessionmaker(engine)
 
@@ -2583,8 +2346,10 @@ or methods to be concerned with the details of transaction demarcation::
     def method_a(session):
         method_b(session)
 
+
     def method_b(session):
-        session.add(SomeObject('bat', 'lala'))
+        session.add(SomeObject("bat", "lala"))
+
 
     Session = sessionmaker(engine)
 
@@ -2602,10 +2367,10 @@ operations are performed with a single begin/commit pair.
 
 
 2.0 Migration - ORM Extension and Recipe Changes
-================================================
+------------------------------------------------
 
 Dogpile cache recipe and Horizontal Sharding uses new Session API
-------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 As the :class:`_orm.Query` object becomes legacy, these two recipes
 which previously relied upon subclassing of the :class:`_orm.Query`
@@ -2616,7 +2381,7 @@ an example.
 
 
 Baked Query Extension Superseded by built-in caching
------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The baked query extension is superseded by the built in caching system and
 is no longer used by the ORM internals.
@@ -2626,7 +2391,7 @@ See :ref:`sql_caching` for full background on the new caching system.
 
 
 Asyncio Support
-=====================
+---------------------
 
 SQLAlchemy 1.4 includes asyncio support for both Core and ORM.
 The new API exclusively makes use of the "future" patterns noted above.

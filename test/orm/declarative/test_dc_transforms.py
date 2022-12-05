@@ -3,23 +3,29 @@ import inspect as pyinspect
 from itertools import product
 from typing import Any
 from typing import ClassVar
+from typing import Dict
+from typing import Generic
 from typing import List
 from typing import Optional
 from typing import Set
 from typing import Type
+from typing import TypeVar
 from unittest import mock
 
 from typing_extensions import Annotated
 
+from sqlalchemy import BigInteger
 from sqlalchemy import Column
 from sqlalchemy import exc
 from sqlalchemy import ForeignKey
 from sqlalchemy import func
 from sqlalchemy import inspect
 from sqlalchemy import Integer
+from sqlalchemy import JSON
 from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
+from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.orm import column_property
 from sqlalchemy.orm import composite
 from sqlalchemy.orm import DeclarativeBase
@@ -44,9 +50,33 @@ from sqlalchemy.testing import is_false
 from sqlalchemy.testing import is_true
 from sqlalchemy.testing import ne_
 from sqlalchemy.util import compat
+from .test_typed_mapping import expect_annotation_syntax_error
 
 
 class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
+    @testing.fixture(params=["(MAD, DB)", "(DB, MAD)"])
+    def dc_decl_base(self, request, metadata):
+        _md = metadata
+
+        if request.param == "(MAD, DB)":
+
+            class Base(MappedAsDataclass, DeclarativeBase):
+                metadata = _md
+                type_annotation_map = {
+                    str: String().with_variant(String(50), "mysql", "mariadb")
+                }
+
+        else:
+            # test #8665 by reversing the order of the classes
+            class Base(DeclarativeBase, MappedAsDataclass):
+                metadata = _md
+                type_annotation_map = {
+                    str: String().with_variant(String(50), "mysql", "mariadb")
+                }
+
+        yield Base
+        Base.registry.dispose()
+
     def test_basic_constructor_repr_base_cls(
         self, dc_decl_base: Type[MappedAsDataclass]
     ):
@@ -110,6 +140,33 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
 
         a3 = A("data")
         eq_(repr(a3), "some_module.A(id=None, data='data', x=None, bs=[])")
+
+    def test_generic_class(self):
+        """further test for #8665"""
+
+        T_Value = TypeVar("T_Value")
+
+        class SomeBaseClass(DeclarativeBase):
+            pass
+
+        class GenericSetting(
+            MappedAsDataclass, SomeBaseClass, Generic[T_Value]
+        ):
+            __tablename__ = "xx"
+
+            id: Mapped[int] = mapped_column(
+                Integer, primary_key=True, init=False
+            )
+
+            key: Mapped[str] = mapped_column(String, init=True)
+
+            value: Mapped[T_Value] = mapped_column(
+                JSON, init=True, default_factory=lambda: {}
+            )
+
+        new_instance: GenericSetting[  # noqa: F841
+            Dict[str, Any]
+        ] = GenericSetting(key="x", value={"foo": "bar"})
 
     def test_no_anno_doesnt_go_into_dc(
         self, dc_decl_base: Type[MappedAsDataclass]
@@ -267,7 +324,7 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
             id: Mapped[intpk] = mapped_column(init=False)
             email_address: Mapped[str]
             user_id: Mapped[user_fk] = mapped_column(init=False)
-            user: Mapped["User"] = relationship(
+            user: Mapped[Optional["User"]] = relationship(
                 back_populates="addresses", default=None
             )
 
@@ -303,6 +360,7 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
             status: Mapped[str] = mapped_column(String(30))
             engineer_name: Mapped[str]
             primary_language: Mapped[str]
+            __mapper_args__ = {"polymorphic_identity": "engineer"}
 
         e1 = Engineer("nm", "st", "en", "pl")
         eq_(e1.name, "nm")
@@ -316,12 +374,7 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
         """since I made this mistake in my own mapping video, lets have it
         raise an error"""
 
-        with expect_raises_message(
-            exc.ArgumentError,
-            r'Type annotation for "A.data" should '
-            r'use the syntax "Mapped\[str\]".  '
-            r"To leave the attribute unmapped,",
-        ):
+        with expect_annotation_syntax_error("A.data"):
 
             class A(dc_decl_base):
                 __tablename__ = "a"
@@ -351,6 +404,38 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
                 "data": "data",
                 "id": None,
                 "some_field": 5,
+            },
+        )
+
+    def test_allow_unmapped_fields_wo_mapped_or_dc_w_inherits(
+        self, dc_decl_base: Type[MappedAsDataclass]
+    ):
+        class A(dc_decl_base):
+            __tablename__ = "a"
+            __allow_unmapped__ = True
+
+            id: Mapped[int] = mapped_column(primary_key=True, init=False)
+            data: str
+            ctrl_one: str = dataclasses.field()
+            some_field: int = dataclasses.field(default=5)
+
+        class B(A):
+            b_data: Mapped[str] = mapped_column(default="bd")
+
+        # ensure we didnt break dataclasses contract of removing Field
+        # issue #8880
+        eq_(A.__dict__["some_field"], 5)
+        assert "ctrl_one" not in A.__dict__
+
+        b1 = B(data="data", ctrl_one="ctrl_one", some_field=5, b_data="x")
+        eq_(
+            dataclasses.asdict(b1),
+            {
+                "ctrl_one": "ctrl_one",
+                "data": "data",
+                "id": None,
+                "some_field": 5,
+                "b_data": "x",
             },
         )
 
@@ -451,6 +536,7 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
             status: Mapped[str] = mapped_column(String(30))
             engineer_name: Mapped[str]
             primary_language: Mapped[str]
+            __mapper_args__ = {"polymorphic_identity": "engineer"}
 
         e1 = Engineer("st", "en", "pl")
         eq_(e1.status, "st")
@@ -485,6 +571,17 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
             ),
         )
 
+    def test_compare(self, dc_decl_base: Type[MappedAsDataclass]):
+        class A(dc_decl_base):
+            __tablename__ = "a"
+
+            id: Mapped[int] = mapped_column(primary_key=True, compare=False)
+            data: Mapped[str]
+
+        a1 = A(id=0, data="foo")
+        a2 = A(id=1, data="foo")
+        eq_(a1, a2)
+
     @testing.only_if(lambda: compat.py310, "python 3.10 is required")
     def test_kw_only(self, dc_decl_base: Type[MappedAsDataclass]):
         class A(dc_decl_base):
@@ -496,6 +593,31 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
         fas = pyinspect.getfullargspec(A.__init__)
         eq_(fas.args, ["self", "id"])
         eq_(fas.kwonlyargs, ["data"])
+
+    def test_mapped_column_overrides(self, dc_decl_base):
+        """test #8688"""
+
+        class TriggeringMixin:
+            mixin_value: Mapped[int] = mapped_column(BigInteger)
+
+        class NonTriggeringMixin:
+            mixin_value: Mapped[int]
+
+        class Foo(dc_decl_base, TriggeringMixin):
+            __tablename__ = "foo"
+            id: Mapped[int] = mapped_column(primary_key=True, init=False)
+            foo_value: Mapped[float] = mapped_column(default=78)
+
+        class Bar(dc_decl_base, NonTriggeringMixin):
+            __tablename__ = "bar"
+            id: Mapped[int] = mapped_column(primary_key=True, init=False)
+            bar_value: Mapped[float] = mapped_column(default=78)
+
+        f1 = Foo(mixin_value=5)
+        eq_(f1.foo_value, 78)
+
+        b1 = Bar(mixin_value=5)
+        eq_(b1.bar_value, 78)
 
 
 class RelationshipDefaultFactoryTest(fixtures.TestBase):
@@ -1082,30 +1204,168 @@ class DataclassArgsTest(fixtures.TestBase):
 
                 id: Mapped[int] = mapped_column(primary_key=True, init=False)
 
-    @testing.combinations(True, False)
-    def test_attribute_options(self, args):
-        if args:
+    @testing.variation("use_arguments", [True, False])
+    @testing.combinations(
+        mapped_column,
+        lambda **kw: synonym("some_int", **kw),
+        lambda **kw: column_property(Column(Integer), **kw),
+        lambda **kw: deferred(Column(Integer), **kw),
+        lambda **kw: composite("foo", **kw),
+        lambda **kw: relationship("Foo", **kw),
+        lambda **kw: association_proxy("foo", "bar", **kw),
+        argnames="construct",
+    )
+    def test_attribute_options(self, use_arguments, construct):
+        if use_arguments:
             kw = {
-                "init": True,
-                "repr": True,
-                "default": True,
+                "init": False,
+                "repr": False,
+                "default": False,
                 "default_factory": list,
-                "kw_only": True,
+                "compare": True,
+                "kw_only": False,
             }
-            exp = interfaces._AttributeOptions(True, True, True, list, True)
+            exp = interfaces._AttributeOptions(
+                False, False, False, list, True, False
+            )
         else:
             kw = {}
             exp = interfaces._DEFAULT_ATTRIBUTE_OPTIONS
 
-        for prop in [
-            mapped_column(**kw),
-            synonym("some_int", **kw),
-            column_property(Column(Integer), **kw),
-            deferred(Column(Integer), **kw),
-            composite("foo", **kw),
-            relationship("Foo", **kw),
-        ]:
-            eq_(prop._attribute_options, exp)
+        prop = construct(**kw)
+        eq_(prop._attribute_options, exp)
+
+
+class MixinColumnTest(fixtures.TestBase, testing.AssertsCompiledSQL):
+    """tests for #8718"""
+
+    __dialect__ = "default"
+
+    @testing.fixture
+    def model(self):
+        def go(use_mixin, use_inherits, mad_setup):
+
+            if use_mixin:
+
+                if mad_setup == "dc, mad":
+
+                    class BaseEntity(DeclarativeBase, MappedAsDataclass):
+                        pass
+
+                elif mad_setup == "mad, dc":
+
+                    class BaseEntity(MappedAsDataclass, DeclarativeBase):
+                        pass
+
+                elif mad_setup == "subclass":
+
+                    class BaseEntity(DeclarativeBase):
+                        pass
+
+                class IdMixin:
+                    id: Mapped[int] = mapped_column(
+                        primary_key=True, init=False
+                    )
+
+                if mad_setup == "subclass":
+
+                    class A(IdMixin, MappedAsDataclass, BaseEntity):
+                        __mapper_args__ = {
+                            "polymorphic_on": "type",
+                            "polymorphic_identity": "a",
+                        }
+
+                        __tablename__ = "a"
+                        type: Mapped[str] = mapped_column(String, init=False)
+                        data: Mapped[str] = mapped_column(String, init=False)
+
+                else:
+
+                    class A(IdMixin, BaseEntity):
+                        __mapper_args__ = {
+                            "polymorphic_on": "type",
+                            "polymorphic_identity": "a",
+                        }
+
+                        __tablename__ = "a"
+                        type: Mapped[str] = mapped_column(String, init=False)
+                        data: Mapped[str] = mapped_column(String, init=False)
+
+            else:
+
+                if mad_setup == "dc, mad":
+
+                    class BaseEntity(DeclarativeBase, MappedAsDataclass):
+                        id: Mapped[int] = mapped_column(
+                            primary_key=True, init=False
+                        )
+
+                elif mad_setup == "mad, dc":
+
+                    class BaseEntity(MappedAsDataclass, DeclarativeBase):
+                        id: Mapped[int] = mapped_column(
+                            primary_key=True, init=False
+                        )
+
+                elif mad_setup == "subclass":
+
+                    class BaseEntity(DeclarativeBase):
+                        id: Mapped[int] = mapped_column(
+                            primary_key=True, init=False
+                        )
+
+                if mad_setup == "subclass":
+
+                    class A(MappedAsDataclass, BaseEntity):
+                        __mapper_args__ = {
+                            "polymorphic_on": "type",
+                            "polymorphic_identity": "a",
+                        }
+
+                        __tablename__ = "a"
+                        type: Mapped[str] = mapped_column(String, init=False)
+                        data: Mapped[str] = mapped_column(String, init=False)
+
+                else:
+
+                    class A(BaseEntity):
+                        __mapper_args__ = {
+                            "polymorphic_on": "type",
+                            "polymorphic_identity": "a",
+                        }
+
+                        __tablename__ = "a"
+                        type: Mapped[str] = mapped_column(String, init=False)
+                        data: Mapped[str] = mapped_column(String, init=False)
+
+            if use_inherits:
+
+                class B(A):
+                    __mapper_args__ = {
+                        "polymorphic_identity": "b",
+                    }
+                    b_data: Mapped[str] = mapped_column(String, init=False)
+
+                return B
+            else:
+                return A
+
+        yield go
+
+    @testing.combinations("inherits", "plain", argnames="use_inherits")
+    @testing.combinations("mixin", "base", argnames="use_mixin")
+    @testing.combinations(
+        "mad, dc", "dc, mad", "subclass", argnames="mad_setup"
+    )
+    def test_mapping(self, model, use_inherits, use_mixin, mad_setup):
+        target_cls = model(
+            use_inherits=use_inherits == "inherits",
+            use_mixin=use_mixin == "mixin",
+            mad_setup=mad_setup,
+        )
+
+        obj = target_cls()
+        assert "id" not in obj.__dict__
 
 
 class CompositeTest(fixtures.TestBase, testing.AssertsCompiledSQL):

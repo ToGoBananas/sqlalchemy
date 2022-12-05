@@ -19,6 +19,7 @@ import operator
 import typing
 from typing import Any
 from typing import Callable
+from typing import Dict
 from typing import List
 from typing import NoReturn
 from typing import Optional
@@ -32,6 +33,7 @@ import weakref
 
 from . import attributes
 from . import util as orm_util
+from .base import _DeclarativeMapped
 from .base import LoaderCallableStatus
 from .base import Mapped
 from .base import PassiveFlag
@@ -50,6 +52,8 @@ from .. import util
 from ..sql import expression
 from ..sql import operators
 from ..sql.elements import BindParameter
+from ..util.typing import de_stringify_annotation
+from ..util.typing import is_fwd_ref
 from ..util.typing import is_pep593
 from ..util.typing import typing_get_args
 
@@ -60,6 +64,7 @@ if typing.TYPE_CHECKING:
     from .attributes import InstrumentedAttribute
     from .attributes import QueryableAttribute
     from .context import ORMCompileState
+    from .decl_base import _ClassScanMapperConfig
     from .mapper import Mapper
     from .properties import ColumnProperty
     from .properties import MappedColumn
@@ -171,18 +176,14 @@ _composite_getters: weakref.WeakKeyDictionary[
 ] = weakref.WeakKeyDictionary()
 
 
-class Composite(
+class CompositeProperty(
     _MapsColumns[_CC], _IntrospectsAnnotations, DescriptorProperty[_CC]
 ):
     """Defines a "composite" mapped attribute, representing a collection
     of columns as one attribute.
 
-    :class:`.Composite` is constructed using the :func:`.composite`
+    :class:`.CompositeProperty` is constructed using the :func:`.composite`
     function.
-
-    .. versionchanged:: 2.0 Renamed :class:`_orm.CompositeProperty`
-       to :class:`_orm.Composite`.  The old name
-       :class:`_orm.CompositeProperty` remains as an alias.
 
     .. seealso::
 
@@ -332,9 +333,12 @@ class Composite(
     @util.preload_module("sqlalchemy.orm.properties")
     def declarative_scan(
         self,
+        decl_scan: _ClassScanMapperConfig,
         registry: _RegistryType,
         cls: Type[Any],
+        originating_module: Optional[str],
         key: str,
+        mapped_container: Optional[Type[Mapped[Any]]],
         annotation: Optional[_AnnotationScanType],
         extracted_mapped_annotation: Optional[_AnnotationScanType],
         is_dataclass_field: bool,
@@ -351,22 +355,27 @@ class Composite(
             argument = typing_get_args(argument)[0]
 
         if argument and self.composite_class is None:
-            if isinstance(argument, str) or hasattr(
-                argument, "__forward_arg__"
+            if isinstance(argument, str) or is_fwd_ref(
+                argument, check_generic=True
             ):
-                str_arg = (
-                    argument.__forward_arg__
-                    if hasattr(argument, "__forward_arg__")
-                    else str(argument)
+                if originating_module is None:
+                    str_arg = (
+                        argument.__forward_arg__
+                        if hasattr(argument, "__forward_arg__")
+                        else str(argument)
+                    )
+                    raise sa_exc.ArgumentError(
+                        f"Can't use forward ref {argument} for composite "
+                        f"class argument; set up the type as Mapped[{str_arg}]"
+                    )
+                argument = de_stringify_annotation(
+                    cls, argument, originating_module, include_generic=True
                 )
-                raise sa_exc.ArgumentError(
-                    f"Can't use forward ref {argument} for composite "
-                    f"class argument; set up the type as Mapped[{str_arg}]"
-                )
+
             self.composite_class = argument
 
         if is_dataclass(self.composite_class):
-            self._setup_for_dataclass(registry, cls, key)
+            self._setup_for_dataclass(registry, cls, originating_module, key)
         else:
             for attr in self.attrs:
                 if (
@@ -409,7 +418,11 @@ class Composite(
     @util.preload_module("sqlalchemy.orm.properties")
     @util.preload_module("sqlalchemy.orm.decl_base")
     def _setup_for_dataclass(
-        self, registry: _RegistryType, cls: Type[Any], key: str
+        self,
+        registry: _RegistryType,
+        cls: Type[Any],
+        originating_module: Optional[str],
+        key: str,
     ) -> None:
         MappedColumn = util.preloaded.orm_properties.MappedColumn
 
@@ -433,7 +446,12 @@ class Composite(
 
             if isinstance(attr, MappedColumn):
                 attr.declarative_scan_for_composite(
-                    registry, cls, key, param.name, param.annotation
+                    registry,
+                    cls,
+                    originating_module,
+                    key,
+                    param.name,
+                    param.annotation,
                 )
             elif isinstance(attr, schema.Column):
                 decl_base._undefer_column_name(param.name, attr)
@@ -602,6 +620,31 @@ class Composite(
     def _attribute_keys(self) -> Sequence[str]:
         return [prop.key for prop in self.props]
 
+    def _populate_composite_bulk_save_mappings_fn(
+        self,
+    ) -> Callable[[Dict[str, Any]], None]:
+
+        if self._generated_composite_accessor:
+            get_values = self._generated_composite_accessor
+        else:
+
+            def get_values(val: Any) -> Tuple[Any]:
+                return val.__composite_values__()  # type: ignore
+
+        attrs = [prop.key for prop in self.props]
+
+        def populate(dest_dict: Dict[str, Any]) -> None:
+            dest_dict.update(
+                {
+                    key: val
+                    for key, val in zip(
+                        attrs, get_values(dest_dict.pop(self.key))
+                    )
+                }
+            )
+
+        return populate
+
     def get_history(
         self,
         state: InstanceState[Any],
@@ -696,11 +739,11 @@ class Composite(
                 group=False, *self._comparable_elements
             )
 
-        def __clause_element__(self) -> Composite.CompositeBundle[_PT]:
+        def __clause_element__(self) -> CompositeProperty.CompositeBundle[_PT]:
             return self.expression
 
         @util.memoized_property
-        def expression(self) -> Composite.CompositeBundle[_PT]:
+        def expression(self) -> CompositeProperty.CompositeBundle[_PT]:
             clauses = self.clauses._annotate(
                 {
                     "parententity": self._parententity,
@@ -708,7 +751,7 @@ class Composite(
                     "proxy_key": self.prop.key,
                 }
             )
-            return Composite.CompositeBundle(self.prop, clauses)
+            return CompositeProperty.CompositeBundle(self.prop, clauses)
 
         def _bulk_update_tuples(
             self, value: Any
@@ -788,6 +831,25 @@ class Composite(
         return str(self.parent.class_.__name__) + "." + self.key
 
 
+class Composite(CompositeProperty[_T], _DeclarativeMapped[_T]):
+    """Declarative-compatible front-end for the :class:`.CompositeProperty`
+    class.
+
+    Public constructor is the :func:`_orm.composite` function.
+
+    .. versionchanged:: 2.0 Added :class:`_orm.Composite` as a Declarative
+       compatible subclass of :class:`_orm.CompositeProperty`.
+
+    .. seealso::
+
+        :ref:`mapper_composite`
+
+    """
+
+    inherit_cache = True
+    """:meta private:"""
+
+
 class ConcreteInheritedProperty(DescriptorProperty[_T]):
     """A 'do nothing' :class:`.MapperProperty` that disables
     an attribute on a concrete subclass that is only present
@@ -845,17 +907,13 @@ class ConcreteInheritedProperty(DescriptorProperty[_T]):
         self.descriptor = NoninheritedConcreteProp()
 
 
-class Synonym(DescriptorProperty[_T]):
+class SynonymProperty(DescriptorProperty[_T]):
     """Denote an attribute name as a synonym to a mapped property,
     in that the attribute will mirror the value and expression behavior
     of another attribute.
 
     :class:`.Synonym` is constructed using the :func:`_orm.synonym`
     function.
-
-    .. versionchanged:: 2.0 Renamed :class:`_orm.SynonymProperty`
-       to :class:`_orm.Synonym`.  The old name
-       :class:`_orm.SynonymProperty` remains as an alias.
 
     .. seealso::
 
@@ -982,3 +1040,21 @@ class Synonym(DescriptorProperty[_T]):
             p._mapped_by_synonym = self.key
 
         self.parent = parent
+
+
+class Synonym(SynonymProperty[_T], _DeclarativeMapped[_T]):
+    """Declarative front-end for the :class:`.SynonymProperty` class.
+
+    Public constructor is the :func:`_orm.synonym` function.
+
+    .. versionchanged:: 2.0 Added :class:`_orm.Synonym` as a Declarative
+       compatible subclass for :class:`_orm.SynonymProperty`
+
+    .. seealso::
+
+        :ref:`synonyms` - Overview of synonyms
+
+    """
+
+    inherit_cache = True
+    """:meta private:"""

@@ -1,3 +1,5 @@
+import random
+
 import sqlalchemy as sa
 from sqlalchemy import CheckConstraint
 from sqlalchemy import event
@@ -7,6 +9,7 @@ from sqlalchemy import ForeignKeyConstraint
 from sqlalchemy import Index
 from sqlalchemy import inspect
 from sqlalchemy import Integer
+from sqlalchemy import select
 from sqlalchemy import String
 from sqlalchemy import testing
 from sqlalchemy import UniqueConstraint
@@ -27,6 +30,7 @@ from sqlalchemy.orm import descriptor_props
 from sqlalchemy.orm import exc as orm_exc
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import MappedColumn
 from sqlalchemy.orm import Mapper
 from sqlalchemy.orm import registry
 from sqlalchemy.orm import relationship
@@ -42,6 +46,8 @@ from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
 from sqlalchemy.testing import assertions
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import expect_raises
+from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import expect_warnings
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
@@ -256,7 +262,7 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
         configure_mappers()
         eq_(
             Parent.children.property._calculated_foreign_keys,
-            set([Child.name_upper.property.columns[0]]),
+            {Child.name_upper.property.columns[0]},
         )
 
     def test_class_has_registry_attr(self, registry):
@@ -931,12 +937,11 @@ class DeclarativeMultiBaseTest(
                 id = Column(Integer, primary_key=True)
 
     def test_column_named_twice(self):
-        with assertions.expect_deprecated(
-            "A column with name 'x' is already present in table 'foo'"
-        ), expect_warnings(
-            "On class 'Foo', Column object 'x' named directly multiple times, "
-            "only one will be used: x, y",
-        ):
+        with expect_warnings(
+            "On class 'Foo', Column object 'x' named directly multiple "
+            "times, only one will be used: x, y. Consider using "
+            "orm.synonym instead"
+        ), expect_raises(exc.DuplicateColumnError):
 
             class Foo(Base):
                 __tablename__ = "foo"
@@ -946,12 +951,11 @@ class DeclarativeMultiBaseTest(
                 y = Column("x", Integer)
 
     def test_column_repeated_under_prop(self):
-        with assertions.expect_deprecated(
-            "A column with name 'x' is already present in table 'foo'"
-        ), expect_warnings(
-            "On class 'Foo', Column object 'x' named directly multiple times, "
-            "only one will be used: x, y, z",
-        ):
+        with expect_warnings(
+            "On class 'Foo', Column object 'x' named directly multiple "
+            "times, only one will be used: x, y, z. Consider using "
+            "orm.synonym instead"
+        ), expect_raises(exc.DuplicateColumnError):
 
             class Foo(Base):
                 __tablename__ = "foo"
@@ -1044,27 +1048,46 @@ class DeclarativeMultiBaseTest(
             configure_mappers,
         )
 
-    def test_reserved_identifiers(self):
-        def go1():
-            class User1(Base):
-                __tablename__ = "user1"
-                id = Column(Integer, primary_key=True)
-                metadata = Column(Integer)
+    # currently "registry" is allowed, "metadata" is not.
+    @testing.combinations(
+        ("metadata", True), ("registry", False), argnames="name, expect_raise"
+    )
+    @testing.variation("attrtype", ["column", "relationship"])
+    def test_reserved_identifiers(
+        self, decl_base, name, expect_raise, attrtype
+    ):
 
-        def go2():
-            class User2(Base):
-                __tablename__ = "user2"
-                id = Column(Integer, primary_key=True)
-                metadata = relationship("Address")
+        if attrtype.column:
+            clsdict = {
+                "__tablename__": "user",
+                "id": Column(Integer, primary_key=True),
+                name: Column(Integer),
+            }
+        elif attrtype.relationship:
+            clsdict = {
+                "__tablename__": "user",
+                "id": Column(Integer, primary_key=True),
+                name: relationship("Address"),
+            }
 
-        for go in (go1, go2):
-            assert_raises_message(
+            class Address(decl_base):
+                __tablename__ = "address"
+                id = Column(Integer, primary_key=True)
+                user_id = Column(ForeignKey("user.id"))
+
+        else:
+            assert False
+
+        if expect_raise:
+            with expect_raises_message(
                 exc.InvalidRequestError,
-                "Attribute name 'metadata' is reserved "
-                "for the MetaData instance when using a "
-                "declarative base class.",
-                go,
-            )
+                f"Attribute name '{name}' is reserved "
+                "when using the Declarative API.",
+            ):
+                type("User", (decl_base,), clsdict)
+        else:
+            User = type("User", (decl_base,), clsdict)
+            assert getattr(User, name).property
 
     def test_recompile_on_othermapper(self):
         """declarative version of the same test in mappers.py"""
@@ -1733,7 +1756,7 @@ class DeclarativeMultiBaseTest(
 
         assert ASub.brap.property is A.data.property
         assert isinstance(
-            ASub.brap.original_property, descriptor_props.Synonym
+            ASub.brap.original_property, descriptor_props.SynonymProperty
         )
 
     def test_alt_name_attr_subclass_relationship_inline(self):
@@ -1755,7 +1778,7 @@ class DeclarativeMultiBaseTest(
 
         assert ASub.brap.property is A.b.property
         assert isinstance(
-            ASub.brap.original_property, descriptor_props.Synonym
+            ASub.brap.original_property, descriptor_props.SynonymProperty
         )
         ASub(brap=B())
 
@@ -1768,7 +1791,9 @@ class DeclarativeMultiBaseTest(
 
         A.brap = A.data
         assert A.brap.property is A.data.property
-        assert isinstance(A.brap.original_property, descriptor_props.Synonym)
+        assert isinstance(
+            A.brap.original_property, descriptor_props.SynonymProperty
+        )
 
     def test_alt_name_attr_subclass_relationship_attrset(
         self, require_metaclass
@@ -1787,7 +1812,9 @@ class DeclarativeMultiBaseTest(
             id = Column("id", Integer, primary_key=True)
 
         assert A.brap.property is A.b.property
-        assert isinstance(A.brap.original_property, descriptor_props.Synonym)
+        assert isinstance(
+            A.brap.original_property, descriptor_props.SynonymProperty
+        )
         A(brap=B())
 
     def test_eager_order_by(self):
@@ -2180,8 +2207,8 @@ class DeclarativeMultiBaseTest(
 
             adr_count = Address.id
 
-        eq_(set(User.__table__.c.keys()), set(["id", "name"]))
-        eq_(set(Address.__table__.c.keys()), set(["id", "email", "user_id"]))
+        eq_(set(User.__table__.c.keys()), {"id", "name"})
+        eq_(set(Address.__table__.c.keys()), {"id", "email", "user_id"})
 
     def test_deferred(self):
         class User(Base, fixtures.ComparableEntity):
@@ -2584,3 +2611,132 @@ class DeclarativeMultiBaseTest(
 
         mt = MyTable(id=5)
         eq_(mt.id, 5)
+
+
+class NamedAttrOrderingTest(fixtures.TestBase):
+    """test for #8705"""
+
+    @testing.combinations(
+        "decl_base_fn",
+        "decl_base_base",
+        "classical_mapping",
+        argnames="mapping_style",
+    )
+    def test_ordering_of_attrs_cols_named_or_unnamed(self, mapping_style):
+        def make_name():
+            uppercase = random.randint(1, 3) == 1
+            name = "".join(
+                random.choice("abcdefghijklmnopqrstuvxyz")
+                for i in range(random.randint(4, 10))
+            )
+            if uppercase:
+                name = random.choice("ABCDEFGHIJKLMNOP") + name
+            return name
+
+        def make_column(assign_col_name):
+            use_key = random.randint(1, 3) == 1
+            use_name = random.randint(1, 3) == 1
+
+            args = []
+            kw = {}
+            name = col_name = make_name()
+
+            if use_name:
+                use_different_name = random.randint(1, 3) != 3
+                if use_different_name:
+                    col_name = make_name()
+
+                args.append(col_name)
+            elif assign_col_name:
+                args.append(col_name)
+
+            if use_key:
+                kw["key"] = name
+                expected_c_name = name
+            else:
+                expected_c_name = col_name
+
+            args.append(Integer)
+
+            if mapping_style.startswith("decl"):
+                use_mapped_column = random.randint(1, 2) == 1
+            else:
+                use_mapped_column = False
+
+            if use_mapped_column:
+                col = mapped_column(*args, **kw)
+            else:
+                col = Column(*args, **kw)
+
+            use_explicit_property = (
+                not use_mapped_column and random.randint(1, 6) == 1
+            )
+            if use_explicit_property:
+                col_prop = column_property(col)
+            else:
+                col_prop = col
+
+            return name, expected_c_name, col, col_prop
+
+        assign_col_name = mapping_style == "classical_mapping"
+
+        names = [
+            make_column(assign_col_name) for i in range(random.randint(10, 15))
+        ]
+        len_names = len(names)
+
+        pk_col = names[random.randint(0, len_names - 1)][2]
+        if isinstance(pk_col, MappedColumn):
+            pk_col.column.primary_key = True
+        else:
+            pk_col.primary_key = True
+
+        names_only = [name for name, _, _, _ in names]
+        col_names_only = [col_name for _, col_name, _, _ in names]
+        cols_only = [col for _, _, col, _ in names]
+
+        if mapping_style in ("decl_base_fn", "decl_base_base"):
+            if mapping_style == "decl_base_fn":
+                Base = declarative_base()
+            elif mapping_style == "decl_base_base":
+
+                class Base(DeclarativeBase):
+                    pass
+
+            else:
+                assert False
+
+            clsdict = {
+                "__tablename__": "new_table",
+            }
+            clsdict.update({name: colprop for name, _, _, colprop in names})
+
+            new_cls = type("NewCls", (Base,), clsdict)
+
+        elif mapping_style == "classical_mapping":
+
+            class new_cls:
+                pass
+
+            reg = registry()
+            t = Table("new_table", reg.metadata, *cols_only)
+
+            reg.map_imperatively(
+                new_cls,
+                t,
+                properties={
+                    key: colprop
+                    for key, col_name, col, colprop in names
+                    if col_name != key
+                },
+            )
+        else:
+            assert False
+
+        eq_(new_cls.__table__.c.keys(), col_names_only)
+        eq_(new_cls.__mapper__.attrs.keys(), names_only)
+        eq_(list(new_cls._sa_class_manager.keys()), names_only)
+        eq_([k for k in new_cls.__dict__ if not k.startswith("_")], names_only)
+
+        stmt = select(new_cls)
+        eq_(stmt.selected_columns.keys(), col_names_only)

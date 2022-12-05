@@ -352,6 +352,17 @@ class DefaultRequirements(SuiteRequirements):
         return skip_if(["+pyodbc"], "no driver support")
 
     @property
+    def select_star_mixed(self):
+        r"""target supports expressions like "SELECT x, y, \*, z FROM table"
+
+        apparently MySQL / MariaDB, Oracle doesn't handle this.
+
+        We only need a few backends so just cover SQLite / PG
+
+        """
+        return only_on(["sqlite", "postgresql"])
+
+    @property
     def independent_connections(self):
         """
         Target must support simultaneous, independent database connections.
@@ -461,8 +472,8 @@ class DefaultRequirements(SuiteRequirements):
     def update_from(self):
         """Target must support UPDATE..FROM syntax"""
 
-        return only_on(
-            ["postgresql", "mssql", "mysql", "mariadb"],
+        return skip_if(
+            ["oracle", "sqlite<3.33.0"],
             "Backend does not support UPDATE..FROM",
         )
 
@@ -599,6 +610,18 @@ class DefaultRequirements(SuiteRequirements):
         )
 
     @property
+    def has_temp_table(self):
+        """target dialect supports checking a single temp table name
+
+        unfortunately this is not the same as temp_table_names
+
+        """
+
+        return only_on(["sqlite", "oracle", "postgresql", "mssql"]) + skip_if(
+            self._sqlite_file_db
+        )
+
+    @property
     def temporary_views(self):
         """target database supports temporary views"""
         return only_on(["sqlite", "postgresql"]) + skip_if(
@@ -683,14 +706,17 @@ class DefaultRequirements(SuiteRequirements):
         """Target database must support INTERSECT or equivalent."""
 
         return fails_if(
-            [self._mysql_not_mariadb_103],
+            [self._mysql_not_mariadb_103_not_mysql8031],
             "no support for INTERSECT",
         )
 
     @property
     def except_(self):
         """Target database must support EXCEPT or equivalent (i.e. MINUS)."""
-        return fails_if([self._mysql_not_mariadb_103], "no support for EXCEPT")
+        return fails_if(
+            [self._mysql_not_mariadb_103_not_mysql8031],
+            "no support for EXCEPT",
+        )
 
     @property
     def dupe_order_by_ok(self):
@@ -881,6 +907,11 @@ class DefaultRequirements(SuiteRequirements):
     def empty_inserts_executemany(self):
         # waiting on https://jira.mariadb.org/browse/CONPY-152
         return skip_if(["mariadb+mariadbconnector"]) + self.empty_inserts
+
+    @property
+    def provisioned_upsert(self):
+        """backend includes upsert() in its provisioning.py"""
+        return only_on(["postgresql", "sqlite", "mariadb"])
 
     @property
     def expressions_against_unbounded_text(self):
@@ -1630,10 +1661,36 @@ class DefaultRequirements(SuiteRequirements):
             or config.db.dialect._mariadb_normalized_version_info < (10, 3)
         )
 
+    def _mysql_not_mariadb_103_not_mysql8031(self, config):
+        return (against(config, ["mysql", "mariadb"])) and (
+            (
+                config.db.dialect._is_mariadb
+                and config.db.dialect._mariadb_normalized_version_info
+                < (10, 3)
+            )
+            or (
+                not config.db.dialect._is_mariadb
+                and config.db.dialect.server_version_info < (8, 0, 31)
+            )
+        )
+
     def _mysql_not_mariadb_104(self, config):
         return (against(config, ["mysql", "mariadb"])) and (
             not config.db.dialect._is_mariadb
             or config.db.dialect._mariadb_normalized_version_info < (10, 4)
+        )
+
+    def _mysql_not_mariadb_104_not_mysql8031(self, config):
+        return (against(config, ["mysql", "mariadb"])) and (
+            (
+                config.db.dialect._is_mariadb
+                and config.db.dialect._mariadb_normalized_version_info
+                < (10, 4)
+            )
+            or (
+                not config.db.dialect._is_mariadb
+                and config.db.dialect.server_version_info < (8, 0, 31)
+            )
         )
 
     def _has_mysql_on_windows(self, config):

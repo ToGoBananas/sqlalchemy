@@ -41,6 +41,7 @@ from .. import util
 from ..util.typing import Literal
 
 if typing.TYPE_CHECKING:
+    # elements lambdas schema selectable are set by __init__
     from . import elements
     from . import lambdas
     from . import schema
@@ -354,7 +355,7 @@ def expect(
 
     if not isinstance(
         element,
-        (elements.ClauseElement, schema.SchemaItem, schema.FetchedValue),
+        (elements.CompilerElement, schema.SchemaItem, schema.FetchedValue),
     ):
         resolved = None
 
@@ -769,16 +770,21 @@ class ExpressionElementImpl(_ColumnCoercions, RoleImpl):
                 self._raise_for_expected(element, err=err)
 
     def _raise_for_expected(self, element, argname=None, resolved=None, **kw):
-        if isinstance(element, roles.AnonymizedFromClauseRole):
+        # select uses implicit coercion with warning instead of raising
+        if isinstance(element, selectable.Values):
             advice = (
-                "To create a "
-                "column expression from a FROM clause row "
+                "To create a column expression from a VALUES clause, "
+                "use the .scalar_values() method."
+            )
+        elif isinstance(element, roles.AnonymizedFromClauseRole):
+            advice = (
+                "To create a column expression from a FROM clause row "
                 "as a whole, use the .table_valued() method."
             )
         else:
             advice = None
 
-        return super(ExpressionElementImpl, self)._raise_for_expected(
+        return super()._raise_for_expected(
             element, argname=argname, resolved=resolved, advice=advice, **kw
         )
 
@@ -882,6 +888,8 @@ class InElementImpl(RoleImpl):
             element.expand_op = operator
 
             return element
+        elif isinstance(element, selectable.Values):
+            return element.scalar_values()
         else:
             return element
 
@@ -1092,7 +1100,7 @@ class LabeledColumnExprImpl(ExpressionElementImpl):
         if isinstance(resolved, roles.ExpressionElementRole):
             return resolved.label(None)
         else:
-            new = super(LabeledColumnExprImpl, self)._implicit_coercions(
+            new = super()._implicit_coercions(
                 element, resolved, argname=argname, **kw
             )
             if isinstance(new, roles.ExpressionElementRole):
@@ -1119,7 +1127,7 @@ class ColumnsClauseImpl(_SelectIsNotFrom, _CoerceLiterals, RoleImpl):
                 f"{', '.join(repr(e) for e in element)})?"
             )
 
-        return super(ColumnsClauseImpl, self)._raise_for_expected(
+        return super()._raise_for_expected(
             element, argname=argname, resolved=resolved, advice=advice, **kw
         )
 
@@ -1366,7 +1374,7 @@ class CompoundElementImpl(_NoTextCoercion, RoleImpl):
                 )
         else:
             advice = None
-        return super(CompoundElementImpl, self)._raise_for_expected(
+        return super()._raise_for_expected(
             element, argname=argname, resolved=resolved, advice=advice, **kw
         )
 

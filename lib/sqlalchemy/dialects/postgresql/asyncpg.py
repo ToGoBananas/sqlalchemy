@@ -291,15 +291,13 @@ class AsyncpgCHAR(sqltypes.CHAR):
     render_bind_cast = True
 
 
-class _AsyncpgRange(ranges.AbstractRange):
+class _AsyncpgRange(ranges.AbstractRangeImpl):
     def bind_processor(self, dialect):
-        Range = dialect.dbapi.asyncpg.Range
-
-        NoneType = type(None)
+        asyncpg_Range = dialect.dbapi.asyncpg.Range
 
         def to_range(value):
-            if not isinstance(value, (str, NoneType)):
-                value = Range(
+            if isinstance(value, ranges.Range):
+                value = asyncpg_Range(
                     value.lower,
                     value.upper,
                     lower_inc=value.bounds[0] == "[",
@@ -326,9 +324,9 @@ class _AsyncpgRange(ranges.AbstractRange):
         return to_range
 
 
-class _AsyncpgMultiRange(ranges.AbstractMultiRange):
+class _AsyncpgMultiRange(ranges.AbstractMultiRangeImpl):
     def bind_processor(self, dialect):
-        Range = dialect.dbapi.asyncpg.Range
+        asyncpg_Range = dialect.dbapi.asyncpg.Range
 
         NoneType = type(None)
 
@@ -337,8 +335,8 @@ class _AsyncpgMultiRange(ranges.AbstractMultiRange):
                 return value
 
             def to_range(value):
-                if not isinstance(value, (str, NoneType)):
-                    value = Range(
+                if isinstance(value, ranges.Range):
+                    value = asyncpg_Range(
                         value.lower,
                         value.upper,
                         lower_inc=value.bounds[0] == "[",
@@ -418,7 +416,6 @@ class AsyncAdapt_asyncpg_cursor:
         "description",
         "arraysize",
         "rowcount",
-        "_inputsizes",
         "_cursor",
         "_invalidate_schema_cache_asof",
     )
@@ -433,7 +430,6 @@ class AsyncAdapt_asyncpg_cursor:
         self.description = None
         self.arraysize = 1
         self.rowcount = -1
-        self._inputsizes = None
         self._invalidate_schema_cache_asof = 0
 
     def close(self):
@@ -564,7 +560,7 @@ class AsyncAdapt_asyncpg_ss_cursor(AsyncAdapt_asyncpg_cursor):
     __slots__ = ("_rowbuffer",)
 
     def __init__(self, adapt_connection):
-        super(AsyncAdapt_asyncpg_ss_cursor, self).__init__(adapt_connection)
+        super().__init__(adapt_connection)
         self._rowbuffer = None
 
     def close(self):
@@ -741,6 +737,12 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
         else:
             self.isolation_level = self._isolation_setting
 
+    def ping(self):
+        try:
+            _ = self.await_(self._connection.fetchrow(";"))
+        except Exception as error:
+            self._handle_exception(error)
+
     def set_isolation_level(self, level):
         if self._started:
             self.rollback()
@@ -861,9 +863,7 @@ class AsyncAdapt_asyncpg_dbapi:
 
     class InvalidCachedStatementError(NotSupportedError):
         def __init__(self, message):
-            super(
-                AsyncAdapt_asyncpg_dbapi.InvalidCachedStatementError, self
-            ).__init__(
+            super().__init__(
                 message + " (SQLAlchemy asyncpg dialect will now invalidate "
                 "all prepared caches in response to this exception)",
             )
@@ -996,6 +996,17 @@ class PGDialect_asyncpg(PGDialect):
         util.coerce_kw_type(opts, "port", int)
         return ([], opts)
 
+    def do_ping(self, dbapi_connection):
+        try:
+            dbapi_connection.ping()
+        except self.dbapi.Error as err:
+            if self.is_disconnect(err, dbapi_connection, None):
+                return False
+            else:
+                raise
+        else:
+            return True
+
     @classmethod
     def get_pool_class(cls, url):
 
@@ -1082,7 +1093,7 @@ class PGDialect_asyncpg(PGDialect):
 
         """
 
-        super_connect = super(PGDialect_asyncpg, self).on_connect()
+        super_connect = super().on_connect()
 
         def connect(conn):
             conn.await_(self.setup_asyncpg_json_codec(conn))

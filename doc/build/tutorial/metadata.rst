@@ -76,9 +76,9 @@ that will be how we will refer to the table in application code::
     >>> user_table = Table(
     ...     "user_account",
     ...     metadata_obj,
-    ...     Column('id', Integer, primary_key=True),
-    ...     Column('name', String(30)),
-    ...     Column('fullname', String)
+    ...     Column("id", Integer, primary_key=True),
+    ...     Column("name", String(30)),
+    ...     Column("fullname", String),
     ... )
 
 We can observe that the above :class:`_schema.Table` construct looks a lot like
@@ -151,9 +151,9 @@ table::
     >>> address_table = Table(
     ...     "address",
     ...     metadata_obj,
-    ...     Column('id', Integer, primary_key=True),
-    ...     Column('user_id', ForeignKey('user_account.id'), nullable=False),
-    ...     Column('email_address', String, nullable=False)
+    ...     Column("id", Integer, primary_key=True),
+    ...     Column("user_id", ForeignKey("user_account.id"), nullable=False),
+    ...     Column("email_address", String, nullable=False),
     ... )
 
 The table above also features a third kind of constraint, which in SQL is the
@@ -189,7 +189,7 @@ TABLE statements, or :term:`DDL`, to our SQLite database so that we can insert
 and query data from them.   We have already all the tools needed to do so, by
 invoking the
 :meth:`_schema.MetaData.create_all` method on our :class:`_schema.MetaData`,
-sending it the :class:`_future.Engine` that refers to the target database:
+sending it the :class:`_engine.Engine` that refers to the target database:
 
 .. sourcecode:: pycon+sql
 
@@ -331,7 +331,7 @@ types::
     >>> from sqlalchemy.orm import relationship
 
     >>> class User(Base):
-    ...     __tablename__ = 'user_account'
+    ...     __tablename__ = "user_account"
     ...
     ...     id: Mapped[int] = mapped_column(primary_key=True)
     ...     name: Mapped[str] = mapped_column(String(30))
@@ -340,14 +340,14 @@ types::
     ...     addresses: Mapped[List["Address"]] = relationship(back_populates="user")
     ...
     ...     def __repr__(self) -> str:
-    ...        return f"User(id={self.id!r}, name={self.name!r}, fullname={self.fullname!r})"
+    ...         return f"User(id={self.id!r}, name={self.name!r}, fullname={self.fullname!r})"
 
     >>> class Address(Base):
-    ...     __tablename__ = 'address'
+    ...     __tablename__ = "address"
     ...
     ...     id: Mapped[int] = mapped_column(primary_key=True)
     ...     email_address: Mapped[str]
-    ...     user_id = mapped_column(ForeignKey('user_account.id'))
+    ...     user_id = mapped_column(ForeignKey("user_account.id"))
     ...
     ...     user: Mapped[User] = relationship(back_populates="addresses")
     ...
@@ -423,15 +423,15 @@ about these classes include:
     optional. Our mapping above can be written without annotations as::
 
         class User(Base):
-          __tablename__ = 'user_account'
+            __tablename__ = "user_account"
 
-          id = mapped_column(Integer, primary_key=True)
-          name = mapped_column(String(30), nullable=False)
-          fullname = mapped_column(String)
+            id = mapped_column(Integer, primary_key=True)
+            name = mapped_column(String(30), nullable=False)
+            fullname = mapped_column(String)
 
-          addresses = relationship("Address", back_populates="user")
+            addresses = relationship("Address", back_populates="user")
 
-          # ... definition continues
+            # ... definition continues
 
     The above class has an advantage over one that uses :class:`.Column`
     directly, in that the ``User`` class as well as instances of ``User``
@@ -472,7 +472,6 @@ the collection from the ``Base.metadata`` attribute and then using
 
     Base.metadata.create_all(engine)
 
-
 Combining Core Table Declarations with ORM Declarative
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -497,6 +496,7 @@ and should not be run)::
     class Base(DeclarativeBase):
         pass
 
+
     class User(Base):
         __table__ = user_table
 
@@ -504,6 +504,7 @@ and should not be run)::
 
         def __repr__(self):
             return f"User({self.name!r}, {self.fullname!r})"
+
 
     class Address(Base):
         __table__ = address_table
@@ -549,7 +550,7 @@ how this is performed, however the most basic is to construct a
 :class:`_schema.Table` object, given the name of the table and a
 :class:`_schema.MetaData` collection to which it will belong, then
 instead of indicating individual :class:`_schema.Column` and
-:class:`_schema.Constraint` objects, pass it the target :class:`_future.Engine`
+:class:`_schema.Constraint` objects, pass it the target :class:`_engine.Engine`
 using the :paramref:`_schema.Table.autoload_with` parameter:
 
 .. sourcecode:: pycon+sql

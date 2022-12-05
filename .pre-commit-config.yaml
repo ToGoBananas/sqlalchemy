@@ -2,7 +2,7 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
 -   repo: https://github.com/python/black
-    rev: 22.3.0
+    rev: 22.8.0
     hooks:
     -   id: black
 
@@ -25,3 +25,11 @@ repos:
           # in case it requires a version pin
           - pydocstyle
           - pygments
+
+-   repo: local
+    hooks:
+    -   id: black-docs
+        name: Format docs code block with black
+        entry: python tools/format_docs_code.py -f
+        language: system
+        types: [rst]

@@ -106,7 +106,7 @@ class ValidatorTest(_fixtures.FixtureTest):
         self.mapper_registry.map_imperatively(Address, addresses)
 
         eq_(
-            dict((k, v[0].__name__) for k, v in list(u_m.validators.items())),
+            {k: v[0].__name__ for k, v in list(u_m.validators.items())},
             {"name": "validate_name", "addresses": "validate_address"},
         )
 
@@ -225,7 +225,7 @@ class ValidatorTest(_fixtures.FixtureTest):
             properties={
                 "addresses": relationship(
                     Address,
-                    collection_class=collections.attribute_mapped_collection(
+                    collection_class=collections.attribute_keyed_dict(
                         "email_address"
                     ),
                 )

@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 from collections import abc
 import copy
+import dataclasses
 import pickle
+from typing import List
 from unittest.mock import call
 from unittest.mock import Mock
 
@@ -17,6 +21,7 @@ from sqlalchemy import testing
 from sqlalchemy.engine import default
 from sqlalchemy.ext.associationproxy import _AssociationList
 from sqlalchemy.ext.associationproxy import association_proxy
+from sqlalchemy.ext.associationproxy import AssociationProxy
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import clear_mappers
 from sqlalchemy.orm import collections
@@ -24,10 +29,12 @@ from sqlalchemy.orm import composite
 from sqlalchemy.orm import configure_mappers
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import declared_attr
+from sqlalchemy.orm import Mapped
+from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import mapper
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.collections import attribute_mapped_collection
+from sqlalchemy.orm.collections import attribute_keyed_dict
 from sqlalchemy.orm.collections import collection
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
@@ -38,6 +45,7 @@ from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_false
 from sqlalchemy.testing.assertions import expect_raises_message
+from sqlalchemy.testing.entities import ComparableMixin  # noqa
 from sqlalchemy.testing.fixtures import fixture_session
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
@@ -195,7 +203,7 @@ class AutoFlushTest(fixtures.MappedTest):
             collection[obj.name] = obj
 
         self._test_premature_flush(
-            collections.attribute_mapped_collection("name"), set_, is_dict=True
+            collections.attribute_keyed_dict("name"), set_, is_dict=True
         )
 
 
@@ -559,7 +567,7 @@ class CustomDictTest(_CollectionOperations):
         self.assert_(len(p1._children) == 3)
         self.assert_(len(p1.children) == 3)
 
-        self.assert_(set(p1.children) == set(["d", "e", "f"]))
+        self.assert_(set(p1.children) == {"d", "e", "f"})
 
         del ch
         p1 = self.roundtrip(p1)
@@ -641,9 +649,7 @@ class SetTest(_CollectionOperations):
         self.assert_(len(p1.children) == 2)
         self.assert_(len(p1._children) == 2)
 
-        self.assert_(
-            set([o.name for o in p1._children]) == set(["regular", "proxied"])
-        )
+        self.assert_({o.name for o in p1._children} == {"regular", "proxied"})
 
         ch2 = None
         for o in p1._children:
@@ -655,7 +661,7 @@ class SetTest(_CollectionOperations):
 
         self.assert_(len(p1._children) == 1)
         self.assert_(len(p1.children) == 1)
-        self.assert_(p1._children == set([ch1]))
+        self.assert_(p1._children == {ch1})
 
         p1.children.remove("regular")
 
@@ -676,7 +682,7 @@ class SetTest(_CollectionOperations):
         self.assert_("b" in p1.children)
         self.assert_("d" not in p1.children)
 
-        self.assert_(p1.children == set(["a", "b", "c"]))
+        self.assert_(p1.children == {"a", "b", "c"})
 
         assert_raises(KeyError, p1.children.remove, "d")
 
@@ -695,15 +701,15 @@ class SetTest(_CollectionOperations):
 
         p1.children = ["a", "b", "c"]
         p1 = self.roundtrip(p1)
-        self.assert_(p1.children == set(["a", "b", "c"]))
+        self.assert_(p1.children == {"a", "b", "c"})
 
         p1.children.discard("b")
         p1 = self.roundtrip(p1)
-        self.assert_(p1.children == set(["a", "c"]))
+        self.assert_(p1.children == {"a", "c"})
 
         p1.children.remove("a")
         p1 = self.roundtrip(p1)
-        self.assert_(p1.children == set(["c"]))
+        self.assert_(p1.children == {"c"})
 
         p1._children = set()
         self.assert_(len(p1.children) == 0)
@@ -727,15 +733,15 @@ class SetTest(_CollectionOperations):
 
         p1 = Parent("P1")
         p1.children = ["a", "b", "c"]
-        control = set(["a", "b", "c"])
+        control = {"a", "b", "c"}
 
         for other in (
-            set(["a", "b", "c"]),
-            set(["a", "b", "c", "d"]),
-            set(["a"]),
-            set(["a", "b"]),
-            set(["c", "d"]),
-            set(["e", "f", "g"]),
+            {"a", "b", "c"},
+            {"a", "b", "c", "d"},
+            {"a"},
+            {"a", "b"},
+            {"c", "d"},
+            {"e", "f", "g"},
             set(),
         ):
 
@@ -795,12 +801,12 @@ class SetTest(_CollectionOperations):
         ):
             for base in (["a", "b", "c"], []):
                 for other in (
-                    set(["a", "b", "c"]),
-                    set(["a", "b", "c", "d"]),
-                    set(["a"]),
-                    set(["a", "b"]),
-                    set(["c", "d"]),
-                    set(["e", "f", "g"]),
+                    {"a", "b", "c"},
+                    {"a", "b", "c", "d"},
+                    {"a"},
+                    {"a", "b"},
+                    {"c", "d"},
+                    {"e", "f", "g"},
                     set(),
                 ):
                     p = Parent("p")
@@ -831,12 +837,12 @@ class SetTest(_CollectionOperations):
         for op in ("|=", "-=", "&=", "^="):
             for base in (["a", "b", "c"], []):
                 for other in (
-                    set(["a", "b", "c"]),
-                    set(["a", "b", "c", "d"]),
-                    set(["a"]),
-                    set(["a", "b"]),
-                    set(["c", "d"]),
-                    set(["e", "f", "g"]),
+                    {"a", "b", "c"},
+                    {"a", "b", "c", "d"},
+                    {"a"},
+                    {"a", "b"},
+                    {"c", "d"},
+                    {"e", "f", "g"},
                     frozenset(["e", "f", "g"]),
                     set(),
                 ):
@@ -1408,7 +1414,7 @@ class ReconstitutionTest(fixtures.MappedTest):
         add_child("p1", "c2")
         session.flush()
         p = session.query(Parent).filter_by(name="p1").one()
-        assert set(p.kids) == set(["c1", "c2"]), p.kids
+        assert set(p.kids) == {"c1", "c2"}, p.kids
 
     def test_copy(self):
         self.mapper_registry.map_imperatively(
@@ -1422,7 +1428,7 @@ class ReconstitutionTest(fixtures.MappedTest):
         p_copy = copy.copy(p)
         del p
         gc_collect()
-        assert set(p_copy.kids) == set(["c1", "c2"]), p_copy.kids
+        assert set(p_copy.kids) == {"c1", "c2"}, p_copy.kids
 
     def test_pickle_list(self):
         self.mapper_registry.map_imperatively(
@@ -1452,7 +1458,7 @@ class ReconstitutionTest(fixtures.MappedTest):
         p = Parent("p1")
         p.kids.update(["c1", "c2"])
         r1 = pickle.loads(pickle.dumps(p))
-        assert r1.kids == set(["c1", "c2"])
+        assert r1.kids == {"c1", "c2"}
 
         # can't do this without parent having a cycle
         # r2 = pickle.loads(pickle.dumps(p.kids))
@@ -1465,7 +1471,7 @@ class ReconstitutionTest(fixtures.MappedTest):
             properties=dict(
                 children=relationship(
                     KVChild,
-                    collection_class=collections.mapped_collection(
+                    collection_class=collections.keyfunc_mapping(
                         PickleKeyFunc("name")
                     ),
                 )
@@ -2356,7 +2362,7 @@ class DictOfTupleUpdateTest(fixtures.MappedTest):
             a,
             properties={
                 "orig": relationship(
-                    B, collection_class=attribute_mapped_collection("key")
+                    B, collection_class=attribute_keyed_dict("key")
                 )
             },
         )
@@ -3734,3 +3740,239 @@ class ScopeBehaviorTest(fixtures.DeclarativeMappedTest):
         gc_collect()
 
         assert len(a1bs) == 2
+
+
+class DeclOrmForms(fixtures.TestBase):
+    """test issues related to #8880, #8878, #8876"""
+
+    def test_straight_decl_usage(self, decl_base):
+        """test use of assoc prox as the default descriptor for a
+        dataclasses.field.
+
+        """
+
+        class User(decl_base):
+            __allow_unmapped__ = True
+
+            __tablename__ = "user"
+
+            id: Mapped[int] = mapped_column(primary_key=True)
+
+            user_keyword_associations: Mapped[
+                List[UserKeywordAssociation]
+            ] = relationship(
+                back_populates="user",
+                cascade="all, delete-orphan",
+            )
+
+            keywords: AssociationProxy[list[str]] = association_proxy(
+                "user_keyword_associations", "keyword"
+            )
+
+        UserKeywordAssociation, Keyword = self._keyword_mapping(
+            User, decl_base
+        )
+
+        self._assert_keyword_assoc_mapping(
+            User, UserKeywordAssociation, Keyword, init=True
+        )
+
+    @testing.variation("embed_in_field", [True, False])
+    @testing.combinations(
+        {},
+        {"repr": False},
+        {"repr": True},
+        ({"kw_only": True}, testing.requires.python310),
+        {"init": False},
+        {"default_factory": True},
+        argnames="field_kw",
+    )
+    def test_dc_decl_usage(self, dc_decl_base, embed_in_field, field_kw):
+        """test use of assoc prox as the default descriptor for a
+        dataclasses.field.
+
+        This exercises #8880
+
+        """
+
+        if field_kw.pop("default_factory", False) and not embed_in_field:
+            has_default_factory = True
+            field_kw["default_factory"] = lambda: [
+                Keyword("l1"),
+                Keyword("l2"),
+                Keyword("l3"),
+            ]
+        else:
+            has_default_factory = False
+
+        class User(dc_decl_base):
+            __allow_unmapped__ = True
+
+            __tablename__ = "user"
+
+            id: Mapped[int] = mapped_column(
+                primary_key=True, repr=True, init=False
+            )
+
+            user_keyword_associations: Mapped[
+                List[UserKeywordAssociation]
+            ] = relationship(
+                back_populates="user",
+                cascade="all, delete-orphan",
+                init=False,
+            )
+
+            if embed_in_field:
+                # this is an incorrect form to use with
+                # MappedAsDataclass.  However, we want to make sure it
+                # works as kind of a test to ensure we are being as well
+                # behaved as possible with an explicit dataclasses.field(),
+                # by testing that it uses its normal descriptor-as-default
+                # behavior
+                keywords: AssociationProxy[list[str]] = dataclasses.field(
+                    default=association_proxy(
+                        "user_keyword_associations", "keyword"
+                    ),
+                    **field_kw,
+                )
+            else:
+                keywords: AssociationProxy[list[str]] = association_proxy(
+                    "user_keyword_associations", "keyword", **field_kw
+                )
+
+        UserKeywordAssociation, Keyword = self._dc_keyword_mapping(
+            User, dc_decl_base
+        )
+
+        # simplify __qualname__ so we can test repr() more easily
+        User.__qualname__ = "mod.User"
+        UserKeywordAssociation.__qualname__ = "mod.UserKeywordAssociation"
+        Keyword.__qualname__ = "mod.Keyword"
+
+        init = field_kw.get("init", True)
+
+        u1 = self._assert_keyword_assoc_mapping(
+            User,
+            UserKeywordAssociation,
+            Keyword,
+            init=init,
+            has_default_factory=has_default_factory,
+        )
+
+        if field_kw.get("repr", True):
+            eq_(
+                repr(u1),
+                "mod.User(id=None, user_keyword_associations=["
+                "mod.UserKeywordAssociation(user_id=None, keyword_id=None, "
+                "keyword=mod.Keyword(id=None, keyword='k1'), user=...), "
+                "mod.UserKeywordAssociation(user_id=None, keyword_id=None, "
+                "keyword=mod.Keyword(id=None, keyword='k2'), user=...), "
+                "mod.UserKeywordAssociation(user_id=None, keyword_id=None, "
+                "keyword=mod.Keyword(id=None, keyword='k3'), user=...)], "
+                "keywords=[mod.Keyword(id=None, keyword='k1'), "
+                "mod.Keyword(id=None, keyword='k2'), "
+                "mod.Keyword(id=None, keyword='k3')])",
+            )
+        else:
+            eq_(
+                repr(u1),
+                "mod.User(id=None, user_keyword_associations=["
+                "mod.UserKeywordAssociation(user_id=None, keyword_id=None, "
+                "keyword=mod.Keyword(id=None, keyword='k1'), user=...), "
+                "mod.UserKeywordAssociation(user_id=None, keyword_id=None, "
+                "keyword=mod.Keyword(id=None, keyword='k2'), user=...), "
+                "mod.UserKeywordAssociation(user_id=None, keyword_id=None, "
+                "keyword=mod.Keyword(id=None, keyword='k3'), user=...)])",
+            )
+
+    def _assert_keyword_assoc_mapping(
+        self,
+        User,
+        UserKeywordAssociation,
+        Keyword,
+        *,
+        init,
+        has_default_factory=False,
+    ):
+        if not init:
+            with expect_raises_message(
+                TypeError, r"got an unexpected keyword argument 'keywords'"
+            ):
+                User(keywords=[Keyword("k1"), Keyword("k2"), Keyword("k3")])
+
+        if has_default_factory:
+            u1 = User()
+            eq_(u1.keywords, [Keyword("l1"), Keyword("l2"), Keyword("l3")])
+
+            eq_(
+                [ka.keyword.keyword for ka in u1.user_keyword_associations],
+                ["l1", "l2", "l3"],
+            )
+
+        if init:
+            u1 = User(keywords=[Keyword("k1"), Keyword("k2"), Keyword("k3")])
+        else:
+            u1 = User()
+            u1.keywords = [Keyword("k1"), Keyword("k2"), Keyword("k3")]
+
+        eq_(u1.keywords, [Keyword("k1"), Keyword("k2"), Keyword("k3")])
+
+        eq_(
+            [ka.keyword.keyword for ka in u1.user_keyword_associations],
+            ["k1", "k2", "k3"],
+        )
+
+        return u1
+
+    def _keyword_mapping(self, User, decl_base):
+        class UserKeywordAssociation(decl_base):
+            __tablename__ = "user_keyword"
+            user_id: Mapped[int] = mapped_column(
+                ForeignKey("user.id"), primary_key=True
+            )
+            keyword_id: Mapped[int] = mapped_column(
+                ForeignKey("keyword.id"), primary_key=True
+            )
+
+            user: Mapped[User] = relationship(
+                back_populates="user_keyword_associations",
+            )
+
+            keyword: Mapped[Keyword] = relationship()
+
+            def __init__(self, keyword=None, user=None):
+                self.user = user
+                self.keyword = keyword
+
+        class Keyword(ComparableMixin, decl_base):
+            __tablename__ = "keyword"
+            id: Mapped[int] = mapped_column(primary_key=True)
+            keyword: Mapped[str] = mapped_column()
+
+            def __init__(self, keyword):
+                self.keyword = keyword
+
+        return UserKeywordAssociation, Keyword
+
+    def _dc_keyword_mapping(self, User, dc_decl_base):
+        class UserKeywordAssociation(dc_decl_base):
+            __tablename__ = "user_keyword"
+            user_id: Mapped[int] = mapped_column(
+                ForeignKey("user.id"), primary_key=True, init=False
+            )
+            keyword_id: Mapped[int] = mapped_column(
+                ForeignKey("keyword.id"), primary_key=True, init=False
+            )
+
+            keyword: Mapped[Keyword] = relationship(default=None)
+
+            user: Mapped[User] = relationship(
+                back_populates="user_keyword_associations", default=None
+            )
+
+        class Keyword(dc_decl_base):
+            __tablename__ = "keyword"
+            id: Mapped[int] = mapped_column(primary_key=True, init=False)
+            keyword: Mapped[str] = mapped_column(init=True)
+
+        return UserKeywordAssociation, Keyword

@@ -82,6 +82,7 @@ from sqlalchemy.testing.assertsql import CompiledSQL
 from sqlalchemy.testing.fixtures import fixture_session
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
+from sqlalchemy.testing.util import gc_collect
 from sqlalchemy.types import NullType
 from sqlalchemy.types import TypeDecorator
 from test.orm import _fixtures
@@ -1225,6 +1226,31 @@ class GetTest(QueryTest):
         s.expunge_all()
         u2 = s.get(User, 7)
         assert u is not u2
+
+    def test_get_synonym_direct_name(self, decl_base):
+        """test #8753"""
+
+        class MyUser(decl_base):
+            __table__ = self.tables.users
+
+            syn_id = synonym("id")
+
+        s = fixture_session()
+        u = s.get(MyUser, {"syn_id": 7})
+        eq_(u.id, 7)
+
+    def test_get_synonym_indirect(self, decl_base):
+        """test #8753"""
+
+        class MyUser(decl_base):
+            __table__ = self.tables.users
+
+            uid = __table__.c.id
+            syn_id = synonym("uid")
+
+        s = fixture_session()
+        u = s.get(MyUser, {"syn_id": 7})
+        eq_(u.uid, 7)
 
     def test_get_composite_pk_no_result(self):
         CompositePk = self.classes.CompositePk
@@ -4221,10 +4247,10 @@ class SetOpsWDeferredTest(QueryTest, AssertsCompiledSQL):
         self.assert_compile(
             stmt,
             "SELECT anon_1.users_id AS anon_1_users_id FROM "
-            "(SELECT users.name AS users_name, users.id AS users_id "
+            "(SELECT users.id AS users_id, users.name AS users_name "
             "FROM users WHERE users.id = :id_1 "
             "UNION "
-            "SELECT users.name AS users_name, users.id AS users_id FROM users "
+            "SELECT users.id AS users_id, users.name AS users_name FROM users "
             "WHERE users.id = :id_2) AS anon_1 ORDER BY anon_1.users_id",
         )
 
@@ -4253,12 +4279,13 @@ class SetOpsWDeferredTest(QueryTest, AssertsCompiledSQL):
         stmt = s1.union(s2).options(undefer(User.name)).order_by(User.id)
         self.assert_compile(
             stmt,
-            "SELECT anon_1.users_name AS anon_1_users_name, "
-            "anon_1.users_id AS anon_1_users_id FROM "
-            "(SELECT users.name AS users_name, users.id AS users_id "
+            "SELECT anon_1.users_id AS anon_1_users_id, "
+            "anon_1.users_name AS anon_1_users_name "
+            "FROM "
+            "(SELECT users.id AS users_id, users.name AS users_name "
             "FROM users WHERE users.id = :id_1 "
             "UNION "
-            "SELECT users.name AS users_name, users.id AS users_id "
+            "SELECT users.id AS users_id, users.name AS users_name "
             "FROM users WHERE users.id = :id_2) AS anon_1 "
             "ORDER BY anon_1.users_id",
         )
@@ -4298,14 +4325,15 @@ class SetOpsWDeferredTest(QueryTest, AssertsCompiledSQL):
             stmt,
             "SELECT anon_1.anon_2_users_id AS anon_1_anon_2_users_id "
             "FROM ("
-            "SELECT anon_2.users_name AS anon_2_users_name, "
-            "anon_2.users_id AS anon_2_users_id FROM "
-            "(SELECT users.name AS users_name, users.id AS users_id "
+            "SELECT anon_2.users_id AS anon_2_users_id, "
+            "anon_2.users_name AS anon_2_users_name "
+            "FROM "
+            "(SELECT users.id AS users_id, users.name AS users_name "
             "FROM users WHERE users.id = :id_1 UNION "
-            "SELECT users.name AS users_name, users.id AS users_id "
+            "SELECT users.id AS users_id, users.name AS users_name "
             "FROM users WHERE users.id = :id_2) AS anon_2 "
             "UNION "
-            "SELECT users.name AS users_name, users.id AS users_id FROM users "
+            "SELECT users.id AS users_id, users.name AS users_name FROM users "
             "WHERE users.id = :id_3) AS anon_1 "
             "ORDER BY anon_1.anon_2_users_id",
         )
@@ -4342,17 +4370,18 @@ class SetOpsWDeferredTest(QueryTest, AssertsCompiledSQL):
         )
         self.assert_compile(
             stmt,
-            "SELECT anon_1.anon_2_users_name AS anon_1_anon_2_users_name, "
-            "anon_1.anon_2_users_id AS anon_1_anon_2_users_id "
+            "SELECT anon_1.anon_2_users_id AS anon_1_anon_2_users_id, "
+            "anon_1.anon_2_users_name AS anon_1_anon_2_users_name "
             "FROM ("
-            "SELECT anon_2.users_name AS anon_2_users_name, "
-            "anon_2.users_id AS anon_2_users_id FROM "
-            "(SELECT users.name AS users_name, users.id AS users_id "
+            "SELECT anon_2.users_id AS anon_2_users_id, "
+            "anon_2.users_name AS anon_2_users_name "
+            "FROM "
+            "(SELECT users.id AS users_id, users.name AS users_name "
             "FROM users WHERE users.id = :id_1 UNION "
-            "SELECT users.name AS users_name, users.id AS users_id "
+            "SELECT users.id AS users_id, users.name AS users_name "
             "FROM users WHERE users.id = :id_2) AS anon_2 "
             "UNION "
-            "SELECT users.name AS users_name, users.id AS users_id FROM users "
+            "SELECT users.id AS users_id, users.name AS users_name FROM users "
             "WHERE users.id = :id_3) AS anon_1 "
             "ORDER BY anon_1.anon_2_users_id",
         )
@@ -5414,6 +5443,60 @@ class YieldTest(_fixtures.FixtureTest):
         result.close()
         assert_raises(sa.exc.ResourceClosedError, result.all)
 
+    def test_yield_per_close_on_interrupted_iteration_legacy(self):
+        """test #8710"""
+
+        self._eagerload_mappings()
+
+        User = self.classes.User
+
+        asserted_result = None
+
+        class _Query(Query):
+            def _iter(self):
+                nonlocal asserted_result
+                asserted_result = super(_Query, self)._iter()
+                return asserted_result
+
+        sess = fixture_session(query_cls=_Query)
+
+        with expect_raises_message(Exception, "hi"):
+            for i, row in enumerate(sess.query(User).yield_per(1)):
+                assert not asserted_result._soft_closed
+                assert not asserted_result.closed
+
+                if i > 1:
+                    raise Exception("hi")
+
+        gc_collect()  # needed for pypy, #8762
+        assert asserted_result._soft_closed
+        assert not asserted_result.closed
+
+    def test_yield_per_close_on_interrupted_iteration(self):
+        """test #8710"""
+
+        self._eagerload_mappings()
+
+        User = self.classes.User
+
+        sess = fixture_session()
+
+        with expect_raises_message(Exception, "hi"):
+            result = sess.execute(select(User).execution_options(yield_per=1))
+            for i, row in enumerate(result):
+                assert not result._soft_closed
+                assert not result.closed
+
+                if i > 1:
+                    raise Exception("hi")
+
+        gc_collect()  # not apparently needed, but defensive for pypy re: #8762
+        assert not result._soft_closed
+        assert not result.closed
+        result.close()
+        assert result._soft_closed
+        assert result.closed
+
     def test_yield_per_and_execution_options_legacy(self):
         self._eagerload_mappings()
 
@@ -5480,6 +5563,24 @@ class YieldTest(_fixtures.FixtureTest):
         User = self.classes.User
         sess = fixture_session()
         q = sess.query(User).options(joinedload(User.addresses)).yield_per(1)
+        assert_raises_message(
+            sa_exc.InvalidRequestError,
+            "Can't use yield_per with eager loaders that require "
+            "uniquing or row buffering",
+            q.all,
+        )
+
+    def test_no_contains_eager_opt(self):
+        self._eagerload_mappings()
+
+        User = self.classes.User
+        sess = fixture_session()
+        q = (
+            sess.query(User)
+            .join(User.addresses)
+            .options(contains_eager(User.addresses))
+            .yield_per(1)
+        )
         assert_raises_message(
             sa_exc.InvalidRequestError,
             "Can't use yield_per with eager loaders that require "

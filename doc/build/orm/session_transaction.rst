@@ -28,6 +28,7 @@ the scope of the :class:`_orm.SessionTransaction`.
 Below, assume we start with a :class:`_orm.Session`::
 
     from sqlalchemy.orm import Session
+
     session = Session(engine)
 
 We can now run operations within a demarcated transaction using a context
@@ -59,13 +60,13 @@ or rolled back::
     session.commit()  # commits
 
     # will automatically begin again
-    result = session.execute(< some select statement >)
+    result = session.execute("< some select statement >")
     session.add_all([more_objects, ...])
     session.commit()  # commits
 
     session.add(still_another_object)
     session.flush()  # flush still_another_object
-    session.rollback()   # rolls back still_another_object
+    session.rollback()  # rolls back still_another_object
 
 The :class:`_orm.Session` itself features a :meth:`_orm.Session.close`
 method.  If the :class:`_orm.Session` is begun within a transaction that
@@ -99,7 +100,7 @@ first::
 
         session.commit()  # commits
 
-        result = session.execute(<some SELECT statement>)
+        result = session.execute("<some SELECT statement>")
 
     # remaining transactional state from the .execute() call is
     # discarded
@@ -119,9 +120,7 @@ Similarly, the :class:`_orm.sessionmaker` can be used in the same way::
 method to allow both operations to take place at once::
 
     with Session.begin() as session:
-        session.add(some_object):
-
-
+        session.add(some_object)
 
 .. _session_begin_nested:
 
@@ -139,7 +138,7 @@ method::
         session.add(u1)
         session.add(u2)
 
-        nested = session.begin_nested() # establish a savepoint
+        nested = session.begin_nested()  # establish a savepoint
         session.add(u3)
         nested.rollback()  # rolls back u3, keeps u1 and u2
 
@@ -163,9 +162,9 @@ rolling back the whole transaction, as in the example below::
     for record in records:
         try:
             with session.begin_nested():
-               session.merge(record)
+                session.merge(record)
         except:
-             print("Skipped record %s" % record)
+            print("Skipped record %s" % record)
     session.commit()
 
 When the context manager yielded by :meth:`_orm.Session.begin_nested`
@@ -222,20 +221,16 @@ without the need for refreshing it from the database.
 Session-level vs. Engine level transaction control
 --------------------------------------------------
 
-As of SQLAlchemy 1.4, the :class:`_orm.sessionmaker` and Core
-:class:`_engine.Engine` objects both support :term:`2.0 style` operation,
-by making use of the :paramref:`_orm.Session.future` flag as well as the
-:paramref:`_engine.create_engine.future` flag so that these two objects
-assume 2.0-style semantics.
+The :class:`_engine.Connection` in Core and
+:class:`_session.Session` in ORM feature equivalent transactional
+semantics, both at the level of the :class:`_orm.sessionmaker` vs.
+the :class:`_engine.Engine`, as well as the :class:`_orm.Session` vs.
+the :class:`_engine.Connection`.  The following sections detail
+these scenarios based on the following scheme:
 
-When using future mode, there should be equivalent semantics between
-the two packages, at the level of the :class:`_orm.sessionmaker` vs.
-the :class:`_future.Engine`, as well as the :class:`_orm.Session` vs.
-the :class:`_future.Connection`.  The following sections detail
-these scenarios based on the following scheme::
+.. sourcecode:: text
 
-
-    ORM (using future Session)                    Core (using future engine)
+    ORM                                           Core
     -----------------------------------------     -----------------------------------
     sessionmaker                                  Engine
     Session                                       Connection
@@ -248,15 +243,18 @@ these scenarios based on the following scheme::
 Commit as you go
 ~~~~~~~~~~~~~~~~
 
-Both :class:`_orm.Session` and :class:`_future.Connection` feature
-:meth:`_future.Connection.commit` and :meth:`_future.Connection.rollback`
+Both :class:`_orm.Session` and :class:`_engine.Connection` feature
+:meth:`_engine.Connection.commit` and :meth:`_engine.Connection.rollback`
 methods.   Using SQLAlchemy 2.0-style operation, these methods affect the
-**outermost** transaction in all cases.
+**outermost** transaction in all cases.   For the :class:`_orm.Session`, it is
+assumed that :paramref:`_orm.Session.autobegin` is left at its default
+value of ``True``.
 
 
-Engine::
 
-    engine = create_engine("postgresql+psycopg2://user:pass@host/dbname", future=True)
+:class:`_engine.Engine`::
+
+    engine = create_engine("postgresql+psycopg2://user:pass@host/dbname")
 
     with engine.connect() as conn:
         conn.execute(
@@ -264,35 +262,37 @@ Engine::
             [
                 {"data": "some data one"},
                 {"data": "some data two"},
-                {"data": "some data three"}
-            ]
+                {"data": "some data three"},
+            ],
         )
         conn.commit()
 
-Session::
+:class:`_orm.Session`::
 
-    Session = sessionmaker(engine, future=True)
+    Session = sessionmaker(engine)
 
     with Session() as session:
-        session.add_all([
-            SomeClass(data="some data one"),
-            SomeClass(data="some data two"),
-            SomeClass(data="some data three")
-        ])
+        session.add_all(
+            [
+                SomeClass(data="some data one"),
+                SomeClass(data="some data two"),
+                SomeClass(data="some data three"),
+            ]
+        )
         session.commit()
 
 Begin Once
 ~~~~~~~~~~
 
-Both :class:`_orm.sessionmaker` and :class:`_future.Engine` feature a
-:meth:`_future.Engine.begin` method that will both procure a new object
+Both :class:`_orm.sessionmaker` and :class:`_engine.Engine` feature a
+:meth:`_engine.Engine.begin` method that will both procure a new object
 with which to execute SQL statements (the :class:`_orm.Session` and
-:class:`_future.Connection`, respectively) and then return a context manager
+:class:`_engine.Connection`, respectively) and then return a context manager
 that will maintain a begin/commit/rollback context for that object.
 
 Engine::
 
-    engine = create_engine("postgresql+psycopg2://user:pass@host/dbname", future=True)
+    engine = create_engine("postgresql+psycopg2://user:pass@host/dbname")
 
     with engine.begin() as conn:
         conn.execute(
@@ -300,23 +300,24 @@ Engine::
             [
                 {"data": "some data one"},
                 {"data": "some data two"},
-                {"data": "some data three"}
-            ]
+                {"data": "some data three"},
+            ],
         )
     # commits and closes automatically
 
 Session::
 
-    Session = sessionmaker(engine, future=True)
+    Session = sessionmaker(engine)
 
     with Session.begin() as session:
-        session.add_all([
-            SomeClass(data="some data one"),
-            SomeClass(data="some data two"),
-            SomeClass(data="some data three")
-        ])
+        session.add_all(
+            [
+                SomeClass(data="some data one"),
+                SomeClass(data="some data two"),
+                SomeClass(data="some data three"),
+            ]
+        )
     # commits and closes automatically
-
 
 Nested Transaction
 ~~~~~~~~~~~~~~~~~~~~
@@ -324,13 +325,13 @@ Nested Transaction
 When using a SAVEPOINT via the :meth:`_orm.Session.begin_nested` or
 :meth:`_engine.Connection.begin_nested` methods, the transaction object
 returned must be used to commit or rollback the SAVEPOINT.  Calling
-the :meth:`_orm.Session.commit` or :meth:`_future.Connection.commit` methods
+the :meth:`_orm.Session.commit` or :meth:`_engine.Connection.commit` methods
 will always commit the **outermost** transaction; this is a SQLAlchemy 2.0
 specific behavior that is reversed from the 1.x series.
 
 Engine::
 
-    engine = create_engine("postgresql+psycopg2://user:pass@host/dbname", future=True)
+    engine = create_engine("postgresql+psycopg2://user:pass@host/dbname")
 
     with engine.begin() as conn:
         savepoint = conn.begin_nested()
@@ -339,8 +340,8 @@ Engine::
             [
                 {"data": "some data one"},
                 {"data": "some data two"},
-                {"data": "some data three"}
-            ]
+                {"data": "some data three"},
+            ],
         )
         savepoint.commit()  # or rollback
 
@@ -348,20 +349,19 @@ Engine::
 
 Session::
 
-    Session = sessionmaker(engine, future=True)
+    Session = sessionmaker(engine)
 
     with Session.begin() as session:
         savepoint = session.begin_nested()
-        session.add_all([
-            SomeClass(data="some data one"),
-            SomeClass(data="some data two"),
-            SomeClass(data="some data three")
-        ])
+        session.add_all(
+            [
+                SomeClass(data="some data one"),
+                SomeClass(data="some data two"),
+                SomeClass(data="some data three"),
+            ]
+        )
         savepoint.commit()  # or rollback
     # commits automatically
-
-
-
 
 .. _session_explicit_begin:
 
@@ -385,8 +385,8 @@ point at which the "begin" operation occurs.  To suit this, the
     try:
         item1 = session.get(Item, 1)
         item2 = session.get(Item, 2)
-        item1.foo = 'bar'
-        item2.bar = 'foo'
+        item1.foo = "bar"
+        item2.bar = "foo"
         session.commit()
     except:
         session.rollback()
@@ -399,8 +399,8 @@ The above pattern is more idiomatically invoked using a context manager::
     with session.begin():
         item1 = session.get(Item, 1)
         item2 = session.get(Item, 2)
-        item1.foo = 'bar'
-        item2.bar = 'foo'
+        item1.foo = "bar"
+        item2.bar = "foo"
 
 The :meth:`_orm.Session.begin` method and the session's "autobegin" process
 use the same sequence of steps to begin the transaction.   This includes
@@ -423,13 +423,13 @@ also :meth:`_orm.Session.prepare` the session for
 interacting with transactions not managed by SQLAlchemy. To use two phase
 transactions set the flag ``twophase=True`` on the session::
 
-    engine1 = create_engine('postgresql+psycopg2://db1')
-    engine2 = create_engine('postgresql+psycopg2://db2')
+    engine1 = create_engine("postgresql+psycopg2://db1")
+    engine2 = create_engine("postgresql+psycopg2://db2")
 
     Session = sessionmaker(twophase=True)
 
     # bind User operations to engine 1, Account operations to engine 2
-    Session.configure(binds={User:engine1, Account:engine2})
+    Session.configure(binds={User: engine1, Account: engine2})
 
     session = Session()
 
@@ -438,7 +438,6 @@ transactions set the flag ``twophase=True`` on the session::
     # commit.  session will issue a flush to all DBs, and a prepare step to all DBs,
     # before committing both transactions
     session.commit()
-
 
 .. _session_transaction_isolation:
 
@@ -489,11 +488,10 @@ in all cases, which is then used as the source of connectivity for a
 
     eng = create_engine(
         "postgresql+psycopg2://scott:tiger@localhost/test",
-        isolation_level='REPEATABLE READ'
+        isolation_level="REPEATABLE READ",
     )
 
     Session = sessionmaker(eng)
-
 
 Another option, useful if there are to be two engines with different isolation
 levels at once, is to use the :meth:`_engine.Engine.execution_options` method,
@@ -512,7 +510,6 @@ operations::
     transactional_session = sessionmaker(eng)
     autocommit_session = sessionmaker(autocommit_engine)
 
-
 Above, both "``eng``" and ``"autocommit_engine"`` share the same dialect and
 connection pool.  However the "AUTOCOMMIT" mode will be set upon connections
 when they are acquired from the ``autocommit_engine``.  The two
@@ -530,11 +527,10 @@ used in a read-only fashion**, that is::
 
 
     with autocommit_session() as session:
-        some_objects = session.execute(<statement>)
-        some_other_objects = session.execute(<statement>)
+        some_objects = session.execute("<statement>")
+        some_other_objects = session.execute("<statement>")
 
     # closes connection
-
 
 Setting Isolation for Individual Sessions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -555,6 +551,7 @@ We can for example create our :class:`_orm.Session` from a default
     # make a specific Session that will use the "autocommit" engine
     with Session(bind=autocommit_engine) as session:
         # work with session
+        ...
 
 For the case where the :class:`.Session` or :class:`.sessionmaker` is
 configured with multiple "binds", we can either re-specify the ``binds``
@@ -564,7 +561,6 @@ methods::
 
     with Session() as session:
         session.bind_mapper(User, autocommit_engine)
-
 
 Setting Isolation for Individual Transactions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -588,7 +584,7 @@ level on a per-connection basis can be affected by using the
     # call connection() with options before any other operations proceed.
     # this will procure a new connection from the bound engine and begin a real
     # database transaction.
-    sess.connection(execution_options={'isolation_level': 'SERIALIZABLE'})
+    sess.connection(execution_options={"isolation_level": "SERIALIZABLE"})
 
     # ... work with session in SERIALIZABLE isolation level...
 
@@ -620,14 +616,12 @@ the per-connection-transaction isolation level::
         # call connection() with options before any other operations proceed.
         # this will procure a new connection from the bound engine and begin a
         # real database transaction.
-        sess.connection(execution_options={'isolation_level': 'SERIALIZABLE'})
+        sess.connection(execution_options={"isolation_level": "SERIALIZABLE"})
 
         # ... work with session in SERIALIZABLE isolation level...
 
     # outside the block, the transaction has been committed.  the connection is
     # released and reverted to its previous isolation level.
-
-
 
 Tracking Transaction State with Events
 --------------------------------------
@@ -670,7 +664,8 @@ are reverted::
     # global application scope.  create Session class, engine
     Session = sessionmaker()
 
-    engine = create_engine('postgresql+psycopg2://...')
+    engine = create_engine("postgresql+psycopg2://...")
+
 
     class SomeTest(TestCase):
         def setUp(self):
@@ -680,10 +675,8 @@ are reverted::
             # begin a non-ORM transaction
             self.trans = self.connection.begin()
 
-
             # bind an individual Session to the connection
             self.session = Session(bind=self.connection)
-
 
             ###    optional     ###
 

@@ -53,13 +53,11 @@ class MypyPluginTest(fixtures.TestBase):
 
     @testing.fixture(scope="function")
     def per_func_cachedir(self):
-        for item in self._cachedir():
-            yield item
+        yield from self._cachedir()
 
     @testing.fixture(scope="class")
     def cachedir(self):
-        for item in self._cachedir():
-            yield item
+        yield from self._cachedir()
 
     def _cachedir(self):
         # as of mypy 0.971 i think we need to keep mypy_path empty
@@ -117,7 +115,19 @@ class MypyPluginTest(fixtures.TestBase):
                 ),
             ]
 
-            args.append(path)
+            # mypy as of 0.990 is more aggressively blocking messaging
+            # for paths that are in sys.path, and as pytest puts currdir,
+            # test/ etc in sys.path, just copy the source file to the
+            # tempdir we are working in so that we don't have to try to
+            # manipulate sys.path and/or guess what mypy is doing
+            filename = os.path.basename(path)
+            test_program = os.path.join(cachedir, filename)
+            shutil.copyfile(path, test_program)
+            args.append(test_program)
+
+            # I set this locally but for the suite here needs to be
+            # disabled
+            os.environ.pop("MYPY_FORCE_COLOR", None)
 
             result = api.run(args)
             return result
@@ -277,7 +287,9 @@ class MypyPluginTest(fixtures.TestBase):
         not_located = []
 
         if expected_messages:
-            eq_(result[2], 1, msg=result)
+            # mypy 0.990 changed how return codes work, so don't assume a
+            # 1 or a 0 return code here, could be either depending on if
+            # errors were generated or not
 
             output = []
 

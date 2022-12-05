@@ -507,7 +507,8 @@ class AsyncEngineTest(EngineFixture):
     @async_test
     async def test_init_once_concurrency(self, async_engine):
         async with async_engine.connect() as c1, async_engine.connect() as c2:
-            await asyncio.wait([c1, c2])
+            coro = asyncio.gather(c1.scalar(select(1)), c2.scalar(select(2)))
+            eq_(await coro, [1, 2])
 
     @async_test
     async def test_connect_ctxmanager(self, async_engine):
@@ -634,7 +635,9 @@ class AsyncEngineTest(EngineFixture):
 
     def test_async_engine_from_config(self):
         config = {
-            "sqlalchemy.url": str(testing.db.url),
+            "sqlalchemy.url": testing.db.url.render_as_string(
+                hide_password=False
+            ),
             "sqlalchemy.echo": "true",
         }
         engine = async_engine_from_config(config)
@@ -796,6 +799,42 @@ class AsyncResultTest(EngineFixture):
             ):
                 await conn.exec_driver_sql("SELECT * FROM users")
 
+    @async_test
+    async def test_stream_ctxmanager(self, async_engine):
+        async with async_engine.connect() as conn:
+            conn = await conn.execution_options(stream_results=True)
+
+            async with conn.stream(select(self.tables.users)) as result:
+                assert not result._real_result._soft_closed
+                assert not result.closed
+                with expect_raises_message(Exception, "hi"):
+                    i = 0
+                    async for row in result:
+                        if i > 2:
+                            raise Exception("hi")
+                        i += 1
+            assert result._real_result._soft_closed
+            assert result.closed
+
+    @async_test
+    async def test_stream_scalars_ctxmanager(self, async_engine):
+        async with async_engine.connect() as conn:
+            conn = await conn.execution_options(stream_results=True)
+
+            async with conn.stream_scalars(
+                select(self.tables.users)
+            ) as result:
+                assert not result._real_result._soft_closed
+                assert not result.closed
+                with expect_raises_message(Exception, "hi"):
+                    i = 0
+                    async for scalar in result:
+                        if i > 2:
+                            raise Exception("hi")
+                        i += 1
+            assert result._real_result._soft_closed
+            assert result.closed
+
     @testing.combinations(
         (None,), ("scalars",), ("mappings",), argnames="filter_"
     )
@@ -828,13 +867,20 @@ class AsyncResultTest(EngineFixture):
                 eq_(all_, [(i, "name%d" % i) for i in range(1, 20)])
 
     @testing.combinations(
-        (None,), ("scalars",), ("mappings",), argnames="filter_"
+        (None,),
+        ("scalars",),
+        ("stream_scalars",),
+        ("mappings",),
+        argnames="filter_",
     )
     @async_test
     async def test_aiter(self, async_engine, filter_):
         users = self.tables.users
         async with async_engine.connect() as conn:
-            result = await conn.stream(select(users))
+            if filter_ == "stream_scalars":
+                result = await conn.stream_scalars(select(users.c.user_name))
+            else:
+                result = await conn.stream(select(users))
 
             if filter_ == "mappings":
                 result = result.mappings()
@@ -854,7 +900,7 @@ class AsyncResultTest(EngineFixture):
                         for i in range(1, 20)
                     ],
                 )
-            elif filter_ == "scalars":
+            elif filter_ in ("scalars", "stream_scalars"):
                 eq_(
                     rows,
                     ["name%d" % i for i in range(1, 20)],

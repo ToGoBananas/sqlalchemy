@@ -14,8 +14,456 @@ This document details individual issue-level changes made throughout
 
 
 .. changelog::
-    :version: 1.4.41
+    :version: 1.4.45
     :include_notes_from: unreleased_14
+
+.. changelog::
+    :version: 1.4.44
+    :released: November 12, 2022
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 8790
+        :versions: 2.0.0b4
+
+        Fixed critical memory issue identified in cache key generation, where for
+        very large and complex ORM statements that make use of lots of ORM aliases
+        with subqueries, cache key generation could produce excessively large keys
+        that were orders of magnitude bigger than the statement itself. Much thanks
+        to Rollo Konig Brock for their very patient, long term help in finally
+        identifying this issue.
+
+    .. change::
+        :tags: bug, postgresql, mssql
+        :tickets: 8770
+        :versions: 2.0.0b4
+
+        For the PostgreSQL and SQL Server dialects only, adjusted the compiler so
+        that when rendering column expressions in the RETURNING clause, the "non
+        anon" label that's used in SELECT statements is suggested for SQL
+        expression elements that generate a label; the primary example is a SQL
+        function that may be emitting as part of the column's type, where the label
+        name should match the column's name by default. This restores a not-well
+        defined behavior that had changed in version 1.4.21 due to :ticket:`6718`,
+        :ticket:`6710`. The Oracle dialect has a different RETURNING implementation
+        and was not affected by this issue. Version 2.0 features an across the
+        board change for its widely expanded support of RETURNING on other
+        backends.
+
+
+    .. change::
+        :tags: bug, oracle
+
+        Fixed issue in the Oracle dialect where an INSERT statement that used
+        ``insert(some_table).values(...).returning(some_table)`` against a full
+        :class:`.Table` object at once would fail to execute, raising an exception.
+
+    .. change::
+        :tags: bug, tests
+        :tickets: 8793
+        :versions: 2.0.0b4
+
+        Fixed issue where the ``--disable-asyncio`` parameter to the test suite
+        would fail to not actually run greenlet tests and would also not prevent
+        the suite from using a "wrapping" greenlet for the whole suite. This
+        parameter now ensures that no greenlet or asyncio use will occur within the
+        entire run when set.
+
+    .. change::
+        :tags: bug, tests
+
+        Adjusted the test suite which tests the Mypy plugin to accommodate for
+        changes in Mypy 0.990 regarding how it handles message output, which affect
+        how sys.path is interpreted when determining if notes and errors should be
+        printed for particular files. The change broke the test suite as the files
+        within the test directory itself no longer produced messaging when run
+        under the mypy API.
+
+.. changelog::
+    :version: 1.4.43
+    :released: November 4, 2022
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8738
+        :versions: 2.0.0b3
+
+        Fixed issue in joined eager loading where an assertion fail would occur
+        with a particular combination of outer/inner joined eager loads, when
+        eager loading across three mappers where the middle mapper was
+        an inherited subclass mapper.
+
+
+    .. change::
+        :tags: bug, oracle
+        :tickets: 8708
+        :versions: 2.0.0b3
+
+        Fixed issue where bound parameter names, including those automatically
+        derived from similarly-named database columns, which contained characters
+        that normally require quoting with Oracle would not be escaped when using
+        "expanding parameters" with the Oracle dialect, causing execution errors.
+        The usual "quoting" for bound parameters used by the Oracle dialect is not
+        used with the "expanding parameters" architecture, so escaping for a large
+        range of characters is used instead, now using a list of characters/escapes
+        that are specific to Oracle.
+
+
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8721
+        :versions: 2.0.0b3
+
+        Fixed bug involving :class:`.Select` constructs, where combinations of
+        :meth:`.Select.select_from` with :meth:`.Select.join`, as well as when
+        using :meth:`.Select.join_from`, would cause the
+        :func:`_orm.with_loader_criteria` feature as well as the IN criteria needed
+        for single-table inheritance queries to not render, in cases where the
+        columns clause of the query did not explicitly include the left-hand side
+        entity of the JOIN. The correct entity is now transferred to the
+        :class:`.Join` object that's generated internally, so that the criteria
+        against the left side entity is correctly added.
+
+
+    .. change::
+        :tags: bug, mssql
+        :tickets: 8714
+        :versions: 2.0.0b3
+
+        Fixed issue with :meth:`.Inspector.has_table`, which when used against a
+        temporary table with the SQL Server dialect would fail on some Azure
+        variants, due to an unnecessary information schema query that is not
+        supported on those server versions. Pull request courtesy Mike Barry.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8711
+        :versions: 2.0.0b3
+
+        An informative exception is now raised when the
+        :func:`_orm.with_loader_criteria` option is used as a loader option added
+        to a specific "loader path", such as when using it within
+        :meth:`.Load.options`. This use is not supported as
+        :func:`_orm.with_loader_criteria` is only intended to be used as a top
+        level loader option. Previously, an internal error would be generated.
+
+    .. change::
+        :tags: bug, oracle
+        :tickets: 8744
+        :versions: 2.0.0b3
+
+        Fixed issue where the ``nls_session_parameters`` view queried on first
+        connect in order to get the default decimal point character may not be
+        available depending on Oracle connection modes, and would therefore raise
+        an error.  The approach to detecting decimal char has been simplified to
+        test a decimal value directly, instead of reading system views, which
+        works on any backend / driver.
+
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8753
+        :versions: 2.0.0b3
+
+        Improved "dictionary mode" for :meth:`_orm.Session.get` so that synonym
+        names which refer to primary key attribute names may be indicated in the
+        named dictionary.
+
+    .. change::
+        :tags: bug, engine, regression
+        :tickets: 8717
+        :versions: 2.0.0b3
+
+        Fixed issue where the :meth:`.PoolEvents.reset` event hook would not be be
+        called in all cases when a :class:`_engine.Connection` were closed and was
+        in the process of returning its DBAPI connection to the connection pool.
+
+        The scenario was when the :class:`_engine.Connection` had already emitted
+        ``.rollback()`` on its DBAPI connection within the process of returning
+        the connection to the pool, where it would then instruct the connection
+        pool to forego doing its own "reset" to save on the additional method
+        call.  However, this prevented custom pool reset schemes from being
+        used within this hook, as such hooks by definition are doing more than
+        just calling ``.rollback()``, and need to be invoked under all
+        circumstances.  This was a regression that appeared in version 1.4.
+
+        For version 1.4, the :meth:`.PoolEvents.checkin` remains viable as an
+        alternate event hook to use for custom "reset" implementations. Version 2.0
+        will feature an improved version of :meth:`.PoolEvents.reset` which is
+        called for additional scenarios such as termination of asyncio connections,
+        and is also passed contextual information about the reset, to allow for
+        "custom connection reset" schemes which can respond to different reset
+        scenarios in different ways.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8704
+        :versions: 2.0.0b3
+
+        Fixed issue where "selectin_polymorphic" loading for inheritance mappers
+        would not function correctly if the :paramref:`_orm.Mapper.polymorphic_on`
+        parameter referred to a SQL expression that was not directly mapped on the
+        class.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8710
+        :versions: 2.0.0b3
+
+        Fixed issue where the underlying DBAPI cursor would not be closed when
+        using the :class:`_orm.Query` object as an iterator, if a user-defined exception
+        case were raised within the iteration process, thereby causing the iterator
+        to be closed by the Python interpreter.  When using
+        :meth:`_orm.Query.yield_per` to create server-side cursors, this would lead
+        to the usual MySQL-related issues with server side cursors out of sync,
+        and without direct access to the :class:`.Result` object, end-user code
+        could not access the cursor in order to close it.
+
+        To resolve, a catch for ``GeneratorExit`` is applied within the iterator
+        method, which will close the result object in those cases when the
+        iterator were interrupted, and by definition will be closed by the
+        Python interpreter.
+
+        As part of this change as implemented for the 1.4 series, ensured that
+        ``.close()`` methods are available on all :class:`.Result` implementations
+        including :class:`.ScalarResult`, :class:`.MappingResult`.  The 2.0
+        version of this change also includes new context manager patterns for use
+        with :class:`.Result` classes.
+
+    .. change::
+        :tags: bug, engine
+        :tickets: 8710
+
+        Ensured all :class:`.Result` objects include a :meth:`.Result.close` method
+        as well as a :attr:`.Result.closed` attribute, including on
+        :class:`.ScalarResult` and :class:`.MappingResult`.
+
+    .. change::
+        :tags: bug, mssql, reflection
+        :tickets: 8700
+        :versions: 2.0.0b3
+
+        Fixed issue with :meth:`.Inspector.has_table`, which when used against a
+        view with the SQL Server dialect would erroneously return ``False``, due to
+        a regression in the 1.4 series which removed support for this on SQL
+        Server. The issue is not present in the 2.0 series which uses a different
+        reflection architecture. Test support is added to ensure ``has_table()``
+        remains working per spec re: views.
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 8724
+        :versions: 2.0.0b3
+
+        Fixed issue which prevented the :func:`_sql.literal_column` construct from
+        working properly within the context of a :class:`.Select` construct as well
+        as other potential places where "anonymized labels" might be generated, if
+        the literal expression contained characters which could interfere with
+        format strings, such as open parenthesis, due to an implementation detail
+        of the "anonymous label" structure.
+
+
+.. changelog::
+    :version: 1.4.42
+    :released: October 16, 2022
+
+    .. change::
+        :tags: bug, asyncio
+        :tickets: 8516
+
+        Improved implementation of ``asyncio.shield()`` used in context managers as
+        added in :ticket:`8145`, such that the "close" operation is enclosed within
+        an ``asyncio.Task`` which is then strongly referenced as the operation
+        proceeds. This is per Python documentation indicating that the task is
+        otherwise not strongly referenced.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8614
+
+        The :paramref:`_orm.Session.execute.bind_arguments` dictionary is no longer
+        mutated when passed to :meth:`_orm.Session.execute` and similar; instead,
+        it's copied to an internal dictionary for state changes. Among other
+        things, this fixes and issue where the "clause" passed to the
+        :meth:`_orm.Session.get_bind` method would be incorrectly referring to the
+        :class:`_sql.Select` construct used for the "fetch" synchronization
+        strategy, when the actual query being emitted was a :class:`_dml.Delete` or
+        :class:`_dml.Update`. This would interfere with recipes for "routing
+        sessions".
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 7094
+
+        A warning is emitted in ORM configurations when an explicit
+        :func:`_orm.remote` annotation is applied to columns that are local to the
+        immediate mapped class, when the referenced class does not include any of
+        the same table columns. Ideally this would raise an error at some point as
+        it's not correct from a mapping point of view.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 7545
+
+        A warning is emitted when attempting to configure a mapped class within an
+        inheritance hierarchy where the mapper is not given any polymorphic
+        identity, however there is a polymorphic discriminator column assigned.
+        Such classes should be abstract if they never intend to load directly.
+
+
+    .. change::
+        :tags: bug, mssql, regression
+        :tickets: 8525
+
+        Fixed yet another regression in SQL Server isolation level fetch (see
+        :ticket:`8231`, :ticket:`8475`), this time with "Microsoft Dynamics CRM
+        Database via Azure Active Directory", which apparently lacks the
+        ``system_views`` view entirely. Error catching has been extended that under
+        no circumstances will this method ever fail, provided database connectivity
+        is present.
+
+    .. change::
+        :tags: orm, bug, regression
+        :tickets: 8569
+
+        Fixed regression for 1.4 in :func:`_orm.contains_eager` where the "wrap in
+        subquery" logic of :func:`_orm.joinedload` would be inadvertently triggered
+        for use of the :func:`_orm.contains_eager` function with similar statements
+        (e.g. those that use ``distinct()``, ``limit()`` or ``offset()``), which
+        would then lead to secondary issues with queries that used some
+        combinations of SQL label names and aliasing. This "wrapping" is not
+        appropriate for :func:`_orm.contains_eager` which has always had the
+        contract that the user-defined SQL statement is unmodified with the
+        exception of adding the appropriate columns to be fetched.
+
+    .. change::
+        :tags: bug, orm, regression
+        :tickets: 8507
+
+        Fixed regression where using ORM update() with synchronize_session='fetch'
+        would fail due to the use of evaluators that are now used to determine the
+        in-Python value for expressions in the the SET clause when refreshing
+        objects; if the evaluators make use of math operators against non-numeric
+        values such as PostgreSQL JSONB, the non-evaluable condition would fail to
+        be detected correctly. The evaluator now limits the use of math mutation
+        operators to numeric types only, with the exception of "+" that continues
+        to work for strings as well. SQLAlchemy 2.0 may alter this further by
+        fetching the SET values completely rather than using evaluation.
+
+    .. change::
+        :tags: usecase, postgresql
+        :tickets: 8574
+
+        :class:`_postgresql.aggregate_order_by` now supports cache generation.
+
+    .. change::
+        :tags: bug, mysql
+        :tickets: 8588
+
+        Adjusted the regular expression used to match "CREATE VIEW" when
+        testing for views to work more flexibly, no longer requiring the
+        special keyword "ALGORITHM" in the middle, which was intended to be
+        optional but was not working correctly.  The change allows view reflection
+        to work more completely on MySQL-compatible variants such as StarRocks.
+        Pull request courtesy John Bodley.
+
+    .. change::
+        :tags: bug, engine
+        :tickets: 8536
+
+        Fixed issue where mixing "*" with additional explicitly-named column
+        expressions within the columns clause of a :func:`_sql.select` construct
+        would cause result-column targeting to sometimes consider the label name or
+        other non-repeated names to be an ambiguous target.
+
+.. changelog::
+    :version: 1.4.41
+    :released: September 6, 2022
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 8441
+
+        Fixed issue where use of the :func:`_sql.table` construct, passing a string
+        for the :paramref:`_sql.table.schema` parameter, would fail to take the
+        "schema" string into account when producing a cache key, thus leading to
+        caching collisions if multiple, same-named :func:`_sql.table` constructs
+        with different schemas were used.
+
+
+    .. change::
+        :tags: bug, events, orm
+        :tickets: 8467
+
+        Fixed event listening issue where event listeners added to a superclass
+        would be lost if a subclass were created which then had its own listeners
+        associated. The practical example is that of the :class:`.sessionmaker`
+        class created after events have been associated with the
+        :class:`_orm.Session` class.
+
+    .. change::
+        :tags: orm, bug
+        :tickets: 8401
+
+        Hardened the cache key strategy for the :func:`_orm.aliased` and
+        :func:`_orm.with_polymorphic` constructs. While no issue involving actual
+        statements being cached can easily be demonstrated (if at all), these two
+        constructs were not including enough of what makes them unique in their
+        cache keys for caching on the aliased construct alone to be accurate.
+
+    .. change::
+        :tags: bug, orm, regression
+        :tickets: 8456
+
+        Fixed regression appearing in the 1.4 series where a joined-inheritance
+        query placed as a subquery within an enclosing query for that same entity
+        would fail to render the JOIN correctly for the inner query. The issue
+        manifested in two different ways prior and subsequent to version 1.4.18
+        (related issue :ticket:`6595`), in one case rendering JOIN twice, in the
+        other losing the JOIN entirely. To resolve, the conditions under which
+        "polymorphic loading" are applied have been scaled back to not be invoked
+        for simple joined inheritance queries.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8446
+
+        Fixed issue in :mod:`sqlalchemy.ext.mutable` extension where collection
+        links to the parent object would be lost if the object were merged with
+        :meth:`.Session.merge` while also passing :paramref:`.Session.merge.load`
+        as False.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 8399
+
+        Fixed issue involving :func:`_orm.with_loader_criteria` where a closure
+        variable used as bound parameter value within the lambda would not carry
+        forward correctly into additional relationship loaders such as
+        :func:`_orm.selectinload` and :func:`_orm.lazyload` after the statement
+        were cached, using the stale originally-cached value instead.
+
+
+    .. change::
+        :tags: bug, mssql, regression
+        :tickets: 8475
+
+        Fixed regression caused by the fix for :ticket:`8231` released in 1.4.40
+        where connection would fail if the user did not have permission to query
+        the ``dm_exec_sessions`` or ``dm_pdw_nodes_exec_sessions`` system views
+        when trying to determine the current transaction isolation level.
+
+    .. change::
+        :tags: bug, asyncio
+        :tickets: 8419
+
+        Integrated support for asyncpg's ``terminate()`` method call for cases
+        where the connection pool is recycling a possibly timed-out connection,
+        where a connection is being garbage collected that wasn't gracefully
+        closed, as well as when the connection has been invalidated. This allows
+        asyncpg to abandon the connection without waiting for a response that may
+        incur long timeouts.
 
 .. changelog::
     :version: 1.4.40
@@ -1643,8 +2091,8 @@ This document details individual issue-level changes made throughout
         :tags: bug, engine
         :tickets: 7291
 
-        Fixed issue in future :class:`_future.Connection` object where the
-        :meth:`_future.Connection.execute` method would not accept a non-dict
+        Fixed issue in future :class:`_engine.Connection` object where the
+        :meth:`_engine.Connection.execute` method would not accept a non-dict
         mapping object, such as SQLAlchemy's own :class:`.RowMapping` or other
         ``abc.collections.Mapping`` object as a parameter dictionary.
 
@@ -1814,8 +2262,8 @@ This document details individual issue-level changes made throughout
         :tickets: 7272
         :versions: 2.0.0b1
 
-        Fixed issue in future :class:`_future.Engine` where calling upon
-        :meth:`_future.Engine.begin` and entering the context manager would not
+        Fixed issue in future :class:`_engine.Engine` where calling upon
+        :meth:`_engine.Engine.begin` and entering the context manager would not
         close the connection if the actual BEGIN operation failed for some reason,
         such as an event handler raising an exception; this use case failed to be
         tested for the future version of the engine. Note that the "future" context
@@ -3087,7 +3535,7 @@ This document details individual issue-level changes made throughout
         ``@validates`` validator function or a ``@reconstructor`` reconstruction
         function, to check for "callable" more liberally such as to accommodate
         objects based on fundamental attributes like ``__func__`` and
-        ``__call___``, rather than testing for ``MethodType`` / ``FunctionType``,
+        ``__call__``, rather than testing for ``MethodType`` / ``FunctionType``,
         allowing things like cython functions to work properly. Pull request
         courtesy Miłosz Stypiński.
 
@@ -3684,11 +4132,11 @@ This document details individual issue-level changes made throughout
         autobegin a transaction but not commit it, which is a behavioral change.
 
         When using a :term:`2.0 style` connection object, the behavior is unchanged
-        from previous 1.4 versions; calling :meth:`_future.Connection.begin_nested`
+        from previous 1.4 versions; calling :meth:`_engine.Connection.begin_nested`
         will "autobegin" the outer transaction if not already present, and then as
         instructed emit a SAVEPOINT, returning the :class:`.NestedTransaction`
         object. The outer transaction is committed by calling upon
-        :meth:`_future.Connection.commit`, as is "commit-as-you-go" style usage.
+        :meth:`_engine.Connection.commit`, as is "commit-as-you-go" style usage.
 
         In non-"future" mode, while the old behavior is restored, it also
         emits a 2.0 deprecation warning as this is a legacy behavior.

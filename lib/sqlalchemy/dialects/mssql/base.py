@@ -250,6 +250,19 @@ The process for fetching this value has several variants:
 
     INSERT INTO t (x) OUTPUT inserted.id VALUES (?)
 
+  As of SQLAlchemy 2.0, the :ref:`engine_insertmanyvalues` feature is also
+  used by default to optimize many-row INSERT statements; for SQL Server
+  the feature takes place for both RETURNING and-non RETURNING
+  INSERT statements.
+
+* The value of :paramref:`_sa.create_engine.insertmanyvalues_page_size`
+  defaults to 1000, however the ultimate page size for a particular INSERT
+  statement may be limited further, based on an observed limit of
+  2100 bound parameters for a single statement in SQL Server.
+  The page size may also be modified on a per-engine
+  or per-statement basis; see the section
+  :ref:`engine_insertmanyvalues_page_size` for details.
+
 * When RETURNING is not available or has been disabled via
   ``implicit_returning=False``, either the ``scope_identity()`` function or
   the ``@@identity`` variable is used; behavior varies by backend:
@@ -258,9 +271,13 @@ The process for fetching this value has several variants:
     appended to the end of the INSERT statement; a second result set will be
     fetched in order to receive the value.  Given a table as::
 
-        t = Table('t', m, Column('id', Integer, primary_key=True),
-                Column('x', Integer),
-                implicit_returning=False)
+        t = Table(
+            't',
+            metadata,
+            Column('id', Integer, primary_key=True),
+            Column('x', Integer),
+            implicit_returning=False
+        )
 
     an INSERT will look like:
 
@@ -318,12 +335,31 @@ This is an auxiliary use case suitable for testing and bulk insert scenarios.
 SEQUENCE support
 ----------------
 
-The :class:`.Sequence` object now creates "real" sequences, i.e.,
-``CREATE SEQUENCE``. To provide compatibility with other dialects,
-:class:`.Sequence` defaults to a start value of 1, even though the
-T-SQL defaults is -9223372036854775808.
+The :class:`.Sequence` object creates "real" sequences, i.e.,
+``CREATE SEQUENCE``::
 
-.. versionadded:: 1.4.0
+    >>> from sqlalchemy import Sequence
+    >>> from sqlalchemy.schema import CreateSequence
+    >>> from sqlalchemy.dialects import mssql
+    >>> print(CreateSequence(Sequence("my_seq", start=1)).compile(dialect=mssql.dialect()))
+    CREATE SEQUENCE my_seq START WITH 1
+
+For integer primary key generation, SQL Server's ``IDENTITY`` construct should
+generally be preferred vs. sequence.
+
+..tip::
+
+    The default start value for T-SQL is ``-2**63`` instead of 1 as
+    in most other SQL databases. Users should explicitly set the
+    :paramref:`.Sequence.start` to 1 if that's the expected default::
+
+        seq = Sequence("my_sequence", start=1)
+
+.. versionadded:: 1.4 added SQL Server support for :class:`.Sequence`
+
+.. versionchanged:: 2.0 The SQL Server dialect will no longer implicitly
+   render "START WITH 1" for ``CREATE SEQUENCE``, which was the behavior
+   first implemented in version 1.4.
 
 MAX on VARCHAR / NVARCHAR
 -------------------------
@@ -443,6 +479,61 @@ different isolation level settings.  See the discussion at
 .. seealso::
 
     :ref:`dbapi_autocommit`
+
+.. _mssql_reset_on_return:
+
+Temporary Table / Resource Reset for Connection Pooling
+-------------------------------------------------------
+
+The :class:`.QueuePool` connection pool implementation used
+by the SQLAlchemy :class:`.Engine` object includes
+:ref:`reset on return <pool_reset_on_return>` behavior that will invoke
+the DBAPI ``.rollback()`` method when connections are returned to the pool.
+While this rollback will clear out the immediate state used by the previous
+transaction, it does not cover a wider range of session-level state, including
+temporary tables as well as other server state such as prepared statement
+handles and statement caches.   An undocumented SQL Server procedure known
+as ``sp_reset_connection`` is known to be a workaround for this issue which
+will reset most of the session state that builds up on a connection, including
+temporary tables.
+
+To install ``sp_reset_connection`` as the means of performing reset-on-return,
+the :meth:`.PoolEvents.reset` event hook may be used, as demonstrated in the
+example below. The :paramref:`_sa.create_engine.pool_reset_on_return` parameter
+is set to ``None`` so that the custom scheme can replace the default behavior
+completely.   The custom hook implementation calls ``.rollback()`` in any case,
+as it's usually important that the DBAPI's own tracking of commit/rollback
+will remain consistent with the state of the transaction::
+
+    from sqlalchemy import create_engine
+    from sqlalchemy import event
+
+    mssql_engine = create_engine(
+        "mssql+pyodbc://scott:tiger^5HHH@mssql2017:1433/test?driver=ODBC+Driver+17+for+SQL+Server",
+
+        # disable default reset-on-return scheme
+        pool_reset_on_return=None,
+    )
+
+
+    @event.listens_for(mssql_engine, "reset")
+    def _reset_mssql(dbapi_connection, connection_record, reset_state):
+        if not reset_state.terminate_only:
+            dbapi_connection.execute("{call sys.sp_reset_connection}")
+
+        # so that the DBAPI itself knows that the connection has been
+        # reset
+        dbapi_connection.rollback()
+
+.. versionchanged:: 2.0.0b3  Added additional state arguments to
+   the :meth:`.PoolEvents.reset` event and additionally ensured the event
+   is invoked for all "reset" occurrences, so that it's appropriate
+   as a place for custom "reset" handlers.   Previous schemes which
+   use the :meth:`.PoolEvents.checkin` handler remain usable as well.
+
+.. seealso::
+
+    :ref:`pool_reset_on_return` - in the :ref:`pooling_toplevel` documentation
 
 Nullability
 -----------
@@ -731,6 +822,8 @@ compatibility level information. Because of this, if running under
 a backwards compatibility mode SQLAlchemy may attempt to use T-SQL
 statements that are unable to be parsed by the database server.
 
+.. _mssql_triggers:
+
 Triggers
 --------
 
@@ -754,9 +847,6 @@ Declarative form::
         # ...
         __table_args__ = {'implicit_returning':False}
 
-
-This option can also be specified engine-wide using the
-``implicit_returning=False`` argument on :func:`_sa.create_engine`.
 
 .. _mssql_rowcount_versioning:
 
@@ -875,190 +965,188 @@ MS_2008_VERSION = (10,)
 MS_2005_VERSION = (9,)
 MS_2000_VERSION = (8,)
 
-RESERVED_WORDS = set(
-    [
-        "add",
-        "all",
-        "alter",
-        "and",
-        "any",
-        "as",
-        "asc",
-        "authorization",
-        "backup",
-        "begin",
-        "between",
-        "break",
-        "browse",
-        "bulk",
-        "by",
-        "cascade",
-        "case",
-        "check",
-        "checkpoint",
-        "close",
-        "clustered",
-        "coalesce",
-        "collate",
-        "column",
-        "commit",
-        "compute",
-        "constraint",
-        "contains",
-        "containstable",
-        "continue",
-        "convert",
-        "create",
-        "cross",
-        "current",
-        "current_date",
-        "current_time",
-        "current_timestamp",
-        "current_user",
-        "cursor",
-        "database",
-        "dbcc",
-        "deallocate",
-        "declare",
-        "default",
-        "delete",
-        "deny",
-        "desc",
-        "disk",
-        "distinct",
-        "distributed",
-        "double",
-        "drop",
-        "dump",
-        "else",
-        "end",
-        "errlvl",
-        "escape",
-        "except",
-        "exec",
-        "execute",
-        "exists",
-        "exit",
-        "external",
-        "fetch",
-        "file",
-        "fillfactor",
-        "for",
-        "foreign",
-        "freetext",
-        "freetexttable",
-        "from",
-        "full",
-        "function",
-        "goto",
-        "grant",
-        "group",
-        "having",
-        "holdlock",
-        "identity",
-        "identity_insert",
-        "identitycol",
-        "if",
-        "in",
-        "index",
-        "inner",
-        "insert",
-        "intersect",
-        "into",
-        "is",
-        "join",
-        "key",
-        "kill",
-        "left",
-        "like",
-        "lineno",
-        "load",
-        "merge",
-        "national",
-        "nocheck",
-        "nonclustered",
-        "not",
-        "null",
-        "nullif",
-        "of",
-        "off",
-        "offsets",
-        "on",
-        "open",
-        "opendatasource",
-        "openquery",
-        "openrowset",
-        "openxml",
-        "option",
-        "or",
-        "order",
-        "outer",
-        "over",
-        "percent",
-        "pivot",
-        "plan",
-        "precision",
-        "primary",
-        "print",
-        "proc",
-        "procedure",
-        "public",
-        "raiserror",
-        "read",
-        "readtext",
-        "reconfigure",
-        "references",
-        "replication",
-        "restore",
-        "restrict",
-        "return",
-        "revert",
-        "revoke",
-        "right",
-        "rollback",
-        "rowcount",
-        "rowguidcol",
-        "rule",
-        "save",
-        "schema",
-        "securityaudit",
-        "select",
-        "session_user",
-        "set",
-        "setuser",
-        "shutdown",
-        "some",
-        "statistics",
-        "system_user",
-        "table",
-        "tablesample",
-        "textsize",
-        "then",
-        "to",
-        "top",
-        "tran",
-        "transaction",
-        "trigger",
-        "truncate",
-        "tsequal",
-        "union",
-        "unique",
-        "unpivot",
-        "update",
-        "updatetext",
-        "use",
-        "user",
-        "values",
-        "varying",
-        "view",
-        "waitfor",
-        "when",
-        "where",
-        "while",
-        "with",
-        "writetext",
-    ]
-)
+RESERVED_WORDS = {
+    "add",
+    "all",
+    "alter",
+    "and",
+    "any",
+    "as",
+    "asc",
+    "authorization",
+    "backup",
+    "begin",
+    "between",
+    "break",
+    "browse",
+    "bulk",
+    "by",
+    "cascade",
+    "case",
+    "check",
+    "checkpoint",
+    "close",
+    "clustered",
+    "coalesce",
+    "collate",
+    "column",
+    "commit",
+    "compute",
+    "constraint",
+    "contains",
+    "containstable",
+    "continue",
+    "convert",
+    "create",
+    "cross",
+    "current",
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "cursor",
+    "database",
+    "dbcc",
+    "deallocate",
+    "declare",
+    "default",
+    "delete",
+    "deny",
+    "desc",
+    "disk",
+    "distinct",
+    "distributed",
+    "double",
+    "drop",
+    "dump",
+    "else",
+    "end",
+    "errlvl",
+    "escape",
+    "except",
+    "exec",
+    "execute",
+    "exists",
+    "exit",
+    "external",
+    "fetch",
+    "file",
+    "fillfactor",
+    "for",
+    "foreign",
+    "freetext",
+    "freetexttable",
+    "from",
+    "full",
+    "function",
+    "goto",
+    "grant",
+    "group",
+    "having",
+    "holdlock",
+    "identity",
+    "identity_insert",
+    "identitycol",
+    "if",
+    "in",
+    "index",
+    "inner",
+    "insert",
+    "intersect",
+    "into",
+    "is",
+    "join",
+    "key",
+    "kill",
+    "left",
+    "like",
+    "lineno",
+    "load",
+    "merge",
+    "national",
+    "nocheck",
+    "nonclustered",
+    "not",
+    "null",
+    "nullif",
+    "of",
+    "off",
+    "offsets",
+    "on",
+    "open",
+    "opendatasource",
+    "openquery",
+    "openrowset",
+    "openxml",
+    "option",
+    "or",
+    "order",
+    "outer",
+    "over",
+    "percent",
+    "pivot",
+    "plan",
+    "precision",
+    "primary",
+    "print",
+    "proc",
+    "procedure",
+    "public",
+    "raiserror",
+    "read",
+    "readtext",
+    "reconfigure",
+    "references",
+    "replication",
+    "restore",
+    "restrict",
+    "return",
+    "revert",
+    "revoke",
+    "right",
+    "rollback",
+    "rowcount",
+    "rowguidcol",
+    "rule",
+    "save",
+    "schema",
+    "securityaudit",
+    "select",
+    "session_user",
+    "set",
+    "setuser",
+    "shutdown",
+    "some",
+    "statistics",
+    "system_user",
+    "table",
+    "tablesample",
+    "textsize",
+    "then",
+    "to",
+    "top",
+    "tran",
+    "transaction",
+    "trigger",
+    "truncate",
+    "tsequal",
+    "union",
+    "unique",
+    "unpivot",
+    "update",
+    "updatetext",
+    "use",
+    "user",
+    "values",
+    "varying",
+    "view",
+    "waitfor",
+    "when",
+    "where",
+    "while",
+    "with",
+    "writetext",
+}
 
 
 class REAL(sqltypes.REAL):
@@ -1069,7 +1157,7 @@ class REAL(sqltypes.REAL):
         # it is only accepted as the word "REAL" in DDL, the numeric
         # precision value is not allowed to be present
         kw.setdefault("precision", 24)
-        super(REAL, self).__init__(**kw)
+        super().__init__(**kw)
 
 
 class TINYINT(sqltypes.Integer):
@@ -1114,7 +1202,7 @@ class _MSDate(sqltypes.Date):
 class TIME(sqltypes.TIME):
     def __init__(self, precision=None, **kwargs):
         self.precision = precision
-        super(TIME, self).__init__()
+        super().__init__()
 
     __zero_date = datetime.date(1900, 1, 1)
 
@@ -1183,7 +1271,7 @@ class DATETIME2(_DateTimeBase, sqltypes.DateTime):
     __visit_name__ = "DATETIME2"
 
     def __init__(self, precision=None, **kw):
-        super(DATETIME2, self).__init__(**kw)
+        super().__init__(**kw)
         self.precision = precision
 
 
@@ -1191,7 +1279,7 @@ class DATETIMEOFFSET(_DateTimeBase, sqltypes.DateTime):
     __visit_name__ = "DATETIMEOFFSET"
 
     def __init__(self, precision=None, **kw):
-        super(DATETIMEOFFSET, self).__init__(**kw)
+        super().__init__(**kw)
         self.precision = precision
 
 
@@ -1249,7 +1337,7 @@ class TIMESTAMP(sqltypes._Binary):
         self.convert_int = convert_int
 
     def result_processor(self, dialect, coltype):
-        super_ = super(TIMESTAMP, self).result_processor(dialect, coltype)
+        super_ = super().result_processor(dialect, coltype)
         if self.convert_int:
 
             def process(value):
@@ -1335,7 +1423,7 @@ class VARBINARY(sqltypes.VARBINARY, sqltypes.LargeBinary):
             raise ValueError(
                 "length must be None or 'max' when setting filestream"
             )
-        super(VARBINARY, self).__init__(length=length)
+        super().__init__(length=length)
 
 
 class IMAGE(sqltypes.LargeBinary):
@@ -1435,12 +1523,12 @@ class UNIQUEIDENTIFIER(sqltypes.Uuid[sqltypes._UUID_RETURN]):
 
     @overload
     def __init__(
-        self: "UNIQUEIDENTIFIER[_python_UUID]", as_uuid: Literal[True] = ...
+        self: UNIQUEIDENTIFIER[_python_UUID], as_uuid: Literal[True] = ...
     ):
         ...
 
     @overload
-    def __init__(self: "UNIQUEIDENTIFIER[str]", as_uuid: Literal[False] = ...):
+    def __init__(self: UNIQUEIDENTIFIER[str], as_uuid: Literal[False] = ...):
         ...
 
     def __init__(self, as_uuid: bool = True):
@@ -1882,7 +1970,7 @@ class MSExecutionContext(default.DefaultExecutionContext):
             and column.default.optional
         ):
             return None
-        return super(MSExecutionContext, self).get_insert_default(column)
+        return super().get_insert_default(column)
 
 
 class MSSQLCompiler(compiler.SQLCompiler):
@@ -1900,7 +1988,7 @@ class MSSQLCompiler(compiler.SQLCompiler):
 
     def __init__(self, *args, **kwargs):
         self.tablealiases = {}
-        super(MSSQLCompiler, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def _with_legacy_schema_aliasing(fn):
         def decorate(self, *arg, **kw):
@@ -1950,7 +2038,7 @@ class MSSQLCompiler(compiler.SQLCompiler):
     def get_select_precolumns(self, select, **kw):
         """MS-SQL puts TOP, it's version of LIMIT here"""
 
-        s = super(MSSQLCompiler, self).get_select_precolumns(select, **kw)
+        s = super().get_select_precolumns(select, **kw)
 
         if select._has_row_limiting_clause and self._use_top(select):
             # ODBC drivers and possibly others
@@ -2096,20 +2184,20 @@ class MSSQLCompiler(compiler.SQLCompiler):
     @_with_legacy_schema_aliasing
     def visit_table(self, table, mssql_aliased=False, iscrud=False, **kwargs):
         if mssql_aliased is table or iscrud:
-            return super(MSSQLCompiler, self).visit_table(table, **kwargs)
+            return super().visit_table(table, **kwargs)
 
         # alias schema-qualified tables
         alias = self._schema_aliased_table(table)
         if alias is not None:
             return self.process(alias, mssql_aliased=table, **kwargs)
         else:
-            return super(MSSQLCompiler, self).visit_table(table, **kwargs)
+            return super().visit_table(table, **kwargs)
 
     @_with_legacy_schema_aliasing
     def visit_alias(self, alias, **kw):
         # translate for schema-qualified table aliases
         kw["mssql_aliased"] = alias.element
-        return super(MSSQLCompiler, self).visit_alias(alias, **kw)
+        return super().visit_alias(alias, **kw)
 
     @_with_legacy_schema_aliasing
     def visit_column(self, column, add_to_result_map=None, **kw):
@@ -2130,9 +2218,9 @@ class MSSQLCompiler(compiler.SQLCompiler):
                         column.type,
                     )
 
-                return super(MSSQLCompiler, self).visit_column(converted, **kw)
+                return super().visit_column(converted, **kw)
 
-        return super(MSSQLCompiler, self).visit_column(
+        return super().visit_column(
             column, add_to_result_map=add_to_result_map, **kw
         )
 
@@ -2174,7 +2262,7 @@ class MSSQLCompiler(compiler.SQLCompiler):
                 ),
                 **kwargs,
             )
-        return super(MSSQLCompiler, self).visit_binary(binary, **kwargs)
+        return super().visit_binary(binary, **kwargs)
 
     def returning_clause(
         self, stmt, returning_cols, *, populate_result_map, **kw
@@ -2205,11 +2293,24 @@ class MSSQLCompiler(compiler.SQLCompiler):
         columns = [
             self._label_returning_column(
                 stmt,
-                adapter.traverse(c),
+                adapter.traverse(column),
                 populate_result_map,
-                {"result_map_targets": (c,)},
+                {"result_map_targets": (column,)},
+                fallback_label_name=fallback_label_name,
+                column_is_repeated=repeated,
+                name=name,
+                proxy_name=proxy_name,
+                **kw,
             )
-            for c in expression._select_iterables(returning_cols)
+            for (
+                name,
+                proxy_name,
+                fallback_label_name,
+                column,
+                repeated,
+            ) in stmt._generate_columns_plus_names(
+                True, cols=expression._select_iterables(returning_cols)
+            )
         ]
 
         return "OUTPUT " + ", ".join(columns)
@@ -2225,9 +2326,7 @@ class MSSQLCompiler(compiler.SQLCompiler):
         if isinstance(column, expression.Function):
             return column.label(None)
         else:
-            return super(MSSQLCompiler, self).label_select_column(
-                select, column, asfrom
-            )
+            return super().label_select_column(select, column, asfrom)
 
     def for_update_clause(self, select, **kw):
         # "FOR UPDATE" is only allowed on "DECLARE CURSOR" which
@@ -2414,9 +2513,7 @@ class MSSQLStrictCompiler(MSSQLCompiler):
             # SQL Server wants single quotes around the date string.
             return "'" + str(value) + "'"
         else:
-            return super(MSSQLStrictCompiler, self).render_literal_value(
-                value, type_
-            )
+            return super().render_literal_value(value, type_)
 
 
 class MSDDLCompiler(compiler.DDLCompiler):
@@ -2601,7 +2698,7 @@ class MSDDLCompiler(compiler.DDLCompiler):
         schema_name = schema if schema else self.dialect.default_schema_name
         return (
             "execute sp_addextendedproperty 'MS_Description', "
-            "{0}, 'schema', {1}, 'table', {2}".format(
+            "{}, 'schema', {}, 'table', {}".format(
                 self.sql_compiler.render_literal_value(
                     create.element.comment, sqltypes.NVARCHAR()
                 ),
@@ -2615,7 +2712,7 @@ class MSDDLCompiler(compiler.DDLCompiler):
         schema_name = schema if schema else self.dialect.default_schema_name
         return (
             "execute sp_dropextendedproperty 'MS_Description', 'schema', "
-            "{0}, 'table', {1}".format(
+            "{}, 'table', {}".format(
                 self.preparer.quote_schema(schema_name),
                 self.preparer.format_table(drop.element, use_schema=False),
             )
@@ -2626,7 +2723,7 @@ class MSDDLCompiler(compiler.DDLCompiler):
         schema_name = schema if schema else self.dialect.default_schema_name
         return (
             "execute sp_addextendedproperty 'MS_Description', "
-            "{0}, 'schema', {1}, 'table', {2}, 'column', {3}".format(
+            "{}, 'schema', {}, 'table', {}, 'column', {}".format(
                 self.sql_compiler.render_literal_value(
                     create.element.comment, sqltypes.NVARCHAR()
                 ),
@@ -2643,7 +2740,7 @@ class MSDDLCompiler(compiler.DDLCompiler):
         schema_name = schema if schema else self.dialect.default_schema_name
         return (
             "execute sp_dropextendedproperty 'MS_Description', 'schema', "
-            "{0}, 'table', {1}, 'column', {2}".format(
+            "{}, 'table', {}, 'column', {}".format(
                 self.preparer.quote_schema(schema_name),
                 self.preparer.format_table(
                     drop.element.table, use_schema=False
@@ -2657,9 +2754,7 @@ class MSDDLCompiler(compiler.DDLCompiler):
         if create.element.data_type is not None:
             data_type = create.element.data_type
             prefix = " AS %s" % self.type_compiler.process(data_type)
-        return super(MSDDLCompiler, self).visit_create_sequence(
-            create, prefix=prefix, **kw
-        )
+        return super().visit_create_sequence(create, prefix=prefix, **kw)
 
     def visit_identity_column(self, identity, **kw):
         text = " IDENTITY"
@@ -2674,7 +2769,7 @@ class MSIdentifierPreparer(compiler.IdentifierPreparer):
     reserved_words = RESERVED_WORDS
 
     def __init__(self, dialect):
-        super(MSIdentifierPreparer, self).__init__(
+        super().__init__(
             dialect,
             initial_quote="[",
             final_quote="]",
@@ -2846,6 +2941,12 @@ class MSDialect(default.DefaultDialect):
     supports_empty_insert = False
 
     supports_comments = True
+    supports_default_metavalue = False
+    """dialect supports INSERT... VALUES (DEFAULT) syntax -
+    SQL Server **does** support this, but **not** for the IDENTITY column,
+    so we can't turn this on.
+
+    """
 
     # supports_native_uuid is partial here, so we implement our
     # own impl type
@@ -2885,13 +2986,28 @@ class MSDialect(default.DefaultDialect):
 
     supports_sequences = True
     sequences_optional = True
-    # T-SQL's actual default is -9223372036854775808
+    # This is actually used for autoincrement, where itentity is used that
+    # starts with 1.
+    # for sequences T-SQL's actual default is -9223372036854775808
     default_sequence_base = 1
 
     supports_native_boolean = False
     non_native_boolean_check_constraint = False
     supports_unicode_binds = True
     postfetch_lastrowid = True
+
+    # may be changed at server inspection time for older SQL server versions
+    supports_multivalues_insert = True
+
+    use_insertmanyvalues = True
+
+    use_insertmanyvalues_wo_returning = True
+
+    # "The incoming request has too many parameters. The server supports a "
+    # "maximum of 2100 parameters."
+    # in fact you can have 2099 parameters.
+    insertmanyvalues_max_parameters = 2099
+
     _supports_offset_fetch = False
     _supports_nvarchar_max = False
 
@@ -2943,7 +3059,7 @@ class MSDialect(default.DefaultDialect):
             )
             self.legacy_schema_aliasing = legacy_schema_aliasing
 
-        super(MSDialect, self).__init__(**opts)
+        super().__init__(**opts)
 
         self._json_serializer = json_serializer
         self._json_deserializer = json_deserializer
@@ -2951,7 +3067,7 @@ class MSDialect(default.DefaultDialect):
     def do_savepoint(self, connection, name):
         # give the DBAPI a push
         connection.exec_driver_sql("IF @@TRANCOUNT = 0 BEGIN TRANSACTION")
-        super(MSDialect, self).do_savepoint(connection, name)
+        super().do_savepoint(connection, name)
 
     def do_release_savepoint(self, connection, name):
         # SQL Server does not support RELEASE SAVEPOINT
@@ -2959,7 +3075,7 @@ class MSDialect(default.DefaultDialect):
 
     def do_rollback(self, dbapi_connection):
         try:
-            super(MSDialect, self).do_rollback(dbapi_connection)
+            super().do_rollback(dbapi_connection)
         except self.dbapi.ProgrammingError as e:
             if self.ignore_no_transaction_on_rollback and re.match(
                 r".*\b111214\b", str(e)
@@ -2973,15 +3089,13 @@ class MSDialect(default.DefaultDialect):
             else:
                 raise
 
-    _isolation_lookup = set(
-        [
-            "SERIALIZABLE",
-            "READ UNCOMMITTED",
-            "READ COMMITTED",
-            "REPEATABLE READ",
-            "SNAPSHOT",
-        ]
-    )
+    _isolation_lookup = {
+        "SERIALIZABLE",
+        "READ UNCOMMITTED",
+        "READ COMMITTED",
+        "REPEATABLE READ",
+        "SNAPSHOT",
+    }
 
     def get_isolation_level_values(self, dbapi_connection):
         return list(self._isolation_lookup)
@@ -2995,10 +3109,13 @@ class MSDialect(default.DefaultDialect):
 
     def get_isolation_level(self, dbapi_connection):
         cursor = dbapi_connection.cursor()
+        view_name = "sys.system_views"
         try:
             cursor.execute(
-                "SELECT name FROM sys.system_views WHERE name IN "
-                "('dm_exec_sessions', 'dm_pdw_nodes_exec_sessions')"
+                (
+                    "SELECT name FROM {} WHERE name IN "
+                    "('dm_exec_sessions', 'dm_pdw_nodes_exec_sessions')"
+                ).format(view_name)
             )
             row = cursor.fetchone()
             if not row:
@@ -3007,7 +3124,8 @@ class MSDialect(default.DefaultDialect):
                     "SQL Server version."
                 )
 
-            view_name = "sys.{}".format(row[0])
+            view_name = f"sys.{row[0]}"
+
             cursor.execute(
                 """
                     SELECT CASE transaction_isolation_level
@@ -3016,22 +3134,27 @@ class MSDialect(default.DefaultDialect):
                     WHEN 2 THEN 'READ COMMITTED'
                     WHEN 3 THEN 'REPEATABLE READ'
                     WHEN 4 THEN 'SERIALIZABLE'
-                    WHEN 5 THEN 'SNAPSHOT' END AS TRANSACTION_ISOLATION_LEVEL
+                    WHEN 5 THEN 'SNAPSHOT' END
+                    AS TRANSACTION_ISOLATION_LEVEL
                     FROM {}
                     where session_id = @@SPID
                 """.format(
                     view_name
                 )
             )
+        except self.dbapi.Error as err:
+            raise NotImplementedError(
+                "Can't fetch isolation level;  encountered error {} when "
+                'attempting to query the "{}" view.'.format(err, view_name)
+            ) from err
+        else:
             row = cursor.fetchone()
-            assert row is not None
-            val = row[0]
+            return row[0].upper()
         finally:
             cursor.close()
-        return val.upper()
 
     def initialize(self, connection):
-        super(MSDialect, self).initialize(connection)
+        super().initialize(connection)
         self._setup_version_attributes()
         self._setup_supports_nvarchar_max(connection)
 
@@ -3045,6 +3168,9 @@ class MSDialect(default.DefaultDialect):
 
         if self.server_version_info >= MS_2008_VERSION:
             self.supports_multivalues_insert = True
+        else:
+            self.supports_multivalues_insert = False
+
         if self.deprecate_large_types is None:
             self.deprecate_large_types = (
                 self.server_version_info >= MS_2012_VERSION
@@ -3158,28 +3284,13 @@ class MSDialect(default.DefaultDialect):
         if tablename.startswith("#"):  # temporary table
             # mssql does not support temporary views
             # SQL Error [4103] [S0001]: "#v": Temporary views are not allowed
-            tables = ischema.mssql_temp_table_columns
-
-            s = sql.select(tables.c.table_name).where(
-                tables.c.table_name.like(
-                    self._temp_table_name_like_pattern(tablename)
+            return bool(
+                connection.scalar(
+                    # U filters on user tables only.
+                    text("SELECT object_id(:table_name, 'U')"),
+                    {"table_name": f"tempdb.dbo.[{tablename}]"},
                 )
             )
-
-            # #7168: fetch all (not just first match) in case some other #temp
-            #        table with the same name happens to appear first
-            table_names = connection.scalars(s).all()
-            # #6910: verify it's not a temp table from another session
-            for table_name in table_names:
-                if bool(
-                    connection.scalar(
-                        text("SELECT object_id(:table_name)"),
-                        {"table_name": "tempdb.dbo.[{}]".format(table_name)},
-                    )
-                ):
-                    return True
-            else:
-                return False
         else:
             tables = ischema.tables
 

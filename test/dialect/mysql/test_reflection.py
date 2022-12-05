@@ -1,5 +1,3 @@
-# coding: utf-8
-
 import re
 
 from sqlalchemy import BigInteger
@@ -875,10 +873,10 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
 
         # MySQL converts unique constraints into unique indexes.
         # separately we get both
-        indexes = dict((i["name"], i) for i in insp.get_indexes("mysql_uc"))
-        constraints = set(
+        indexes = {i["name"]: i for i in insp.get_indexes("mysql_uc")}
+        constraints = {
             i["name"] for i in insp.get_unique_constraints("mysql_uc")
-        )
+        }
 
         self.assert_("uc_a" in indexes)
         self.assert_(indexes["uc_a"]["unique"])
@@ -888,8 +886,8 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
         # more "official" MySQL construct
         reflected = Table("mysql_uc", MetaData(), autoload_with=testing.db)
 
-        indexes = dict((i.name, i) for i in reflected.indexes)
-        constraints = set(uc.name for uc in reflected.constraints)
+        indexes = {i.name: i for i in reflected.indexes}
+        constraints = {uc.name for uc in reflected.constraints}
 
         self.assert_("uc_a" in indexes)
         self.assert_(indexes["uc_a"].unique)
@@ -1259,10 +1257,10 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
         m.create_all(connection)
 
         eq_(
-            dict(
-                (rec["name"], rec)
+            {
+                rec["name"]: rec
                 for rec in inspect(connection).get_foreign_keys("t2")
-            ),
+            },
             {
                 "cap_t1id_fk": {
                     "name": "cap_t1id_fk",
@@ -1285,8 +1283,6 @@ class ReflectionTest(fixtures.TestBase, AssertsCompiledSQL):
 
 
 class RawReflectionTest(fixtures.TestBase):
-    __backend__ = True
-
     def setup_test(self):
         dialect = mysql.dialect()
         self.parser = _reflection.MySQLTableDefinitionParser(
@@ -1412,3 +1408,18 @@ class RawReflectionTest(fixtures.TestBase):
                 "SET NULL",
             ),
         )
+
+    @testing.combinations(
+        (
+            "CREATE ALGORITHM=UNDEFINED DEFINER=`scott`@`%` "
+            "SQL SECURITY DEFINER VIEW `v1` AS SELECT",
+            True,
+        ),
+        ("CREATE VIEW `v1` AS SELECT", True),
+        ("CREATE TABLE `v1`", False),
+        ("CREATE TABLE `VIEW`", False),
+        ("CREATE TABLE `VIEW_THINGS`", False),
+        ("CREATE TABLE `A VIEW`", False),
+    )
+    def test_is_view(self, sql: str, expected: bool) -> None:
+        is_(self.parser._check_view(sql), expected)
