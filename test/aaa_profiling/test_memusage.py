@@ -2,6 +2,7 @@ import decimal
 import gc
 import itertools
 import multiprocessing
+import pickle
 import weakref
 
 import sqlalchemy as sa
@@ -18,6 +19,7 @@ from sqlalchemy import util
 from sqlalchemy.engine import result
 from sqlalchemy.engine.processors import to_decimal_processor_factory
 from sqlalchemy.orm import aliased
+from sqlalchemy.orm import attributes
 from sqlalchemy.orm import clear_mappers
 from sqlalchemy.orm import configure_mappers
 from sqlalchemy.orm import declarative_base
@@ -37,6 +39,7 @@ from sqlalchemy.sql.visitors import replacement_traverse
 from sqlalchemy.testing import engines
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
+from sqlalchemy.testing import pickleable
 from sqlalchemy.testing.fixtures import fixture_session
 from sqlalchemy.testing.schema import Column
 from sqlalchemy.testing.schema import Table
@@ -1724,3 +1727,221 @@ class CycleTest(_fixtures.FixtureTest):
             s.close()
 
         go()
+
+
+@testing.add_to_marker.memory_intensive
+class MiscMemoryIntensiveTests(fixtures.TestBase):
+    @testing.fixture
+    def user_fixture(self, decl_base):
+        class User(decl_base):
+            __tablename__ = "user"
+
+            id = Column(Integer, primary_key=True)
+            name = Column(String(50))
+
+        decl_base.metadata.create_all(testing.db)
+        yield User
+
+    @testing.requires.predictable_gc
+    def test_gced_delete_on_rollback(self, user_fixture):
+        User = user_fixture
+
+        s = fixture_session()
+        u1 = User(name="ed")
+        s.add(u1)
+        s.commit()
+
+        s.delete(u1)
+        u1_state = attributes.instance_state(u1)
+        assert u1_state in s.identity_map.all_states()
+        assert u1_state in s._deleted
+        s.flush()
+        assert u1_state not in s.identity_map.all_states()
+        assert u1_state not in s._deleted
+        del u1
+        gc_collect()
+        gc_collect()
+        gc_collect()
+        assert u1_state.obj() is None
+
+        s.rollback()
+        # new in 1.1, not in identity map if the object was
+        # gc'ed and we restore snapshot; we've changed update_impl
+        # to just skip this object
+        assert u1_state not in s.identity_map.all_states()
+
+        # in any version, the state is replaced by the query
+        # because the identity map would switch it
+        u1 = s.query(User).filter_by(name="ed").one()
+        assert u1_state not in s.identity_map.all_states()
+
+        eq_(s.scalar(select(func.count("*")).select_from(User.__table__)), 1)
+        s.delete(u1)
+        s.flush()
+        eq_(s.scalar(select(func.count("*")).select_from(User.__table__)), 0)
+        s.commit()
+
+
+class WeakIdentityMapTest(_fixtures.FixtureTest):
+    run_inserts = None
+
+    @testing.requires.predictable_gc
+    def test_weakref(self):
+        """test the weak-referencing identity map, which strongly-
+        references modified items."""
+
+        users, User = self.tables.users, self.classes.User
+
+        s = fixture_session()
+        self.mapper_registry.map_imperatively(User, users)
+        gc_collect()
+
+        s.add(User(name="ed"))
+        s.flush()
+        assert not s.dirty
+
+        user = s.query(User).one()
+
+        # heisenberg the GC a little bit, since #7823 caused a lot more
+        # GC when mappings are set up, larger test suite started failing
+        # on this being gc'ed
+        user_is = user._sa_instance_state
+        del user
+        gc_collect()
+        gc_collect()
+        gc_collect()
+        assert user_is.obj() is None
+
+        assert len(s.identity_map) == 0
+
+        user = s.query(User).one()
+        user.name = "fred"
+        del user
+        gc_collect()
+        assert len(s.identity_map) == 1
+        assert len(s.dirty) == 1
+        assert None not in s.dirty
+        s.flush()
+        gc_collect()
+        assert not s.dirty
+        assert not s.identity_map
+
+        user = s.query(User).one()
+        assert user.name == "fred"
+        assert s.identity_map
+
+    @testing.requires.predictable_gc
+    def test_weakref_pickled(self):
+        users, User = self.tables.users, pickleable.User
+
+        s = fixture_session()
+        self.mapper_registry.map_imperatively(User, users)
+        gc_collect()
+
+        s.add(User(name="ed"))
+        s.flush()
+        assert not s.dirty
+
+        user = s.query(User).one()
+        user.name = "fred"
+        s.expunge(user)
+
+        u2 = pickle.loads(pickle.dumps(user))
+
+        del user
+        s.add(u2)
+
+        del u2
+        gc_collect()
+
+        assert len(s.identity_map) == 1
+        assert len(s.dirty) == 1
+        assert None not in s.dirty
+        s.flush()
+        gc_collect()
+        assert not s.dirty
+
+        assert not s.identity_map
+
+    @testing.requires.predictable_gc
+    def test_weakref_with_cycles_o2m(self):
+        Address, addresses, users, User = (
+            self.classes.Address,
+            self.tables.addresses,
+            self.tables.users,
+            self.classes.User,
+        )
+
+        s = fixture_session()
+        self.mapper_registry.map_imperatively(
+            User,
+            users,
+            properties={"addresses": relationship(Address, backref="user")},
+        )
+        self.mapper_registry.map_imperatively(Address, addresses)
+        gc_collect()
+
+        s.add(User(name="ed", addresses=[Address(email_address="ed1")]))
+        s.commit()
+
+        user = s.query(User).options(joinedload(User.addresses)).one()
+        user.addresses[0].user  # lazyload
+        eq_(user, User(name="ed", addresses=[Address(email_address="ed1")]))
+
+        del user
+        gc_collect()
+        assert len(s.identity_map) == 0
+
+        user = s.query(User).options(joinedload(User.addresses)).one()
+        user.addresses[0].email_address = "ed2"
+        user.addresses[0].user  # lazyload
+        del user
+        gc_collect()
+        assert len(s.identity_map) == 2
+
+        s.commit()
+        user = s.query(User).options(joinedload(User.addresses)).one()
+        eq_(user, User(name="ed", addresses=[Address(email_address="ed2")]))
+
+    @testing.requires.predictable_gc
+    def test_weakref_with_cycles_o2o(self):
+        Address, addresses, users, User = (
+            self.classes.Address,
+            self.tables.addresses,
+            self.tables.users,
+            self.classes.User,
+        )
+
+        s = fixture_session()
+        self.mapper_registry.map_imperatively(
+            User,
+            users,
+            properties={
+                "address": relationship(Address, backref="user", uselist=False)
+            },
+        )
+        self.mapper_registry.map_imperatively(Address, addresses)
+        gc_collect()
+
+        s.add(User(name="ed", address=Address(email_address="ed1")))
+        s.commit()
+
+        user = s.query(User).options(joinedload(User.address)).one()
+        user.address.user
+        eq_(user, User(name="ed", address=Address(email_address="ed1")))
+
+        del user
+        gc_collect()
+        assert len(s.identity_map) == 0
+
+        user = s.query(User).options(joinedload(User.address)).one()
+        user.address.email_address = "ed2"
+        user.address.user  # lazyload
+
+        del user
+        gc_collect()
+        assert len(s.identity_map) == 2
+
+        s.commit()
+        user = s.query(User).options(joinedload(User.address)).one()
+        eq_(user, User(name="ed", address=Address(email_address="ed2")))
