@@ -1592,6 +1592,8 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
 
     def _db_value_for_elem(self, elem):
         try:
+            if isinstance(elem, enum.Enum):
+                return self._valid_lookup[elem.value]
             return self._valid_lookup[elem]
         except KeyError as err:
             # for unknown string values, we return as is.  While we can
