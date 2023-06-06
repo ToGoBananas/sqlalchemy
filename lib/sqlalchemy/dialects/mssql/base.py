@@ -938,9 +938,11 @@ from ...sql import func
 from ...sql import quoted_name
 from ...sql import roles
 from ...sql import sqltypes
+from ...sql import try_cast as try_cast  # noqa: F401
 from ...sql import util as sql_util
 from ...sql._typing import is_sql_compiler
 from ...sql.compiler import InsertmanyvaluesSentinelOpts
+from ...sql.elements import TryCast as TryCast  # noqa: F401
 from ...types import BIGINT
 from ...types import BINARY
 from ...types import CHAR
@@ -1307,7 +1309,6 @@ class DATETIMEOFFSET(_DateTimeBase, sqltypes.DateTime):
 class _UnicodeLiteral:
     def literal_processor(self, dialect):
         def process(value):
-
             value = value.replace("'", "''")
 
             if dialect.identifier_preparer._double_percents:
@@ -1603,41 +1604,6 @@ class SQL_VARIANT(sqltypes.TypeEngine):
     __visit_name__ = "SQL_VARIANT"
 
 
-def try_cast(*arg, **kw):
-    """Create a TRY_CAST expression.
-
-    :class:`.TryCast` is a subclass of SQLAlchemy's :class:`.Cast`
-    construct, and works in the same way, except that the SQL expression
-    rendered is "TRY_CAST" rather than "CAST"::
-
-        from sqlalchemy import select
-        from sqlalchemy import Numeric
-        from sqlalchemy.dialects.mssql import try_cast
-
-        stmt = select(
-            try_cast(product_table.c.unit_price, Numeric(10, 4))
-        )
-
-    The above would render::
-
-        SELECT TRY_CAST (product_table.unit_price AS NUMERIC(10, 4))
-        FROM product_table
-
-    .. versionadded:: 1.3.7
-
-    """
-    return TryCast(*arg, **kw)
-
-
-class TryCast(sql.elements.Cast):
-    """Represent a SQL Server TRY_CAST expression."""
-
-    __visit_name__ = "try_cast"
-
-    stringify_dialect = "mssql"
-    inherit_cache = True
-
-
 # old names.
 MSDateTime = _MSDateTime
 MSDate = _MSDate
@@ -1871,9 +1837,7 @@ class MSExecutionContext(default.DefaultExecutionContext):
     dialect: MSDialect
 
     def _opt_encode(self, statement):
-
         if self.compiled and self.compiled.schema_translate_map:
-
             rst = self.compiled.preparer._render_schema_translates
             statement = rst(statement, self.compiled.schema_translate_map)
 

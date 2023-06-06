@@ -542,7 +542,6 @@ before we call upon :meth:`_engine.Connection.begin`::
     # which... we usually don't.
 
     with engine.connect() as connection:
-
         connection.execution_options(isolation_level="AUTOCOMMIT")
 
         # run statement(s) in autocommit mode
@@ -568,7 +567,6 @@ use two blocks ::
 
     # use an autocommit block
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-
         # run statement in autocommit mode
         connection.execute("<statement>")
 
@@ -742,7 +740,6 @@ of 1000 rows.   The maximum size of this buffer can be affected using the
         with conn.execution_options(stream_results=True, max_row_buffer=100).execute(
             text("select * from table")
         ) as result:
-
             for row in result:
                 print(f"{row}")
 
@@ -1067,8 +1064,7 @@ examples being the :class:`.Values` construct as well as when using "multivalued
 inserts" with the :meth:`.Insert.values` method.
 
 So far our cache is still empty.  The next statements will be cached however,
-a segment looks like::
-
+a segment looks like:
 
 .. sourcecode:: sql
 

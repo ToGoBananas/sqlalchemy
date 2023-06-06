@@ -364,8 +364,8 @@ class BindIntegrationTest(_fixtures.FixtureTest):
         ),
         (
             lambda User: select(1).where(User.name == "ed"),
-            # no mapper for this one because the plugin is not "orm"
-            lambda User: {"clause": mock.ANY},
+            # changed by #9805
+            lambda User: {"clause": mock.ANY, "mapper": inspect(User)},
             "e1",
         ),
         (
@@ -526,7 +526,6 @@ class BindIntegrationTest(_fixtures.FixtureTest):
 
         self.mapper_registry.map_imperatively(User, users)
         with testing.db.connect() as c:
-
             sess = Session(bind=c)
 
             u = User(name="u1")

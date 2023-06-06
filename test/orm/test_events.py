@@ -66,7 +66,6 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
         cls._setup_stock_mapping()
 
     def _caching_session_fixture(self):
-
         cache = {}
 
         maker = sessionmaker(testing.db, future=True)
@@ -102,7 +101,6 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
         User, Address = self.classes("User", "Address")
 
         with self.sql_execution_asserter(testing.db) as asserter:
-
             with self._caching_session_fixture() as session:
                 stmt = (
                     select(User)
@@ -341,7 +339,6 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
             sess.execute(insert(User), orig_params)
 
     def test_chained_events_one(self):
-
         sess = Session(testing.db, future=True)
 
         @event.listens_for(sess, "do_orm_execute")
@@ -377,7 +374,6 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
 
         @event.listens_for(session, "do_orm_execute")
         def do_orm_execute(ctx):
-
             if not ctx.is_select:
                 assert_raises_message(
                     sa.exc.InvalidRequestError,
@@ -403,7 +399,10 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
 
     @testing.combinations(
         (lambda: select(1), True),
-        (lambda User: select(User).union(select(User)), True),
+        (
+            lambda user_table: select(user_table).union(select(user_table)),
+            True,
+        ),
         (lambda: text("select * from users"), False),
     )
     def test_non_orm_statements(self, stmt, is_select):
@@ -411,8 +410,8 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
 
         canary = self._flag_fixture(sess)
 
-        User, Address = self.classes("User", "Address")
-        stmt = testing.resolve_lambda(stmt, User=User)
+        user_table = self.tables.users
+        stmt = testing.resolve_lambda(stmt, user_table=user_table)
         sess.execute(stmt).all()
 
         eq_(
@@ -463,7 +462,6 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
         )
 
     def test_all_mappers_accessor_two(self):
-
         sess = Session(testing.db, future=True)
 
         canary = self._flag_fixture(sess)
@@ -723,7 +721,6 @@ class ORMExecuteTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
         )
 
     def test_chained_events_two(self):
-
         sess = Session(testing.db, future=True)
 
         def added(ctx):
@@ -1350,7 +1347,6 @@ class MapperEventsTest(RemoveORMEventsGlobally, _fixtures.FixtureTest):
         ["listen_on_mapper", "listen_on_base", "listen_on_mixin"],
     )
     def test_mapper_config_sequence(self, decl_base, listen_type):
-
         canary = Mock()
 
         if listen_type.listen_on_mapper:

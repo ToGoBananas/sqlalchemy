@@ -210,7 +210,6 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
 
     def test_warn_on_non_dc_mixin(self):
         class _BaseMixin:
-
             create_user: Mapped[int] = mapped_column()
             update_user: Mapped[Optional[int]] = mapped_column(
                 default=None, init=False
@@ -692,7 +691,6 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
             b: Mapped[int] = mapped_column(default=1)
 
         class Child(Mixin, dc_decl_base):
-
             __tablename__ = "child"
 
             _: dataclasses.KW_ONLY
@@ -757,6 +755,38 @@ class DCTransformsTest(AssertsCompiledSQL, fixtures.TestBase):
                 __tablename__ = "foo"
 
         is_true(isinstance(ec.error.__cause__, TypeError))
+
+    def test_dataclass_default(self, dc_decl_base):
+        """test for #9879"""
+
+        def c10():
+            return 10
+
+        def c20():
+            return 20
+
+        class A(dc_decl_base):
+            __tablename__ = "a"
+            id: Mapped[int] = mapped_column(primary_key=True)
+            def_init: Mapped[int] = mapped_column(default=42)
+            call_init: Mapped[int] = mapped_column(default_factory=c10)
+            def_no_init: Mapped[int] = mapped_column(default=13, init=False)
+            call_no_init: Mapped[int] = mapped_column(
+                default_factory=c20, init=False
+            )
+
+        a = A(id=100)
+        eq_(a.def_init, 42)
+        eq_(a.call_init, 10)
+        eq_(a.def_no_init, 13)
+        eq_(a.call_no_init, 20)
+
+        fields = {f.name: f for f in dataclasses.fields(A)}
+        eq_(fields["def_init"].default, 42)
+        eq_(fields["call_init"].default_factory, c10)
+        eq_(fields["def_no_init"].default, dataclasses.MISSING)
+        ne_(fields["def_no_init"].default_factory, dataclasses.MISSING)
+        eq_(fields["call_no_init"].default_factory, c20)
 
 
 class RelationshipDefaultFactoryTest(fixtures.TestBase):
@@ -1264,7 +1294,6 @@ class DataclassesForNonMappedClassesTest(fixtures.TestBase):
             )
 
         if dataclass_scope.on_base_class:
-
             with non_dc_mixin():
 
                 class Book(Mixin, MappedAsDataclass, Base, **klass_kw):
@@ -1297,7 +1326,6 @@ class DataclassesForNonMappedClassesTest(fixtures.TestBase):
             expected_annotations[Book] = {"id": int, "polymorphic_type": str}
 
         if dataclass_scope.on_sub_class:
-
             with non_dc_mixin():
 
                 class Novel(MappedAsDataclass, Book, **klass_kw):
@@ -1309,7 +1337,6 @@ class DataclassesForNonMappedClassesTest(fixtures.TestBase):
                     description: Mapped[Optional[str]]
 
         else:
-
             with non_dc_mixin():
 
                 class Novel(Book):

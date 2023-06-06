@@ -549,7 +549,7 @@ class SuiteRequirements(Requirements):
 
     @property
     def foreign_key_constraint_name_reflection(self):
-        """Target supports refleciton of FOREIGN KEY constraints and
+        """Target supports reflection of FOREIGN KEY constraints and
         will return the name of the constraint that was used in the
         "CONSTRAINT <name> FOREIGN KEY" DDL.
 
@@ -664,7 +664,7 @@ class SuiteRequirements(Requirements):
 
     @property
     def constraint_comment_reflection(self):
-        """indicates if the database support constraint on constraints
+        """indicates if the database support comments on constraints
         and their reflection"""
         return exclusions.closed()
 
@@ -1028,7 +1028,6 @@ class SuiteRequirements(Requirements):
             }
         """
         with config.db.connect() as conn:
-
             try:
                 supported = conn.dialect.get_isolation_level_values(
                     conn.connection.dbapi_connection

@@ -1048,7 +1048,6 @@ class RealPrePingEventHandlerTest(fixtures.TestBase):
         with mock.patch.object(
             engine.dialect.loaded_dbapi, "connect", mock_connect
         ):
-
             # set up initial connection.  pre_ping works on subsequent connects
             engine.connect().close()
 
@@ -1166,7 +1165,6 @@ class RealReconnectTest(fixtures.TestBase):
 
     def test_reconnect(self):
         with self.engine.connect() as conn:
-
             eq_(conn.execute(select(1)).scalar(), 1)
             assert not conn.closed
 
@@ -1490,6 +1488,9 @@ class PrePingRealTest(fixtures.TestBase):
 class InvalidateDuringResultTest(fixtures.TestBase):
     __backend__ = True
 
+    # test locks SQLite file databases due to unconsumed results
+    __requires__ = ("ad_hoc_engines",)
+
     def setup_test(self):
         self.engine = engines.reconnecting_engine()
         self.meta = MetaData()
@@ -1512,27 +1513,25 @@ class InvalidateDuringResultTest(fixtures.TestBase):
             self.meta.drop_all(conn)
         self.engine.dispose()
 
-    @testing.fails_if(
-        [
-            "+mysqlconnector",
-            "+mysqldb",
-            "+cymysql",
-            "+pymysql",
-            "+pg8000",
-            "+asyncpg",
-            "+aiosqlite",
-            "+aiomysql",
-            "+asyncmy",
-            "+psycopg",
-        ],
-        "Buffers the result set and doesn't check for connection close",
-    )
     def test_invalidate_on_results(self):
         conn = self.engine.connect()
-        result = conn.exec_driver_sql("select * from sometable")
+        result = conn.exec_driver_sql(
+            "select * from sometable",
+        )
         for x in range(20):
             result.fetchone()
+
+        real_cursor = result.cursor
         self.engine.test_shutdown()
+
+        def produce_side_effect():
+            # will fail because connection was closed, with an exception
+            # that should trigger disconnect routines
+            real_cursor.execute("select * from sometable")
+
+        result.cursor = Mock(
+            fetchone=mock.Mock(side_effect=produce_side_effect)
+        )
         try:
             _assert_invalidated(result.fetchone)
             assert conn.invalidated

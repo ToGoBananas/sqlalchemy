@@ -902,7 +902,6 @@ class DeclarativeBaseNoMeta(inspection.Inspectable[InstanceState[Any]]):
     """
 
     if typing.TYPE_CHECKING:
-
         __tablename__: Any
         """String name to assign to the generated
         :class:`_schema.Table` object, if not specified directly via
@@ -944,7 +943,7 @@ class DeclarativeBaseNoMeta(inspection.Inspectable[InstanceState[Any]]):
             _check_not_declarative(cls, DeclarativeBaseNoMeta)
             _setup_declarative_base(cls)
         else:
-            cls._sa_registry.map_declaratively(cls)
+            _as_declarative(cls._sa_registry, cls, cls.__dict__)
 
 
 def add_mapped_attribute(
@@ -1220,7 +1219,6 @@ class registry:
     def _resolve_type(
         self, python_type: _MatchedOnType
     ) -> Optional[sqltypes.TypeEngine[Any]]:
-
         search: Iterable[Tuple[_MatchedOnType, Type[Any]]]
         python_type_type: Type[Any]
 
@@ -1604,16 +1602,20 @@ class registry:
         """
 
         def decorate(cls: Type[_O]) -> Type[_O]:
-            cls._sa_apply_dc_transforms = {
-                "init": init,
-                "repr": repr,
-                "eq": eq,
-                "order": order,
-                "unsafe_hash": unsafe_hash,
-                "match_args": match_args,
-                "kw_only": kw_only,
-                "dataclass_callable": dataclass_callable,
-            }
+            setattr(
+                cls,
+                "_sa_apply_dc_transforms",
+                {
+                    "init": init,
+                    "repr": repr,
+                    "eq": eq,
+                    "order": order,
+                    "unsafe_hash": unsafe_hash,
+                    "match_args": match_args,
+                    "kw_only": kw_only,
+                    "dataclass_callable": dataclass_callable,
+                },
+            )
             _as_declarative(self, cls, cls.__dict__)
             return cls
 

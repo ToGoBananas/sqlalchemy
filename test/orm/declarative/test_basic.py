@@ -376,7 +376,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
             assert A.__mapper__.primary_key[1] is A.__table__.c.b
 
     def test_mapper_pk_arg_degradation_no_col(self, decl_base):
-
         with expect_raises_message(
             exc.ArgumentError,
             "Can't determine primary_key column 'q' - no attribute is "
@@ -393,7 +392,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
 
     @testing.variation("proptype", ["relationship", "colprop"])
     def test_mapper_pk_arg_degradation_is_not_a_col(self, decl_base, proptype):
-
         with expect_raises_message(
             exc.ArgumentError,
             "Can't determine primary_key column 'b'; property does "
@@ -546,7 +544,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
         Base = declarative_base()
 
         class User(Base):
-
             __tablename__ = "users"
             __table_args__ = {"schema": "fooschema"}
 
@@ -561,7 +558,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
             )
 
         class Prop(Base):
-
             __tablename__ = "props"
             __table_args__ = {"schema": "fooschema"}
 
@@ -592,7 +588,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
 
         @reg.mapped
         class User:
-
             __tablename__ = "users"
             __table_args__ = {"schema": "fooschema"}
 
@@ -608,7 +603,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
 
         @reg.mapped
         class Prop:
-
             __tablename__ = "props"
             __table_args__ = {"schema": "fooschema"}
 
@@ -712,7 +706,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
 
     def test_as_declarative(self, metadata):
         class User(fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -721,7 +714,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
             addresses = relationship("Address", backref="user")
 
         class Address(fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -753,7 +745,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
 
     def test_map_declaratively(self, metadata):
         class User(fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -762,7 +753,6 @@ class DeclarativeBaseSetupsTest(fixtures.TestBase):
             addresses = relationship("Address", backref="user")
 
         class Address(fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -1161,6 +1151,54 @@ class DeclarativeMultiBaseTest(
         eq_(a1, Address(email="two"))
         eq_(a1.user, User(name="u1"))
 
+    @testing.variation("mora", ["mixin", "abstract"])
+    def test_abstract_and_or_mixin(self, mora):
+        if mora.abstract:
+
+            class Employee(Base):
+                __abstract__ = True
+
+                id = mapped_column(Integer, primary_key=True, sort_order=-1)
+
+            class Manager(Employee):
+                __tablename__ = "manager"
+                name = mapped_column(String(50))
+                manager_data = mapped_column(String(40))
+
+            class Engineer(Employee):
+                __tablename__ = "engineer"
+
+                name = mapped_column(String(50))
+                engineer_info = mapped_column(String(40))
+
+        elif mora.mixin:
+
+            class Mixin:
+                pass
+
+            class EmployeeMixin:
+                id = mapped_column(Integer, primary_key=True, sort_order=-1)
+
+            class Manager(EmployeeMixin, Base):
+                __tablename__ = "manager"
+                name = mapped_column(String(50))
+                manager_data = mapped_column(String(40))
+
+            class Engineer(EmployeeMixin, Base):
+                __tablename__ = "engineer"
+
+                name = mapped_column(String(50))
+                engineer_info = mapped_column(String(40))
+
+        else:
+            mora.fail()
+
+        self.assert_compile(
+            select(Engineer),
+            "SELECT engineer.id, engineer.name, engineer.engineer_info "
+            "FROM engineer",
+        )
+
     def test_back_populates_setup(self):
         class User(Base):
             __tablename__ = "users"
@@ -1387,7 +1425,6 @@ class DeclarativeMultiBaseTest(
                 id = Column(Integer, primary_key=True)
 
     def test_non_sql_expression_warning_five(self):
-
         # test for #9537
         with assertions.expect_warnings(
             r"Attribute 'x' on class <class .*Foo5.* appears to be a "
@@ -1539,7 +1576,6 @@ class DeclarativeMultiBaseTest(
     def test_reserved_identifiers(
         self, decl_base, name, expect_raise, attrtype
     ):
-
         if attrtype.column:
             clsdict = {
                 "__tablename__": "user",
@@ -1598,7 +1634,6 @@ class DeclarativeMultiBaseTest(
 
     def test_string_dependency_resolution(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -1617,7 +1652,6 @@ class DeclarativeMultiBaseTest(
             )
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -1651,7 +1685,6 @@ class DeclarativeMultiBaseTest(
         )
 
         class Foo(Base, fixtures.ComparableEntity):
-
             __tablename__ = "foo"
             id = Column(Integer, primary_key=True)
             rel = relationship("User", primaryjoin="User.addresses==Foo.id")
@@ -1664,7 +1697,6 @@ class DeclarativeMultiBaseTest(
 
     def test_string_dependency_resolution_synonym(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -1680,7 +1712,6 @@ class DeclarativeMultiBaseTest(
         eq_(sess.query(User).filter(User.name == "ed").one(), User(name="ed"))
 
         class Foo(Base, fixtures.ComparableEntity):
-
             __tablename__ = "foo"
             id = Column(Integer, primary_key=True)
             _user_id = Column(Integer)
@@ -1802,7 +1833,6 @@ class DeclarativeMultiBaseTest(
             name = Column(String(50))
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -1822,7 +1852,6 @@ class DeclarativeMultiBaseTest(
         """test that full tinkery expressions work as written"""
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(Integer, primary_key=True)
             addresses = relationship(
@@ -1831,7 +1860,6 @@ class DeclarativeMultiBaseTest(
             )
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(Integer, primary_key=True)
             user_id = Column(Integer, ForeignKey("users.id"))
@@ -1844,7 +1872,6 @@ class DeclarativeMultiBaseTest(
 
     def test_string_dependency_resolution_module_qualified(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(Integer, primary_key=True)
             addresses = relationship(
@@ -1854,7 +1881,6 @@ class DeclarativeMultiBaseTest(
             )
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(Integer, primary_key=True)
             user_id = Column(Integer, ForeignKey("users.id"))
@@ -1867,7 +1893,6 @@ class DeclarativeMultiBaseTest(
 
     def test_string_dependency_resolution_in_backref(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(Integer, primary_key=True)
             name = Column(String(50))
@@ -1878,7 +1903,6 @@ class DeclarativeMultiBaseTest(
             )
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(Integer, primary_key=True)
             email = Column(String(50))
@@ -1892,7 +1916,6 @@ class DeclarativeMultiBaseTest(
 
     def test_string_dependency_resolution_tables(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(Integer, primary_key=True)
             name = Column(String(50))
@@ -1905,7 +1928,6 @@ class DeclarativeMultiBaseTest(
             )
 
         class Prop(Base, fixtures.ComparableEntity):
-
             __tablename__ = "props"
             id = Column(Integer, primary_key=True)
             name = Column(String(50))
@@ -1925,7 +1947,6 @@ class DeclarativeMultiBaseTest(
     def test_string_dependency_resolution_table_over_class(self):
         # test for second half of #5774
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(Integer, primary_key=True)
             name = Column(String(50))
@@ -1936,7 +1957,6 @@ class DeclarativeMultiBaseTest(
             )
 
         class Prop(Base, fixtures.ComparableEntity):
-
             __tablename__ = "props"
             id = Column(Integer, primary_key=True)
             name = Column(String(50))
@@ -1956,7 +1976,6 @@ class DeclarativeMultiBaseTest(
     def test_string_dependency_resolution_class_over_table(self):
         # test for second half of #5774
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(Integer, primary_key=True)
             name = Column(String(50))
@@ -1977,7 +1996,6 @@ class DeclarativeMultiBaseTest(
 
     def test_uncompiled_attributes_in_relationship(self):
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -1986,7 +2004,6 @@ class DeclarativeMultiBaseTest(
             user_id = Column(Integer, ForeignKey("users.id"))
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -2035,13 +2052,11 @@ class DeclarativeMultiBaseTest(
 
     def test_nice_dependency_error(self):
         class User(Base):
-
             __tablename__ = "users"
             id = Column("id", Integer, primary_key=True)
             addresses = relationship("Address")
 
         class Address(Base):
-
             __tablename__ = "addresses"
             id = Column(Integer, primary_key=True)
             foo = sa.orm.column_property(User.id == 5)
@@ -2053,7 +2068,6 @@ class DeclarativeMultiBaseTest(
 
     def test_nice_dependency_error_works_with_hasattr(self):
         class User(Base):
-
             __tablename__ = "users"
             id = Column("id", Integer, primary_key=True)
             addresses = relationship("Address")
@@ -2077,18 +2091,15 @@ class DeclarativeMultiBaseTest(
             )
 
     def test_uses_get_on_class_col_fk(self):
-
         # test [ticket:1492]
 
         class Topic(Base):
-
             __tablename__ = "topic"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
             )
 
         class Detail(Base):
-
             __tablename__ = "detail"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -2170,7 +2181,6 @@ class DeclarativeMultiBaseTest(
         self, require_metaclass, assert_user_address_mapping, _column
     ):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column("id", Integer, primary_key=True)
 
@@ -2178,7 +2188,6 @@ class DeclarativeMultiBaseTest(
         User.addresses = relationship("Address", backref="user")
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = _column(Integer, primary_key=True)
 
@@ -2196,7 +2205,6 @@ class DeclarativeMultiBaseTest(
     @testing.combinations(Column, mapped_column, argnames="_column")
     def test_add_prop_manual(self, assert_user_address_mapping, _column):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = _column("id", Integer, primary_key=True)
 
@@ -2206,7 +2214,6 @@ class DeclarativeMultiBaseTest(
         )
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = _column(Integer, primary_key=True)
 
@@ -2302,7 +2309,6 @@ class DeclarativeMultiBaseTest(
 
     def test_eager_order_by(self):
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2311,7 +2317,6 @@ class DeclarativeMultiBaseTest(
             user_id = Column("user_id", Integer, ForeignKey("users.id"))
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2339,7 +2344,6 @@ class DeclarativeMultiBaseTest(
 
     def test_order_by_multi(self):
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2348,7 +2352,6 @@ class DeclarativeMultiBaseTest(
             user_id = Column("user_id", Integer, ForeignKey("users.id"))
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2370,20 +2373,17 @@ class DeclarativeMultiBaseTest(
         u.addresses
 
     def test_oops(self):
-
         with testing.expect_warnings(
             "Ignoring declarative-like tuple value of " "attribute 'name'"
         ):
 
             class User(Base, fixtures.ComparableEntity):
-
                 __tablename__ = "users"
                 id = Column("id", Integer, primary_key=True)
                 name = (Column("name", String(50)),)
 
     def test_table_args_no_dict(self):
         class Foo1(Base):
-
             __tablename__ = "foo"
             __table_args__ = (ForeignKeyConstraint(["id"], ["foo.bar"]),)
             id = Column("id", Integer, primary_key=True)
@@ -2394,7 +2394,6 @@ class DeclarativeMultiBaseTest(
     def test_table_args_type(self):
         def err():
             class Foo1(Base):
-
                 __tablename__ = "foo"
                 __table_args__ = ForeignKeyConstraint(["id"], ["foo.id"])
                 id = Column("id", Integer, primary_key=True)
@@ -2405,7 +2404,6 @@ class DeclarativeMultiBaseTest(
 
     def test_table_args_none(self):
         class Foo2(Base):
-
             __tablename__ = "foo"
             __table_args__ = None
             id = Column("id", Integer, primary_key=True)
@@ -2414,7 +2412,6 @@ class DeclarativeMultiBaseTest(
 
     def test_table_args_dict_format(self):
         class Foo2(Base):
-
             __tablename__ = "foo"
             __table_args__ = {"mysql_engine": "InnoDB"}
             id = Column("id", Integer, primary_key=True)
@@ -2423,13 +2420,11 @@ class DeclarativeMultiBaseTest(
 
     def test_table_args_tuple_format(self):
         class Foo2(Base):
-
             __tablename__ = "foo"
             __table_args__ = {"mysql_engine": "InnoDB"}
             id = Column("id", Integer, primary_key=True)
 
         class Bar(Base):
-
             __tablename__ = "bar"
             __table_args__ = (
                 ForeignKeyConstraint(["id"], ["foo.id"]),
@@ -2483,7 +2478,6 @@ class DeclarativeMultiBaseTest(
 
     def test_expression(self, require_metaclass):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2492,7 +2486,6 @@ class DeclarativeMultiBaseTest(
             addresses = relationship("Address", backref="user")
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2526,7 +2519,6 @@ class DeclarativeMultiBaseTest(
 
     def test_useless_declared_attr(self):
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2535,7 +2527,6 @@ class DeclarativeMultiBaseTest(
             user_id = Column("user_id", Integer, ForeignKey("users.id"))
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2610,7 +2601,6 @@ class DeclarativeMultiBaseTest(
 
     def test_column(self, require_metaclass):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2651,7 +2641,6 @@ class DeclarativeMultiBaseTest(
 
     def test_column_properties(self):
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -2660,7 +2649,6 @@ class DeclarativeMultiBaseTest(
             user_id = Column(Integer, ForeignKey("users.id"))
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2695,14 +2683,12 @@ class DeclarativeMultiBaseTest(
 
     def test_column_properties_2(self):
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(Integer, primary_key=True)
             email = Column(String(50))
             user_id = Column(Integer, ForeignKey("users.id"))
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column("id", Integer, primary_key=True)
             name = Column("name", String(50))
@@ -2717,7 +2703,6 @@ class DeclarativeMultiBaseTest(
 
     def test_deferred(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 Integer, primary_key=True, test_needs_autoincrement=True
@@ -2823,7 +2808,6 @@ class DeclarativeMultiBaseTest(
 
     def test_synonym_inline(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2854,14 +2838,12 @@ class DeclarativeMultiBaseTest(
         from sqlalchemy.orm.properties import ColumnProperty
 
         class CustomCompare(ColumnProperty.Comparator):
-
             __hash__ = None
 
             def __eq__(self, other):
                 return self.__clause_element__() == other + " FOO"
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2878,7 +2860,6 @@ class DeclarativeMultiBaseTest(
 
     def test_synonym_added(self, require_metaclass):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2906,7 +2887,6 @@ class DeclarativeMultiBaseTest(
 
     def test_reentrant_compile_via_foreignkey(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2915,7 +2895,6 @@ class DeclarativeMultiBaseTest(
             addresses = relationship("Address", backref="user")
 
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2952,7 +2931,6 @@ class DeclarativeMultiBaseTest(
 
     def test_relationship_reference(self, require_metaclass):
         class Address(Base, fixtures.ComparableEntity):
-
             __tablename__ = "addresses"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2961,7 +2939,6 @@ class DeclarativeMultiBaseTest(
             user_id = Column("user_id", Integer, ForeignKey("users.id"))
 
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True
@@ -2997,7 +2974,6 @@ class DeclarativeMultiBaseTest(
 
     def test_pk_with_fk_init(self):
         class Bar(Base):
-
             __tablename__ = "bar"
             id = sa.Column(
                 sa.Integer, sa.ForeignKey("foo.id"), primary_key=True
@@ -3005,7 +2981,6 @@ class DeclarativeMultiBaseTest(
             ex = sa.Column(sa.Integer, primary_key=True)
 
         class Foo(Base):
-
             __tablename__ = "foo"
             id = sa.Column(sa.Integer, primary_key=True)
             bars = sa.orm.relationship(Bar)
@@ -3025,7 +3000,6 @@ class DeclarativeMultiBaseTest(
         meta.create_all(testing.db)
 
         class MyObj(Base):
-
             __table__ = Table("t1", Base.metadata, autoload_with=testing.db)
 
         sess = fixture_session()
@@ -3036,7 +3010,6 @@ class DeclarativeMultiBaseTest(
 
     def test_synonym_for(self):
         class User(Base, fixtures.ComparableEntity):
-
             __tablename__ = "users"
             id = Column(
                 "id", Integer, primary_key=True, test_needs_autoincrement=True

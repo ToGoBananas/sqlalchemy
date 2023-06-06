@@ -1117,7 +1117,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                 self._handle_dbapi_exception(e, None, None, None, None)
 
     def _commit_impl(self) -> None:
-
         if self._has_events or self.engine._has_events:
             self.dispatch.commit(self)
 
@@ -1552,7 +1551,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
         _CoreMultiExecuteParams,
         _CoreSingleExecuteParams,
     ]:
-
         event_multiparams: _CoreMultiExecuteParams
         event_params: _CoreSingleExecuteParams
 
@@ -1713,8 +1711,11 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
         parameters: Optional[_DBAPIAnyExecuteParams] = None,
         execution_options: Optional[CoreExecuteOptionsParameter] = None,
     ) -> CursorResult[Any]:
-        r"""Executes a SQL statement construct and returns a
-        :class:`_engine.CursorResult`.
+        r"""Executes a string SQL statement on the DBAPI cursor directly,
+        without any SQL compilation steps.
+
+        This can be used to pass any string directly to the
+        ``cursor.execute()`` method of the DBAPI in use.
 
         :param statement: The statement str to be executed.   Bound parameters
          must use the underlying DBAPI's paramstyle, such as "qmark",
@@ -1724,6 +1725,8 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
          execution.  The format is one of:   a dictionary of named parameters,
          a tuple of positional parameters, or a list containing either
          dictionaries or tuples for multiple-execute support.
+
+        :return: a :class:`_engine.CursorResult`.
 
          E.g. multiple dictionaries::
 
@@ -1891,7 +1894,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                 )
 
         if self._echo:
-
             self._log_info(str_statement)
 
             stats = context._get_cache_stats()
@@ -2028,7 +2030,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
             generic_setinputsizes,
             context,
         ):
-
             if imv_batch.processed_setinputsizes:
                 try:
                     dialect.do_set_input_sizes(
@@ -2060,7 +2061,6 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
                     )
 
             if self._echo:
-
                 self._log_info(sql_util._long_statement(sub_stmt))
 
                 imv_stats = f""" {

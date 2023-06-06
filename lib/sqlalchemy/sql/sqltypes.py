@@ -804,7 +804,6 @@ class DateTime(
 
     @util.memoized_property
     def _expression_adaptations(self):
-
         # Based on
         # https://www.postgresql.org/docs/current/static/functions-datetime.html.
 
@@ -1515,7 +1514,6 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
         matched_on: _MatchedOnType,
         matched_on_flattened: Type[Any],
     ) -> Optional[Enum]:
-
         # "generic form" indicates we were placed in a type map
         # as ``sqlalchemy.Enum(enum.Enum)`` which indicates we need to
         # get enumerated values from the datatype
@@ -2053,7 +2051,7 @@ class Interval(Emulated, _AbstractInterval, TypeDecorator[dt.timedelta]):
     """
 
     impl = DateTime
-    epoch = dt.datetime.utcfromtimestamp(0)
+    epoch = dt.datetime.fromtimestamp(0, dt.timezone.utc).replace(tzinfo=None)
     cache_ok = True
 
     def __init__(
@@ -2870,7 +2868,6 @@ class ARRAY(
         type: ARRAY
 
         def _setup_getitem(self, index):
-
             arr_type = self.type
 
             return_type: TypeEngine[Any]
@@ -3161,7 +3158,6 @@ class TupleType(TypeEngine[Tuple[Any, ...]]):
     def coerce_compared_value(
         self, op: Optional[OperatorType], value: Any
     ) -> TypeEngine[Any]:
-
         if value is type_api._NO_VALUE_IN_LIST:
             return super().coerce_compared_value(op, value)
         else:
@@ -3521,7 +3517,7 @@ class MatchType(Boolean):
 _UUID_RETURN = TypeVar("_UUID_RETURN", str, _python_UUID)
 
 
-class Uuid(TypeEngine[_UUID_RETURN]):
+class Uuid(Emulated, TypeEngine[_UUID_RETURN]):
 
     """Represent a database agnostic UUID datatype.
 
@@ -3616,6 +3612,10 @@ class Uuid(TypeEngine[_UUID_RETURN]):
     def python_type(self):
         return _python_UUID if self.as_uuid else str
 
+    @property
+    def native(self):
+        return self.native_uuid
+
     def coerce_compared_value(self, op, value):
         """See :meth:`.TypeEngine.coerce_compared_value` for a description."""
 
@@ -3672,7 +3672,6 @@ class Uuid(TypeEngine[_UUID_RETURN]):
 
                 return process
         else:
-
             if not self.as_uuid:
 
                 def process(value):
@@ -3718,7 +3717,7 @@ class Uuid(TypeEngine[_UUID_RETURN]):
                 return process
 
 
-class UUID(Uuid[_UUID_RETURN]):
+class UUID(Uuid[_UUID_RETURN], type_api.NativeForEmulated):
 
     """Represent the SQL UUID type.
 
@@ -3763,6 +3762,11 @@ class UUID(Uuid[_UUID_RETURN]):
         """
         self.as_uuid = as_uuid
         self.native_uuid = True
+
+    @classmethod
+    def adapt_emulated_to_native(cls, impl, **kw):
+        kw.setdefault("as_uuid", impl.as_uuid)
+        return cls(**kw)
 
 
 NULLTYPE = NullType()

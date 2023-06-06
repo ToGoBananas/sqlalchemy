@@ -59,6 +59,7 @@ from sqlalchemy import Text
 from sqlalchemy import text
 from sqlalchemy import TIMESTAMP
 from sqlalchemy import true
+from sqlalchemy import try_cast
 from sqlalchemy import tuple_
 from sqlalchemy import type_coerce
 from sqlalchemy import types
@@ -244,7 +245,6 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
         assert not hasattr(c1, "__dict__")
 
     def test_compile_label_is_slots(self):
-
         c1 = compiler._CompileLabel(column("q"), "somename")
 
         eq_(c1.name, "somename")
@@ -1159,7 +1159,6 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
         )
 
     def test_dupe_columns_use_labels_from_anon(self):
-
         t = table("t", column("a"), column("b"))
         a = t.alias()
 
@@ -2301,7 +2300,6 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
         )
 
     def test_literal(self):
-
         self.assert_compile(
             select(literal("foo")), "SELECT :param_1 AS anon_1"
         )
@@ -3088,7 +3086,6 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
         )
 
     def test_over_framespec(self):
-
         expr = table1.c.myid
         self.assert_compile(
             select(func.row_number().over(order_by=expr, rows=(0, None))),
@@ -3508,7 +3505,6 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
             self.assert_compile(stmt, expected, dialect=dialect)
 
     def test_statement_hints(self):
-
         stmt = (
             select(table1.c.myid)
             .with_statement_hint("test hint one")
@@ -3679,7 +3675,6 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
                 [5, 6],
             ),
         ]:
-
             self.assert_compile(
                 stmt, expected_named_stmt, params=expected_default_params_dict
             )
@@ -3922,7 +3917,6 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
         )
 
     def test_bind_anon_name_special_chars_uniqueify_two(self):
-
         t = table("t", column("_3foo"), column("4(foo"))
 
         self.assert_compile(
@@ -4094,7 +4088,6 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
     def test_construct_params_combine_extracted(
         self, stmt1, stmt2, param1, param2, extparam1, extparam2
     ):
-
         if extparam1:
             keys = list(extparam1)
         else:
@@ -4547,7 +4540,6 @@ class BindParameterTest(AssertsCompiledSQL, fixtures.TestBase):
 
     @testing.variation("scalar_subquery", [True, False])
     def test_select_in(self, scalar_subquery):
-
         stmt = select(table2.c.otherid, table2.c.othername)
 
         if scalar_subquery:
@@ -6031,7 +6023,6 @@ class StringifySpecialTest(fixtures.TestBase):
         )
 
     def test_dialect_specific_ddl(self):
-
         from sqlalchemy.dialects.postgresql import ExcludeConstraint
 
         m = MetaData()
@@ -6042,6 +6033,15 @@ class StringifySpecialTest(fixtures.TestBase):
         eq_ignore_whitespace(
             str(schema.AddConstraint(cons)),
             "ALTER TABLE testtbl ADD EXCLUDE USING gist " "(room WITH =)",
+        )
+
+    def test_try_cast(self):
+        t1 = Table("t1", MetaData(), Column("id", Integer, primary_key=True))
+        expr = select(try_cast(t1.c.id, Integer))
+
+        eq_ignore_whitespace(
+            str(expr),
+            "SELECT TRY_CAST(t1.id AS INTEGER) AS id FROM t1",
         )
 
 
@@ -7544,7 +7544,6 @@ class ResultMapTest(fixtures.TestBase):
 
         class MyCompiler(compiler.SQLCompiler):
             def visit_select(self, stmt, *arg, **kw):
-
                 if stmt is stmt2.element:
                     with self._nested_result() as nested:
                         contexts[stmt2.element] = nested
@@ -7704,7 +7703,6 @@ class ResultMapTest(fixtures.TestBase):
 
         proxied = [obj[0] for (k, n, obj, type_) in compiled._result_columns]
         for orig_obj, proxied_obj in zip(orig, proxied):
-
             is_(orig_obj, proxied_obj)
 
 

@@ -217,6 +217,16 @@ class _AttributeOptions(NamedTuple):
         if self.dataclasses_kw_only is not _NoArg.NO_ARG:
             kw["kw_only"] = self.dataclasses_kw_only
 
+        if (
+            "init" in kw
+            and not kw["init"]
+            and "default" in kw
+            and "default_factory" not in kw  # illegal but let field raise
+        ):
+            # fix for #9879
+            default = kw.pop("default")
+            kw["default_factory"] = lambda: default
+
         return dataclasses.field(**kw)
 
     @classmethod
@@ -969,7 +979,6 @@ class StrategizedProperty(MapperProperty[_T]):
     def _get_context_loader(
         self, context: ORMCompileState, path: AbstractEntityRegistry
     ) -> Optional[_LoadElement]:
-
         load: Optional[_LoadElement] = None
 
         search_path = path[self]

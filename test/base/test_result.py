@@ -7,7 +7,9 @@ from sqlalchemy.testing import eq_
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_false
 from sqlalchemy.testing import is_true
+from sqlalchemy.testing.assertions import expect_raises
 from sqlalchemy.testing.util import picklers
+from sqlalchemy.util import compat
 
 
 class ResultTupleTest(fixtures.TestBase):
@@ -64,7 +66,12 @@ class ResultTupleTest(fixtures.TestBase):
     def test_slices_arent_in_mappings(self):
         keyed_tuple = self._fixture([1, 2], ["a", "b"])
 
-        assert_raises(TypeError, lambda: keyed_tuple._mapping[0:2])
+        if compat.py312:
+            with expect_raises(KeyError):
+                keyed_tuple._mapping[0:2]
+        else:
+            with expect_raises(TypeError):
+                keyed_tuple._mapping[0:2]
 
     def test_integers_arent_in_mappings(self):
         keyed_tuple = self._fixture([1, 2], ["a", "b"])
@@ -182,7 +189,6 @@ class ResultTupleTest(fixtures.TestBase):
         assert_raises(TypeError, should_raise)
 
     def test_serialize(self):
-
         keyed_tuple = self._fixture([1, 2, 3], ["a", None, "b"])
 
         for loads, dumps in picklers():
@@ -270,7 +276,6 @@ class ResultTest(fixtures.TestBase):
         default_filters=None,
         data=None,
     ):
-
         if data is None:
             data = [(1, 1, 1), (2, 1, 2), (1, 3, 2), (4, 1, 2)]
         if num_rows is not None:
@@ -958,7 +963,6 @@ class ResultTest(fixtures.TestBase):
 class MergeResultTest(fixtures.TestBase):
     @testing.fixture
     def merge_fixture(self):
-
         r1 = result.IteratorResult(
             result.SimpleResultMetaData(["user_id", "user_name"]),
             iter([(7, "u1"), (8, "u2")]),
@@ -980,7 +984,6 @@ class MergeResultTest(fixtures.TestBase):
 
     @testing.fixture
     def dupe_fixture(self):
-
         r1 = result.IteratorResult(
             result.SimpleResultMetaData(["x", "y", "z"]),
             iter([(1, 2, 1), (2, 2, 1)]),
