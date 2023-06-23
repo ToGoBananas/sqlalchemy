@@ -754,7 +754,10 @@ class Mapper(
 
         if local_table is not None:
             self.local_table = coercions.expect(
-                roles.StrictFromClauseRole, local_table
+                roles.StrictFromClauseRole,
+                local_table,
+                disable_inspection=True,
+                argname="local_table",
             )
         elif self.inherits:
             # note this is a new flow as of 2.0 so that
@@ -2150,6 +2153,15 @@ class Mapper(
             for col in prop.columns:
                 for proxy_col in col.proxy_set:
                     self._columntoproperty[proxy_col] = prop
+
+        if getattr(prop, "key", key) != key:
+            util.warn(
+                f"ORM mapped property {self.class_.__name__}.{prop.key} being "
+                "assigned to attribute "
+                f"{key!r} is already associated with "
+                f"attribute {prop.key!r}. The attribute will be de-associated "
+                f"from {prop.key!r}."
+            )
 
         prop.key = key
 
@@ -4337,7 +4349,7 @@ def validates(
      attribute operation.
 
      .. versionchanged:: 2.0.16 This paramter inadvertently defaulted to
-        ``False `` for releases 2.0.0 through 2.0.15.  Its correct default
+        ``False`` for releases 2.0.0 through 2.0.15.  Its correct default
         of ``True`` is restored in 2.0.16.
 
     .. seealso::

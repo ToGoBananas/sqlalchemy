@@ -835,6 +835,42 @@ and instead keep the SQL construction as explicit as possible.
 Object Relational Mapping
 -------------------------
 
+.. _error_isce:
+
+IllegalStateChangeError and concurrency exceptions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+SQLAlchemy 2.0 introduced a new system described at :ref:`change_7433`, which
+proactively detects concurrent methods being invoked on an individual instance of
+the :class:`_orm.Session`
+object and by extension the :class:`_asyncio.AsyncSession` proxy object.
+These concurrent access calls typically, though not exclusively, would occur
+when a single instance of :class:`_orm.Session` is shared among multiple
+concurrent threads without such access being synchronized, or similarly
+when a single instance of :class:`_asyncio.AsyncSession` is shared among
+multiple concurrent tasks (such as when using a function like ``asyncio.gather()``).
+These use patterns are not the appropriate use of these objects, where without
+the proactive warning system SQLAlchemy implements would still otherwise produce
+invalid state within the objects, producing hard-to-debug errors including
+driver-level errors on the database connections themselves.
+
+Instances of :class:`_orm.Session` and :class:`_asyncio.AsyncSession` are
+**mutable, stateful objects with no built-in synchronization** of method calls,
+and represent a **single, ongoing database transaction** upon a single database
+connection at a time for a particular :class:`.Engine` or :class:`.AsyncEngine`
+to which the object is bound (note that these objects both support being bound
+to multiple engines at once, however in this case there will still be only one
+connection per engine in play within the scope of a transaction).  A single
+database transaction is not an appropriate target for concurrent SQL commands;
+instead, an application that runs concurrent database operations should use
+concurrent transactions. For these objects then it follows that the appropriate
+pattern is :class:`_orm.Session` per thread, or :class:`_asyncio.AsyncSession`
+per task.
+
+For more background on concurrency see the section
+:ref:`session_faq_threadsafe`.
+
+
 .. _error_bhk3:
 
 Parent instance <x> is not bound to a Session; (lazy load/deferred load/refresh/etc.) operation cannot proceed
@@ -1471,6 +1507,55 @@ attention to the rules applied to `inheritance <dc_superclass_>`_.
 .. _dc_superclass: https://docs.python.org/3/library/dataclasses.html#inheritance
 
 
+.. _error_bupq:
+
+per-row ORM Bulk Update by Primary Key requires that records contain primary key values
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This error occurs when making use of the :ref:`orm_queryguide_bulk_update`
+feature without supplying primary key values in the given records, such as::
+
+
+    >>> session.execute(
+    ...     update(User).where(User.name == bindparam("u_name")),
+    ...     [
+    ...         {"u_name": "spongebob", "fullname": "Spongebob Squarepants"},
+    ...         {"u_name": "patrick", "fullname": "Patrick Star"},
+    ...     ],
+    ... )
+
+Above, the presence of a list of parameter dictionaries combined with usage of
+the :class:`_orm.Session` to execute an ORM-enabled UPDATE statement will
+automatically make use of ORM Bulk Update by Primary Key, which expects
+parameter dictionaries to include primary key values, e.g.::
+
+    >>> session.execute(
+    ...     update(User),
+    ...     [
+    ...         {"id": 1, "fullname": "Spongebob Squarepants"},
+    ...         {"id": 3, "fullname": "Patrick Star"},
+    ...         {"id": 5, "fullname": "Eugene H. Krabs"},
+    ...     ],
+    ... )
+
+To invoke the UPDATE statement without supplying per-record primary key values,
+use :meth:`_orm.Session.connection` to acquire the current :class:`_engine.Connection`,
+then invoke with that::
+
+    >>> session.connection().execute(
+    ...     update(User).where(User.name == bindparam("u_name")),
+    ...     [
+    ...         {"u_name": "spongebob", "fullname": "Spongebob Squarepants"},
+    ...         {"u_name": "patrick", "fullname": "Patrick Star"},
+    ...     ],
+    ... )
+
+
+.. seealso::
+
+        :ref:`orm_queryguide_bulk_update`
+
+        :ref:`orm_queryguide_bulk_update_disabling`
 
 
 

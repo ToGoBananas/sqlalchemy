@@ -3482,7 +3482,7 @@ class SQLCompiler(Compiled):
             binary.right._compiler_dispatch(self, **kw),
         ) + (
             " ESCAPE " + self.render_literal_value(escape, sqltypes.STRINGTYPE)
-            if escape
+            if escape is not None
             else ""
         )
 
@@ -3493,7 +3493,7 @@ class SQLCompiler(Compiled):
             binary.right._compiler_dispatch(self, **kw),
         ) + (
             " ESCAPE " + self.render_literal_value(escape, sqltypes.STRINGTYPE)
-            if escape
+            if escape is not None
             else ""
         )
 
@@ -6858,11 +6858,15 @@ class DDLCompiler(Compiled):
             formatted_name = self.preparer.format_constraint(constraint)
             if formatted_name is not None:
                 text += "CONSTRAINT %s " % formatted_name
-        text += "UNIQUE (%s)" % (
-            ", ".join(self.preparer.quote(c.name) for c in constraint)
+        text += "UNIQUE %s(%s)" % (
+            self.define_unique_constraint_distinct(constraint, **kw),
+            ", ".join(self.preparer.quote(c.name) for c in constraint),
         )
         text += self.define_constraint_deferrability(constraint)
         return text
+
+    def define_unique_constraint_distinct(self, constraint, **kw):
+        return ""
 
     def define_constraint_cascades(self, constraint):
         text = ""
