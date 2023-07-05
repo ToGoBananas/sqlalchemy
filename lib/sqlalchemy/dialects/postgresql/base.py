@@ -1408,6 +1408,7 @@ from typing import Any
 from typing import List
 from typing import Optional
 from typing import Tuple
+from typing import Union
 
 from . import array as _array
 from . import hstore as _hstore
@@ -1459,6 +1460,7 @@ from ...engine import interfaces
 from ...engine import ObjectKind
 from ...engine import ObjectScope
 from ...engine import reflection
+from ...engine import URL
 from ...engine.reflection import ReflectionDefaults
 from ...sql import bindparam
 from ...sql import coercions
@@ -1810,14 +1812,14 @@ class PGCompiler(compiler.SQLCompiler):
             return self._generate_generic_binary(
                 binary, " %s " % base_op, **kw
             )
-        if isinstance(flags, elements.BindParameter) and flags.value == "i":
+        if flags == "i":
             return self._generate_generic_binary(
                 binary, " %s* " % base_op, **kw
             )
         return "%s %s CONCAT('(?', %s, ')', %s)" % (
             self.process(binary.left, **kw),
             base_op,
-            self.process(flags, **kw),
+            self.render_literal_value(flags, sqltypes.STRINGTYPE),
             self.process(binary.right, **kw),
         )
 
@@ -1829,21 +1831,18 @@ class PGCompiler(compiler.SQLCompiler):
 
     def visit_regexp_replace_op_binary(self, binary, operator, **kw):
         string = self.process(binary.left, **kw)
-        pattern = self.process(binary.right, **kw)
+        pattern_replace = self.process(binary.right, **kw)
         flags = binary.modifiers["flags"]
-        replacement = self.process(binary.modifiers["replacement"], **kw)
         if flags is None:
-            return "REGEXP_REPLACE(%s, %s, %s)" % (
+            return "REGEXP_REPLACE(%s, %s)" % (
                 string,
-                pattern,
-                replacement,
+                pattern_replace,
             )
         else:
-            return "REGEXP_REPLACE(%s, %s, %s, %s)" % (
+            return "REGEXP_REPLACE(%s, %s, %s)" % (
                 string,
-                pattern,
-                replacement,
-                self.process(flags, **kw),
+                pattern_replace,
+                self.render_literal_value(flags, sqltypes.STRINGTYPE),
             )
 
     def visit_empty_set_expr(self, element_types, **kw):
@@ -3085,6 +3084,73 @@ class PGDialect(default.DefaultDialect):
 
     def get_deferrable(self, connection):
         raise NotImplementedError()
+
+    def _split_multihost_from_url(
+        self, url: URL
+    ) -> Union[
+        Tuple[None, None],
+        Tuple[Tuple[Optional[str], ...], Tuple[Optional[int], ...]],
+    ]:
+        hosts = ports = None
+
+        integrated_multihost = False
+
+        if "host" in url.query:
+            if isinstance(url.query["host"], (list, tuple)):
+                integrated_multihost = True
+                hosts, ports = zip(
+                    *[
+                        token.split(":") if ":" in token else (token, None)
+                        for token in url.query["host"]
+                    ]
+                )
+
+            elif isinstance(url.query["host"], str):
+                hosts = tuple(url.query["host"].split(","))
+
+                if (
+                    "port" not in url.query
+                    and len(hosts) == 1
+                    and ":" in hosts[0]
+                ):
+                    integrated_multihost = True
+                    h, p = hosts[0].split(":")
+                    hosts = (h,)
+                    ports = (p,) if p else (None,)
+
+        if "port" in url.query:
+            if integrated_multihost:
+                raise exc.ArgumentError(
+                    "Can't mix 'multihost' formats together; use "
+                    '"host=h1,h2,h3&port=p1,p2,p3" or '
+                    '"host=h1:p1&host=h2:p2&host=h3:p3" separately'
+                )
+            if isinstance(url.query["port"], (list, tuple)):
+                ports = url.query["port"]
+            elif isinstance(url.query["port"], str):
+                ports = tuple(url.query["port"].split(","))
+
+        if ports:
+            try:
+                ports = tuple(int(x) if x else None for x in ports)
+            except ValueError:
+                raise exc.ArgumentError(
+                    f"Received non-integer port arguments: {ports}"
+                ) from None
+
+        if (hosts or ports) and url.host:
+            raise exc.ArgumentError(
+                "Can't combine fixed host and multihost URL formats"
+            )
+
+        if ports and (not hosts or len(hosts) != len(ports)):
+            raise exc.ArgumentError("number of hosts and ports don't match")
+
+        if hosts is not None:
+            if ports is None:
+                ports = tuple(None for _ in hosts)
+
+        return hosts, ports
 
     def do_begin_twophase(self, connection, xid):
         self.do_begin(connection.connection)
