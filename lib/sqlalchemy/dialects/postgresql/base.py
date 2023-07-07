@@ -3027,9 +3027,16 @@ class PGDialect(default.DefaultDialect):
     _supports_create_index_concurrently = True
     _supports_drop_index_concurrently = True
 
-    def __init__(self, json_serializer=None, json_deserializer=None, **kwargs):
+    def __init__(
+        self,
+        native_inet_types=None,
+        json_serializer=None,
+        json_deserializer=None,
+        **kwargs,
+    ):
         default.DefaultDialect.__init__(self, **kwargs)
 
+        self._native_inet_types = native_inet_types
         self._json_deserializer = json_deserializer
         self._json_serializer = json_serializer
 
@@ -3113,10 +3120,18 @@ class PGDialect(default.DefaultDialect):
                     and len(hosts) == 1
                     and ":" in hosts[0]
                 ):
-                    integrated_multihost = True
-                    h, p = hosts[0].split(":")
-                    hosts = (h,)
-                    ports = (p,) if p else (None,)
+                    # internet host is alphanumeric plus dots or hyphens.
+                    # this is essentially rfc1123, which refers to rfc952.
+                    # https://stackoverflow.com/questions/3523028/
+                    # valid-characters-of-a-hostname
+                    host_port_match = re.match(
+                        r"^([a-zA-Z0-9\-\.]*)(?:\:(\d*))?$", hosts[0]
+                    )
+                    if host_port_match:
+                        integrated_multihost = True
+                        h, p = host_port_match.group(1, 2)
+                        hosts = (h,)
+                        ports = (p,) if p else (None,)
 
         if "port" in url.query:
             if integrated_multihost:

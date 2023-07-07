@@ -2,7 +2,6 @@ import dataclasses
 import datetime
 import logging
 import logging.handlers
-import re
 
 from sqlalchemy import BigInteger
 from sqlalchemy import bindparam
@@ -269,12 +268,113 @@ class MultiHostConnectTest(fixtures.TestBase):
                 },
             ),
             (
+                # issue #10069 -if there is just one host as x:y with no
+                # integers, treat it as a hostname, to accommodate as many
+                # third party scenarios as possible
+                "postgresql+psycopg2://USER:PASS@/DB?host=hostA:xyz",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "hostA:xyz",
+                },
+            ),
+            (
+                # also issue #10069 - this parsing is not "defined" right now
+                # but err on the side of single host
+                "postgresql+psycopg2://USER:PASS@/DB?host=hostA:123.456",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "hostA:123.456",
+                },
+            ),
+            (
+                "postgresql+psycopg2://USER:PASS@/DB?host=192.168.1.50",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "192.168.1.50",
+                },
+            ),
+            (
+                "postgresql+psycopg2://USER:PASS@/DB?host=192.168.1.50:",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "192.168.1.50",
+                },
+            ),
+            (
+                "postgresql+psycopg2://USER:PASS@/DB?host=192.168.1.50:5678",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "192.168.1.50",
+                    "port": "5678",
+                    "asyncpg_port": 5678,
+                },
+            ),
+            (
                 "postgresql+psycopg2://USER:PASS@/DB?host=hostA:",
                 {
                     "dbname": "DB",
                     "user": "USER",
                     "password": "PASS",
                     "host": "hostA",
+                },
+            ),
+            (
+                "postgresql+psycopg2://USER:PASS@/DB?host=HOSTNAME",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "HOSTNAME",
+                },
+            ),
+            (
+                "postgresql+psycopg2://USER:PASS@/DB?host=HOSTNAME:1234",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "HOSTNAME",
+                    "port": "1234",
+                    "asyncpg_port": 1234,
+                },
+            ),
+            (
+                # issue #10069
+                "postgresql+psycopg2://USER:PASS@/DB?"
+                "host=/cloudsql/my-gcp-project:us-central1:mydbisnstance",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    "host": "/cloudsql/my-gcp-project:"
+                    "us-central1:mydbisnstance",
+                },
+            ),
+            (
+                # issue #10069
+                "postgresql+psycopg2://USER:PASS@/DB?"
+                "host=/cloudsql/my-gcp-project:4567",
+                {
+                    "dbname": "DB",
+                    "user": "USER",
+                    "password": "PASS",
+                    # full host,because the "hostname" contains slashes.
+                    # this corresponds to PG's "host" mechanics
+                    # at https://www.postgresql.org/docs/current
+                    # /libpq-connect.html#LIBPQ-PARAMKEYWORDS
+                    # "If a host name looks like an absolute path name, it
+                    # specifies Unix-domain communication "
+                    "host": "/cloudsql/my-gcp-project:4567",
                 },
             ),
             (
@@ -285,6 +385,7 @@ class MultiHostConnectTest(fixtures.TestBase):
                     "password": "PASS",
                     "host": "hostA",
                     "port": "1234",
+                    "asyncpg_port": 1234,
                 },
             ),
             (
@@ -296,6 +397,8 @@ class MultiHostConnectTest(fixtures.TestBase):
                     "password": "PASS",
                     "host": "hostA,hostB,hostC",
                     "port": ",,",
+                    "asyncpg_error": "All ports are required to be present"
+                    " for asyncpg multiple host URL",
                 },
             ),
             (
@@ -307,6 +410,8 @@ class MultiHostConnectTest(fixtures.TestBase):
                     "password": "PASS",
                     "host": "hostA,hostB,hostC",
                     "port": ",222,333",
+                    "asyncpg_error": "All ports are required to be present"
+                    " for asyncpg multiple host URL",
                 },
             ),
             (
@@ -318,22 +423,39 @@ class MultiHostConnectTest(fixtures.TestBase):
                     "password": "PASS",
                     "host": "hostA,hostB,hostC",
                     "port": "111,222,333",
+                    "asyncpg_host": ["hostA", "hostB", "hostC"],
+                    "asyncpg_port": [111, 222, 333],
                 },
             ),
             (
                 "postgresql+psycopg2:///"
                 "?host=hostA:111&host=hostB:222&host=hostC:333",
-                {"host": "hostA,hostB,hostC", "port": "111,222,333"},
+                {
+                    "host": "hostA,hostB,hostC",
+                    "port": "111,222,333",
+                    "asyncpg_host": ["hostA", "hostB", "hostC"],
+                    "asyncpg_port": [111, 222, 333],
+                },
             ),
             (
                 "postgresql+psycopg2:///"
                 "?host=hostA:111&host=hostB:222&host=hostC:333",
-                {"host": "hostA,hostB,hostC", "port": "111,222,333"},
+                {
+                    "host": "hostA,hostB,hostC",
+                    "port": "111,222,333",
+                    "asyncpg_host": ["hostA", "hostB", "hostC"],
+                    "asyncpg_port": [111, 222, 333],
+                },
             ),
             (
                 "postgresql+psycopg2:///"
                 "?host=hostA,hostB,hostC&port=111,222,333",
-                {"host": "hostA,hostB,hostC", "port": "111,222,333"},
+                {
+                    "host": "hostA,hostB,hostC",
+                    "port": "111,222,333",
+                    "asyncpg_host": ["hostA", "hostB", "hostC"],
+                    "asyncpg_port": [111, 222, 333],
+                },
             ),
             (
                 "postgresql+asyncpg://USER:PASS@/DB"
@@ -344,20 +466,29 @@ class MultiHostConnectTest(fixtures.TestBase):
                     "dbname": "DB",
                     "user": "USER",
                     "password": "PASS",
+                    "asyncpg_error": "All hosts are required to be present"
+                    " for asyncpg multiple host URL",
                 },
             ),
         ]
         for url_string, expected_psycopg in psycopg_combinations:
+            asyncpg_error = expected_psycopg.pop("asyncpg_error", False)
+            asyncpg_host = expected_psycopg.pop("asyncpg_host", False)
+            asyncpg_port = expected_psycopg.pop("asyncpg_port", False)
+
             expected_asyncpg = dict(expected_psycopg)
+
             if "dbname" in expected_asyncpg:
                 expected_asyncpg["database"] = expected_asyncpg.pop("dbname")
-            if "host" in expected_asyncpg:
-                expected_asyncpg["host"] = expected_asyncpg["host"].split(",")
-            if "port" in expected_asyncpg:
-                expected_asyncpg["port"] = [
-                    int(p) if re.match(r"^\d+$", p) else None
-                    for p in expected_psycopg["port"].split(",")
-                ]
+
+            if asyncpg_error:
+                expected_asyncpg["error"] = asyncpg_error
+            if asyncpg_host is not False:
+                expected_asyncpg["host"] = asyncpg_host
+
+            if asyncpg_port is not False:
+                expected_asyncpg["port"] = asyncpg_port
+
             yield url_string, expected_psycopg, expected_asyncpg
 
     @testing.combinations_list(
@@ -378,32 +509,13 @@ class MultiHostConnectTest(fixtures.TestBase):
         u = url.make_url(url_string)
 
         if dialect.driver == "asyncpg":
-            if (
-                "port" in expected_asyncpg
-                and not all(expected_asyncpg["port"])
-                or (
-                    "host" in expected_asyncpg
-                    and isinstance(expected_asyncpg["host"], list)
-                    and "port" not in expected_asyncpg
-                )
-            ):
+            if "error" in expected_asyncpg:
                 with expect_raises_message(
-                    exc.ArgumentError,
-                    "All ports are required to be present"
-                    " for asyncpg multiple host URL",
+                    exc.ArgumentError, expected_asyncpg["error"]
                 ):
                     dialect.create_connect_args(u)
                 return
-            elif "host" in expected_asyncpg and not all(
-                expected_asyncpg["host"]
-            ):
-                with expect_raises_message(
-                    exc.ArgumentError,
-                    "All hosts are required to be present"
-                    " for asyncpg multiple host URL",
-                ):
-                    dialect.create_connect_args(u)
-                return
+
             expected = expected_asyncpg
         else:
             expected = expected_psycopg
@@ -425,8 +537,9 @@ class MultiHostConnectTest(fixtures.TestBase):
             "postgresql+psycopg2://USER:PASS@/DB"
             "?host=hostA:xyz&host=hostB:123",
         ),
-        ("postgresql+psycopg2://USER:PASS@/DB?host=hostA:xyz",),
         ("postgresql+psycopg2://USER:PASS@/DB?host=hostA&port=xyz",),
+        # for single host with :xyz, as of #10069 this is treated as a
+        # hostname by itself, w/ colon plus digits
         argnames="url_string",
     )
     @testing.combinations(

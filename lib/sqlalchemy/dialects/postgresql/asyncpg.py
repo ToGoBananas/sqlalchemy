@@ -1089,7 +1089,11 @@ class PGDialect_asyncpg(PGDialect):
 
         if multihosts:
             assert multiports
-            if not all(multihosts):
+            if len(multihosts) == 1:
+                opts["host"] = multihosts[0]
+                if multiports[0] is not None:
+                    opts["port"] = multiports[0]
+            elif not all(multihosts):
                 raise exc.ArgumentError(
                     "All hosts are required to be present"
                     " for asyncpg multiple host URL"
@@ -1099,8 +1103,9 @@ class PGDialect_asyncpg(PGDialect):
                     "All ports are required to be present"
                     " for asyncpg multiple host URL"
                 )
-            opts["host"] = list(multihosts)
-            opts["port"] = list(multiports)
+            else:
+                opts["host"] = list(multihosts)
+                opts["port"] = list(multiports)
         else:
             util.coerce_kw_type(opts, "port", int)
         util.coerce_kw_type(opts, "prepared_statement_cache_size", int)
@@ -1184,6 +1189,25 @@ class PGDialect_asyncpg(PGDialect):
             format="binary",
         )
 
+    async def _disable_asyncpg_inet_codecs(self, conn):
+        asyncpg_connection = conn._connection
+
+        await asyncpg_connection.set_type_codec(
+            "inet",
+            encoder=lambda s: s,
+            decoder=lambda s: s,
+            schema="pg_catalog",
+            format="text",
+        )
+
+        await asyncpg_connection.set_type_codec(
+            "cidr",
+            encoder=lambda s: s,
+            decoder=lambda s: s,
+            schema="pg_catalog",
+            format="text",
+        )
+
     def on_connect(self):
         """on_connect for asyncpg
 
@@ -1200,6 +1224,9 @@ class PGDialect_asyncpg(PGDialect):
         def connect(conn):
             conn.await_(self.setup_asyncpg_json_codec(conn))
             conn.await_(self.setup_asyncpg_jsonb_codec(conn))
+
+            if self._native_inet_types is False:
+                conn.await_(self._disable_asyncpg_inet_codecs(conn))
             if super_connect is not None:
                 super_connect(conn)
 
