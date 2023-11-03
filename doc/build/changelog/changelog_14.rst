@@ -14,8 +14,86 @@ This document details individual issue-level changes made throughout
 
 
 .. changelog::
-    :version: 1.4.50
+    :version: 1.4.51
     :include_notes_from: unreleased_14
+
+.. changelog::
+    :version: 1.4.50
+    :released: October 29, 2023
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 10142
+        :versions: 2.0.23
+
+        Fixed issue where using the same bound parameter more than once with
+        ``literal_execute=True`` in some combinations with other literal rendering
+        parameters would cause the wrong values to render due to an iteration
+        issue.
+
+    .. change::
+        :tags: mysql, usecase
+        :versions: 2.0.20
+
+        Updated aiomysql dialect since the dialect appears to be maintained again.
+        Re-added to the ci testing using version 0.2.0.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 10223
+        :versions: 2.0.20
+
+        Fixed fundamental issue which prevented some forms of ORM "annotations"
+        from taking place for subqueries which made use of :meth:`_sql.Select.join`
+        against a relationship target.  These annotations are used whenever a
+        subquery is used in special situations such as within
+        :meth:`_orm.PropComparator.and_` and other ORM-specific scenarios.
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 10213
+        :versions: 2.0.20
+
+        Fixed issue where unpickling of a :class:`_schema.Column` or other
+        :class:`_sql.ColumnElement` would fail to restore the correct "comparator"
+        object, which is used to generate SQL expressions specific to the type
+        object.
+
+    .. change::
+        :tags: bug, mysql
+        :tickets: 10492
+        :versions: 2.0.23
+
+        Repaired a new incompatibility in the MySQL "pre-ping" routine where the
+        ``False`` argument passed to ``connection.ping()``, which is intended to
+        disable an unwanted "automatic reconnect" feature,  is being deprecated in
+        MySQL drivers and backends, and is producing warnings for some versions of
+        MySQL's native client drivers.  It's removed for mysqlclient, whereas for
+        PyMySQL and drivers based on PyMySQL, the parameter will be deprecated and
+        removed at some point, so API introspection is used to future proof against
+        these various stages of removal.
+
+    .. change::
+        :tags: schema, bug
+        :tickets: 10207
+        :versions: 2.0.21
+
+        Modified the rendering of the Oracle only :paramref:`.Identity.order`
+        parameter that's part of both :class:`.Sequence` and :class:`.Identity` to
+        only take place for the Oracle backend, and not other backends such as that
+        of PostgreSQL.  A future release will rename the
+        :paramref:`.Identity.order`, :paramref:`.Sequence.order`  and
+        :paramref:`.Identity.on_null` parameters to Oracle-specific names,
+        deprecating the old names, these parameters only apply to Oracle.
+
+    .. change::
+        :tags: bug, mssql, reflection
+        :tickets: 10504
+        :versions: 2.0.23
+
+        Fixed issue where identity column reflection would fail
+        for a bigint column with a large identity start value
+        (more than 18 digits).
 
 .. changelog::
     :version: 1.4.49
@@ -123,16 +201,17 @@ This document details individual issue-level changes made throughout
         :tickets: 9075
         :versions: 2.0.0rc3
 
-        Fixed bug / regression where using :func:`.bindparam()` with the same name
-        as a column in the :meth:`.Update.values` method of :class:`.Update`, as
-        well as the :meth:`.Insert.values` method of :class:`.Insert` in 2.0 only,
-        would in some cases silently fail to honor the SQL expression in which the
-        parameter were presented, replacing the expression with a new parameter of
-        the same name and discarding any other elements of the SQL expression, such
-        as SQL functions, etc. The specific case would be statements that were
+        Fixed bug / regression where using :func:`.bindparam()` with the same
+        name as a column in the :meth:`.Update.values` method of
+        :class:`.Update`, as well as the :meth:`_dml.Insert.values` method of
+        :class:`_dml.Insert` in 2.0 only, would in some cases silently fail to
+        honor the SQL expression in which the parameter were presented,
+        replacing the expression with a new parameter of the same name and
+        discarding any other elements of the SQL expression, such as SQL
+        functions, etc. The specific case would be statements that were
         constructed against ORM entities rather than plain :class:`.Table`
         instances, but would occur if the statement were invoked with a
-        :class:`.Session` or a :class:`.Connection`.
+        :class:`.Session` or a :class:`_engine.Connection`.
 
         :class:`.Update` part of the issue was present in both 2.0 and 1.4 and is
         backported to 1.4.
